@@ -1,0 +1,313 @@
+<title>Kelpie Module Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one working column; a dependency matrix is the centrepiece, a detail panel beside it on wide screens and under it on phones. */
+:root {
+  --bg: #f3f5f4; --surface: #ffffff; --ink: #18211f; --muted: #5d6b67; --rule: #d9e0dd;
+  --fwd: #1f6f8b; --back: #c77d12; --back-soft: #f6e3c4; --fwd-soft: #d4e7ee; --hi: #e9efe9;
+  --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121816; --surface: #19211f; --ink: #e4ebe8; --muted: #93a29d; --rule: #2c3734;
+  --fwd: #5fb4d2; --back: #f0a63a; --back-soft: #4a3518; --fwd-soft: #173a47; --hi: #22302c; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121816; --surface: #19211f; --ink: #e4ebe8; --muted: #93a29d; --rule: #2c3734;
+  --fwd: #5fb4d2; --back: #f0a63a; --back-soft: #4a3518; --fwd-soft: #173a47; --hi: #22302c; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 17px/1.5 var(--body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font: 700 clamp(30px, 5vw, 46px)/1.05 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font: 700 24px/1.2 var(--display); margin: 0; text-wrap: balance; }
+h3 { font: 600 17px/1.3 var(--body); margin: 0; }
+.sub { color: var(--muted); font: 13px/1.4 var(--mono); margin-top: 8px; }
+.tabs { display: flex; gap: 8px; margin: 24px 0; flex-wrap: wrap; }
+.tabs button { font: 600 16px var(--body); padding: 10px 18px; border-radius: 999px; border: 1px solid var(--rule);
+  background: var(--surface); color: var(--ink); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.tabs button:focus-visible, .cellbtn:focus-visible, .rowlab:focus-visible { outline: 2px solid var(--fwd); outline-offset: 2px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.fact { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
+.fact b { display: block; font: 700 40px/1 var(--display); font-variant-numeric: tabular-nums; }
+.fact span { color: var(--muted); font-size: 15px; }
+.fact.warn b { color: var(--back); }
+.lead { max-width: 68ch; margin: 20px 0; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--muted); align-items: center; }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; margin-top: 14px; align-items: start; }
+@media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+.matrixbox { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px; }
+.matrix { display: grid; font: 10px/1 var(--mono); width: max-content; }
+.collab { writing-mode: vertical-rl; transform: rotate(180deg); text-align: left; padding: 4px 0; color: var(--muted); height: 92px; white-space: nowrap; }
+.rowlab { text-align: right; padding-right: 6px; color: var(--muted); white-space: nowrap; cursor: pointer; background: none; border: 0; font: inherit; height: 13px; }
+.collab.on, .rowlab.on { color: var(--ink); font-weight: 600; }
+.cellbtn { width: 13px; height: 13px; border: 0; padding: 0; background: transparent; box-shadow: inset 0 0 0 0.5px var(--rule); cursor: default; }
+.cellbtn.diag { background: var(--rule); }
+.cellbtn.lit { background-color: var(--hi); }
+.cellbtn.f { cursor: pointer; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+.panel .name { font: 700 26px/1.1 var(--display); }
+.panel .nums { font: 13px/1.6 var(--mono); color: var(--muted); margin: 6px 0 12px; font-variant-numeric: tabular-nums; }
+.panel ul { list-style: none; padding: 0; margin: 6px 0 14px; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px/1 var(--mono); padding: 5px 7px; border-radius: 5px; background: var(--fwd-soft); color: var(--ink); }
+.chip.back { background: var(--back-soft); }
+.chip i { font-style: normal; color: var(--muted); margin-left: 4px; }
+.hint { color: var(--muted); font-size: 14px; }
+.bar { display: flex; height: 34px; border-radius: 6px; overflow: hidden; margin-top: 10px; border: 1px solid var(--rule); }
+.bar div { display: flex; align-items: center; padding-left: 6px; font: 11px var(--mono); color: var(--bg); white-space: nowrap; overflow: hidden; min-width: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 18px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; min-width: 0; }
+.card ul { margin: 10px 0 0; padding-left: 18px; }
+.card li { margin: 6px 0; }
+.card.flag { border-color: var(--back); background: var(--back-soft); }
+.tag { font: 600 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { margin-top: 36px; }
+code { font: 0.88em var(--mono); }
+/* GUI mock */
+.mock { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 10px; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 12px; margin-top: 14px; }
+@media (max-width: 800px) { .mock { grid-template-columns: minmax(0, 1fr); } }
+.pane { border: 1px dashed var(--rule); border-radius: 8px; padding: 12px; min-width: 0; }
+.pane .tag { display: block; margin-bottom: 8px; }
+.chain { display: flex; flex-direction: column; gap: 6px; }
+.node { font: 12px var(--mono); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--rule); background: var(--bg); }
+.node.doing { border-color: var(--fwd); box-shadow: inset 3px 0 0 var(--fwd); }
+.node.done { opacity: 0.55; }
+.mapmini { position: relative; height: 210px; }
+.blob { position: absolute; border-radius: 50%; display: grid; place-items: center; font: 11px var(--mono); border: 1px solid var(--rule); background: var(--bg); color: var(--muted); }
+.blob.lit { background: var(--fwd-soft); border-color: var(--fwd); color: var(--ink); }
+.choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.opt { border: 1px solid var(--rule); border-radius: 8px; padding: 8px; font-size: 13px; background: var(--bg); }
+.opt.rec { border-color: var(--fwd); }
+.opt b { display: block; font-size: 13px; margin-bottom: 4px; }
+@media (prefers-reduced-motion: no-preference) { .node.doing { animation: pulse 2.4s ease-in-out infinite; } }
+@keyframes pulse { 50% { box-shadow: inset 3px 0 0 var(--fwd), 0 0 0 3px var(--fwd-soft); } }
+</style>
+
+<div class="wrap">
+  <h1>Kelpie Module Map</h1>
+  <div class="sub">shep-kelpie main c18cdb1b · 51 modules in src/ · 104,354 lines of code, 132,477 of tests</div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="t1" aria-selected="true" aria-controls="p1">Is it a hairball?</button>
+    <button role="tab" id="t2" aria-selected="false" aria-controls="p2">Kelpie's GUI idea</button>
+  </div>
+
+  <div id="p1" role="tabpanel" aria-labelledby="t1">
+    <div class="facts">
+      <div class="fact warn"><b>37 of 51</b><span>modules sit in one loop: each reaches the others through some chain of uses</span></div>
+      <div class="fact"><b>294</b><span>links between modules, counted from <code>crate::</code> references</span></div>
+      <div class="fact"><b>40%</b><span>of all code is in <code>runner</code> (41,326 lines)</span></div>
+    </div>
+    <p class="lead">Yes, it is tangled, and not only in the drawing. Rust lets modules in one crate use each other in a circle, so nothing ever pushed back. The loop comes from 43 of the 294 links that reach back up (108 of 1,368 references). They are spread across many modules, so no single fix untangles it.</p>
+
+    <h2>Who uses whom</h2>
+    <div class="legend" style="margin-top:10px">
+      <span>Each row uses the columns marked in it. Order is top-level first, foundations last.</span>
+      <span><i class="sw" style="background:var(--fwd)"></i>uses something lower (fine)</span>
+      <span><i class="sw" style="background:var(--back)"></i>reaches back up (this is what makes the loop)</span>
+    </div>
+    <div class="split">
+      <div class="matrixbox"><div class="matrix" id="matrix"></div></div>
+      <aside class="panel" id="panel" aria-live="polite"></aside>
+    </div>
+
+    <section>
+      <h2>Where the code is</h2>
+      <div class="bar" id="bar"></div>
+      <p class="hint" id="barnote"></p>
+    </section>
+
+    <section>
+      <h2>What it means</h2>
+      <div class="cards">
+        <div class="card"><span class="tag">Not a bug</span><p>Everything works and the tests pass. This is how one crate grows when it grows fast.</p></div>
+        <div class="card"><span class="tag">What it costs</span><ul><li>A change in a foundation like <code>settings</code> or <code>ports</code> can ripple up and back down.</li><li>A worker can't load "just one piece", so it reads more files per item.</li></ul></div>
+        <div class="card"><span class="tag">If you want it fixed</span><p>The amber cells are the work list: 43 links. Start with the foundations (<code>settings</code>, <code>ports</code>, <code>state</code>), one slice each. That would be a parent issue with slices, filed only if you say so.</p></div>
+      </div>
+      <p class="hint" style="margin-top:14px">Why not the graph's own call links: it matches calls by name, so every <code>.unwrap()</code> counted as a call into <code>guard/wrap</code> (3,085 of them). <code>crate::</code> references are exact. Test code is left out of the links.</p>
+    </section>
+  </div>
+
+  <div id="p2" role="tabpanel" aria-labelledby="t2" hidden>
+    <h2>What the app could look like</h2>
+    <p class="hint">A sketch, with #887 (auto-triage) as the example. Nothing here is built.</p>
+    <div class="mock" aria-label="Sketch of kelpie's app">
+      <div class="pane"><span class="tag">The plan</span>
+        <div class="chain">
+          <div class="node doing">#888 settings + triager agent</div>
+          <div class="node">#889 research call + comment</div>
+          <div class="node">#890 duplicate check</div>
+          <div class="node">#891 ready-for-agent</div>
+          <div class="node">#892 ask the author</div>
+          <div class="node">… #893 to #895</div>
+        </div>
+      </div>
+      <div class="pane"><span class="tag">What #888 might touch (made up)</span>
+        <div class="mapmini">
+          <div class="blob lit" style="left:6%;top:8%;width:84px;height:84px">settings</div>
+          <div class="blob lit" style="left:46%;top:2%;width:64px;height:64px">agents</div>
+          <div class="blob" style="left:34%;top:42%;width:120px;height:120px">runner</div>
+          <div class="blob" style="left:72%;top:36%;width:72px;height:72px">adapters</div>
+          <div class="blob lit" style="left:4%;top:62%;width:56px;height:56px">board</div>
+          <div class="blob" style="left:78%;top:4%;width:50px;height:50px">ports</div>
+        </div>
+      </div>
+      <div class="pane"><span class="tag">An example decision</span>
+        <h3>Who can turn triage on?</h3>
+        <div class="choice">
+          <div class="opt rec"><b>Settings only</b>Off until you set it. Recommended.</div>
+          <div class="opt"><b>A label too</b>Anyone with triage rights.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card"><span class="tag">What I think</span>
+        <p>Good idea, and kelpie already has the data most tools have to guess at:</p>
+        <ul>
+          <li>The plan: parent, slices, blocked-by.</li>
+          <li>What each slice touches: <code>Touches:</code> lists, then real diffs.</li>
+          <li>Where a worker is right now: phases, gates, review rounds.</li>
+        </ul>
+      </div>
+      <div class="card"><span class="tag">The hard part</span>
+        <p>Not drawing. The galaxy shows a whole-code graph is unreadable. Each view has to be a picture the agent draws for one question, about 5 to 9 boxes. The code map stays in the background and lights up.</p>
+      </div>
+      <div class="card"><span class="tag">Prior art</span>
+        <ul>
+          <li>Sourcetrail: code graph explorer, discontinued, open source.</li>
+          <li>CodeSee: code maps for review, closed.</li>
+          <li>AppMap: records what code does at runtime.</li>
+          <li>C4 / Structurizr: architecture at zoom levels.</li>
+          <li>Copilot Workspace: spec to plan to code, ended.</li>
+        </ul>
+        <p class="hint">From memory. None of these joins a plan, a map and live agent progress the way kelpie could.</p>
+      </div>
+      <div class="card"><span class="tag">Pushback</span>
+        <ul>
+          <li>Shep or kelpie? The map viewer is useful to any dog, the plan view is kelpie's.</li>
+          <li>Build one real case as a page first, and see if it holds your attention before building an app.</li>
+        </ul>
+      </div>
+      <div class="card flag"><span class="tag">A concern from what you said</span>
+        <p>If text sessions make you agree to everything, some recent "agree with all" answers may not be real agreement. #887 is one: 13 decisions accepted at once. #888 is already being built. #889 to #895 still wait behind it.</p>
+        <p><b>Suggestion:</b> make #887 the first test. I draw it like the sketch above, you check it visually before #889 starts.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const MODS=[["adapters",13616,24578,129],["agents",724,2259,16],["board",1216,756,4],["bridge",169,154,1],["browse",101,187,1],["coderabbit",316,436,1],["codex",226,345,1],["confine",360,658,3],["cubic",146,186,1],["doctor",2053,2265,18],["dog",1882,2568,15],["fence",495,486,2],["flock",3463,3621,20],["forge_ledger",481,495,4],["forwarder",262,166,1],["github",1879,1623,8],["guard",4820,4471,32],["home",274,171,1],["hooks",492,275,2],["issues",1064,770,4],["lease",2648,1493,10],["local_paths",346,179,2],["main",365,0,1],["pacer",218,249,1],["panel",702,520,6],["parity",291,340,2],["ports",4627,2458,35],["profile",448,933,3],["review_bot",383,20,1],["runner",41326,52016,288],["schema",22,350,1],["settings",3273,3528,35],["sheep",985,2859,10],["shep_home",45,32,1],["shepherd",359,205,2],["skills",1808,1854,11],["spawn",30,46,1],["state",2824,4341,29],["terminal",129,132,1],["test",0,7183,35],["tools",478,305,5],["totp",545,307,2],["transcripts",96,312,2],["trim",54,32,1],["upgrade",1875,2399,16],["usage",1268,564,7],["watch",800,964,10],["webhook",460,417,1],["work_item",2108,1064,18],["worker_folder",219,193,1],["worktree",1583,712,9]];
+const EDGES=[["adapters","board",3],["adapters","bridge",6],["adapters","confine",2],["adapters","doctor",1],["adapters","fence",4],["adapters","forwarder",6],["adapters","github",4],["adapters","guard",6],["adapters","home",2],["adapters","hooks",2],["adapters","lease",8],["adapters","ports",79],["adapters","profile",3],["adapters","review_bot",5],["adapters","settings",31],["adapters","skills",1],["adapters","spawn",15],["adapters","test",9],["adapters","tools",7],["adapters","trim",1],["adapters","webhook",1],["adapters","work_item",1],["adapters","worktree",9],["agents","forwarder",1],["agents","review_bot",3],["agents","settings",1],["board","ports",3],["board","runner",2],["board","settings",1],["board","state",1],["bridge","adapters",1],["bridge","browse",2],["bridge","confine",1],["bridge","ports",1],["browse","bridge",1],["browse","confine",1],["browse","ports",1],["coderabbit","ports",1],["coderabbit","review_bot",2],["codex","ports",1],["codex","review_bot",1],["confine","fence",1],["confine","hooks",2],["confine","settings",1],["cubic","ports",1],["cubic","review_bot",1],["doctor","adapters",2],["doctor","agents",4],["doctor","coderabbit",1],["doctor","flock",3],["doctor","forwarder",1],["doctor","github",2],["doctor","home",3],["doctor","ports",6],["doctor","review_bot",2],["doctor","runner",2],["doctor","settings",8],["doctor","shep_home",1],["doctor","shepherd",2],["doctor","skills",3],["doctor","tools",2],["doctor","webhook",3],["dog","adapters",2],["dog","agents",1],["dog","home",2],["dog","lease",16],["dog","ports",3],["dog","review_bot",2],["dog","runner",2],["dog","settings",1],["dog","shep_home",1],["dog","shepherd",3],["dog","webhook",1],["fence","worktree",1],["flock","adapters",1],["flock","agents",4],["flock","board",4],["flock","dog",2],["flock","forge_ledger",1],["flock","home",4],["flock","issues",1],["flock","ports",6],["flock","runner",14],["flock","settings",7],["flock","sheep",2],["flock","shep_home",2],["flock","shepherd",9],["flock","skills",1],["flock","spawn",2],["flock","state",3],["flock","terminal",2],["flock","tools",1],["flock","upgrade",3],["flock","usage",1],["flock","watch",2],["forge_ledger","ports",4],["forwarder","confine",1],["forwarder","settings",1],["github","adapters",1],["github","home",1],["github","ports",4],["github","settings",4],["github","spawn",1],["github","totp",1],["guard","adapters",2],["guard","board",2],["guard","coderabbit",1],["guard","confine",5],["guard","fence",1],["guard","hooks",9],["guard","issues",1],["guard","local_paths",4],["guard","runner",3],["guard","settings",3],["guard","worktree",2],["home","runner",1],["hooks","settings",1],["hooks","worktree",1],["issues","adapters",1],["issues","agents",1],["issues","board",2],["issues","fence",2],["issues","flock",1],["issues","guard",1],["issues","hooks",1],["issues","ports",3],["issues","profile",1],["issues","runner",1],["issues","settings",3],["issues","skills",1],["issues","spawn",1],["issues","usage",1],["issues","work_item",2],["issues","worktree",2],["lease","home",1],["lease","ports",4],["lease","review_bot",2],["lease","runner",4],["lease","spawn",3],["lease","state",1],["local_paths","settings",1],["main","bridge",1],["main","confine",1],["main","doctor",1],["main","dog",1],["main","flock",5],["main","github",1],["main","guard",1],["main","home",1],["main","hooks",1],["main","lease",2],["main","schema",1],["main","settings",1],["main","sheep",2],["main","tools",1],["main","totp",2],["main","upgrade",2],["pacer","ports",1],["pacer","settings",1],["parity","coderabbit",1],["parity","codex",1],["parity","cubic",1],["parity","review_bot",1],["parity","settings",1],["parity","webhook",1],["ports","adapters",1],["ports","board",5],["ports","forge_ledger",3],["ports","forwarder",2],["ports","github",5],["ports","guard",1],["ports","hooks",3],["ports","lease",2],["ports","local_paths",2],["ports","review_bot",4],["ports","settings",14],["ports","webhook",1],["ports","worktree",1],["profile","fence",1],["profile","github",2],["profile","hooks",1],["profile","lease",1],["profile","ports",1],["profile","settings",1],["profile","worker_folder",1],["profile","worktree",1],["review_bot","agents",1],["review_bot","lease",2],["review_bot","ports",1],["review_bot","settings",1],["review_bot","state",1],["runner","adapters",8],["runner","agents",7],["runner","board",26],["runner","bridge",1],["runner","coderabbit",5],["runner","codex",1],["runner","cubic",4],["runner","fence",4],["runner","forge_ledger",1],["runner","github",1],["runner","guard",3],["runner","home",5],["runner","hooks",5],["runner","issues",5],["runner","lease",12],["runner","local_paths",3],["runner","pacer",6],["runner","panel",10],["runner","ports",152],["runner","profile",6],["runner","review_bot",15],["runner","settings",72],["runner","skills",11],["runner","spawn",2],["runner","state",97],["runner","terminal",2],["runner","test",29],["runner","tools",2],["runner","totp",4],["runner","transcripts",1],["runner","upgrade",1],["runner","usage",20],["runner","watch",1],["runner","webhook",4],["runner","work_item",69],["runner","worker_folder",6],["runner","worktree",31],["schema","settings",1],["schema","webhook",1],["settings","adapters",2],["settings","agents",5],["settings","forwarder",2],["settings","ports",3],["settings","review_bot",1],["settings","shepherd",1],["settings","skills",3],["settings","state",1],["settings","webhook",1],["sheep","adapters",3],["sheep","agents",1],["sheep","coderabbit",1],["sheep","codex",1],["sheep","cubic",1],["sheep","dog",1],["sheep","flock",2],["sheep","github",1],["sheep","home",3],["sheep","lease",7],["sheep","ports",2],["sheep","runner",6],["sheep","settings",3],["sheep","shep_home",1],["sheep","shepherd",2],["sheep","spawn",1],["sheep","upgrade",3],["sheep","webhook",1],["shepherd","home",1],["skills","ports",1],["skills","settings",3],["skills","worktree",5],["state","board",1],["state","home",1],["state","pacer",1],["state","panel",1],["state","ports",6],["state","settings",2],["state","work_item",3],["terminal","spawn",2],["tools","spawn",7],["totp","ports",2],["transcripts","settings",2],["transcripts","watch",2],["upgrade","dog",1],["upgrade","flock",5],["upgrade","home",1],["upgrade","sheep",1],["upgrade","shep_home",1],["upgrade","shepherd",6],["upgrade","spawn",8],["usage","panel",2],["usage","ports",4],["usage","settings",2],["usage","state",1],["usage","work_item",1],["webhook","forwarder",1],["webhook","lease",1],["webhook","settings",7],["work_item","ports",9],["work_item","review_bot",2],["work_item","settings",5],["work_item","usage",1],["work_item","worktree",1],["worktree","spawn",1]];
+(function () {
+  const names = MODS.map(m => m[0]);
+  const info = Object.fromEntries(MODS.map(m => [m[0], { code: m[1], test: m[2], files: m[3] }]));
+  const out = {}, inn = {};
+  names.forEach(n => { out[n] = new Map(); inn[n] = new Map(); });
+  EDGES.forEach(([a, b, r]) => { out[a].set(b, r); inn[b].set(a, r); });
+
+  // Eades ordering: users first, foundations last, so most links point forward.
+  const left = new Set(names), s1 = [], s2 = [];
+  const deg = (n, map) => [...map[n].keys()].filter(x => left.has(x) && x !== n).length;
+  while (left.size) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const n of [...left]) if (deg(n, out) === 0) { s2.unshift(n); left.delete(n); changed = true; }
+      for (const n of [...left]) if (deg(n, inn) === 0) { s1.push(n); left.delete(n); changed = true; }
+    }
+    if (!left.size) break;
+    let best = null, bv = -Infinity;
+    for (const n of left) { const v = deg(n, out) - deg(n, inn); if (v > bv || (v === bv && n < best)) { bv = v; best = n; } }
+    s1.push(best); left.delete(best);
+  }
+  const order = s1.concat(s2), pos = Object.fromEntries(order.map((n, i) => [n, i]));
+  const isBack = (a, b) => pos[b] < pos[a];
+  const maxRefs = Math.max(...EDGES.map(e => e[2]));
+  const N = order.length;
+
+  const m = document.getElementById('matrix');
+  m.style.gridTemplateColumns = `auto repeat(${N}, 13px)`;
+  m.appendChild(document.createElement('div'));
+  const colEls = order.map(n => { const d = document.createElement('div'); d.className = 'collab'; d.textContent = n; m.appendChild(d); return d; });
+  const rowEls = [], cells = [];
+  order.forEach((a, i) => {
+    const lab = document.createElement('button');
+    lab.className = 'rowlab'; lab.textContent = a; lab.id = 'row-' + a;
+    lab.addEventListener('click', () => select(a));
+    m.appendChild(lab); rowEls.push(lab);
+    const row = [];
+    order.forEach((b, j) => {
+      const c = document.createElement('button');
+      c.className = 'cellbtn'; c.tabIndex = -1;
+      if (i === j) c.classList.add('diag');
+      const r = out[a].get(b);
+      if (r) {
+        c.classList.add('f'); c.tabIndex = 0;
+        const k = 0.35 + 0.65 * Math.log(1 + r) / Math.log(1 + maxRefs);
+        const col = isBack(a, b) ? 'var(--back)' : 'var(--fwd)';
+        c.style.background = `color-mix(in srgb, ${col} ${Math.round(k * 100)}%, transparent)`;
+        c.title = `${a} uses ${b}: ${r} reference${r > 1 ? 's' : ''}${isBack(a, b) ? ' (reaches back up)' : ''}`;
+        c.setAttribute('aria-label', c.title);
+        c.addEventListener('click', () => select(a));
+      }
+      c.addEventListener('mouseenter', () => hover(i, j));
+      m.appendChild(c); row.push(c);
+    });
+    cells.push(row);
+  });
+  m.addEventListener('mouseleave', () => hover(-1, -1));
+  function hover(i, j) {
+    rowEls.forEach((e, k) => e.classList.toggle('on', k === i || order[k] === sel));
+    colEls.forEach((e, k) => e.classList.toggle('on', k === j));
+  }
+
+  let sel = null;
+  const panel = document.getElementById('panel');
+  const chips = (list, from) => list.length
+    ? '<ul>' + list.map(([n, r]) => `<li class="chip${(from ? isBack(sel, n) : isBack(n, sel)) ? ' back' : ''}">${n}<i>${r}</i></li>`).join('') + '</ul>'
+    : '<p class="hint">none</p>';
+  function select(a) {
+    sel = a;
+    const i = pos[a];
+    cells.forEach((row, r) => row.forEach((c, k) => c.classList.toggle('lit', r === i || k === i)));
+    rowEls.forEach((e, k) => e.classList.toggle('on', k === i));
+    const uses = [...out[a]].sort((x, y) => y[1] - x[1]);
+    const by = [...inn[a]].sort((x, y) => y[1] - x[1]);
+    const backs = uses.filter(([n]) => isBack(a, n)).length + by.filter(([n]) => isBack(n, a)).length;
+    const s = info[a];
+    panel.innerHTML = `<div class="name">${a}</div>
+      <div class="nums">${s.code.toLocaleString()} code · ${s.test.toLocaleString()} test lines · ${s.files} files</div>
+      <h3>Uses ${uses.length}</h3>${chips(uses, true)}
+      <h3>Used by ${by.length}</h3>${chips(by, false)}
+      <p class="hint">${backs ? `${backs} of these links go the wrong way (amber).` : 'All of its links go the right way.'} Number = references.</p>`;
+  }
+  select('settings');
+
+  // Size bar: top modules, then the rest.
+  const sorted = MODS.slice().sort((x, y) => y[1] - x[1]);
+  const total = sorted.reduce((s, x) => s + x[1], 0);
+  const top = sorted.slice(0, 6), rest = total - top.reduce((s, x) => s + x[1], 0);
+  const shades = ['var(--fwd)', 'color-mix(in srgb, var(--fwd) 80%, var(--ink))', 'color-mix(in srgb, var(--fwd) 65%, var(--muted))',
+    'color-mix(in srgb, var(--fwd) 50%, var(--muted))', 'color-mix(in srgb, var(--fwd) 40%, var(--muted))', 'color-mix(in srgb, var(--fwd) 30%, var(--muted))'];
+  const bar = document.getElementById('bar');
+  top.concat([['45 others', rest]]).forEach((x, k) => {
+    const d = document.createElement('div');
+    d.style.flex = String(x[1]); d.style.background = k < 6 ? shades[k] : 'var(--muted)';
+    d.textContent = `${x[0]} ${Math.round(100 * x[1] / total)}%`; d.title = `${x[0]}: ${x[1].toLocaleString()} lines`;
+    bar.appendChild(d);
+  });
+  document.getElementById('barnote').textContent =
+    `${total.toLocaleString()} lines of code (tests not counted). runner alone is bigger than the next nine modules together.`;
+
+  // Tabs
+  const tabs = [['t1', 'p1'], ['t2', 'p2']];
+  tabs.forEach(([t, p]) => document.getElementById(t).addEventListener('click', () => {
+    tabs.forEach(([t2, p2]) => { document.getElementById(t2).setAttribute('aria-selected', String(t2 === t)); document.getElementById(p2).hidden = t2 !== t; });
+  }));
+  if (location.hash === '#gui') document.getElementById('t2').click();
+})();
+</script>
