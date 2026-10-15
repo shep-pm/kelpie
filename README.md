@@ -6,6 +6,9 @@ Private for now. Kelpie itself lives in shep-pm/shep-kelpie.
 
 ## What's here
 
+- `docs/goals.md`: start here. The two goals, starting a project A to Z, and what is parked.
+- `docs/journey.md`: every step of starting this project, who did it, and whether SK could have.
+- `docs/roles.md`: the architect role proposed for SK.
 - `docs/gui-idea.md`: the idea, the pushback and prior art, as short numbered points.
 - `map/build.py`: builds shep-kelpie's module map from its `src/` (which module uses which, and the loop they form).
 - `map/page.html`: the page template `build.py` fills in.
