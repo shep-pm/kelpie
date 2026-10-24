@@ -10,6 +10,7 @@ Private for now. Kelpie itself lives in shep-pm/shep-kelpie.
 - `docs/journey.md`: every step of starting this project, who did it, and whether SK could have.
 - `docs/roles.md`: the architect role proposed for SK.
 - `docs/gui-idea.md`: the idea, the pushback and prior art, as short numbered points.
+- `docs/backend.md`: why kelpie exists, the backend, the repo split and the stack, decided 2026-10-23.
 - `map/build.py`: builds shep-kelpie's module map from its `src/` (which module uses which, and the loop they form).
 - `map/page.html`: the page template `build.py` fills in.
 - `map/module-map-c18cdb1b.html`: the first map, built from shep-kelpie main at c18cdb1b.
