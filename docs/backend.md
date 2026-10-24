@@ -57,7 +57,7 @@ From a session on 2026-10-23. Decided unless marked open.
 | Layer | Pick | Why |
 |---|---|---|
 | UI | Tauri 2, React + TS, Vite, Tailwind or shadcn, zustand, TanStack Query | The maintainer's strongest stack; Tauri is Rust-native and small |
-| Types across | `tauri-specta`, TS types generated from Rust | One source of truth |
+| Types across | `tauri-specta` (still rc.25), TS types generated from Rust | One source of truth |
 | Tauri's Rust side | A client only | The app is a view, not the engine |
 | API | A `protocol` crate on the transport pattern of `shep_core::transport` | Borrows shep's crates; Windows already works there |
 | Domain | SK's crates, minus the dog wrapper | Kept as they are |
@@ -65,7 +65,43 @@ From a session on 2026-10-23. Decided unless marked open.
 | Processes | shep: SK runs workers as sheep | Why kelpie exists |
 | Install | Tauri bundles SK and shep as sidecars (`externalBin`) with their own `SHEP_HOME` | Nobody installs shep first |
 
-The earlier view picks still stand (`gui-idea.md`, Tech): React Flow with ELK, its own MCP server.
+The earlier view picks still stand (`gui-idea.md`, Tech), with one change: React Flow's docs now recommend dagre over ELK, and the layout for big graphs moves into SK (see Visualizers).
+
+## Decided on 2026-10-24
+
+From a survey of the framework landscape as of October 2026. Sources are in the session's three research reports; the key facts are below.
+
+### Visualizers: webview, with the heavy work in Rust
+
+1. Native Rust wins only when the canvas is the whole app, with thousands of live nodes at 120 fps. Rerun (egui and wgpu) shows it can be done.
+2. Kelpie's views answer one question with 5 to 50 nodes, so the renderer is not the bottleneck.
+3. Indexing and graph layout run in Rust, in SK, and send coordinates over the protocol. The webview only draws.
+4. A big graph draws on the GPU in the webview: cosmos.gl (GPU force layout, MIT) or Sigma.js.
+5. If one view ever outgrows that, a Rust to WASM and WebGPU canvas fits inside the same webview.
+6. No Rust-native framework fits today: none has an ELK-style layout, a mature graph widget, a diff view and a terminal together, and none shares a desktop UI with mobile. GPUI with gpui-component came closest on desktop.
+
+### Platforms: one desktop app, native mobile, one Rust client
+
+| Target | Approach | Why |
+|---|---|---|
+| macOS, Linux, Windows | One Tauri 2 app | Desktop is UI-heavy and shared |
+| Android | Native Kotlin, small | Push and background behaviour are where cross-platform hurts most, and the app is mostly one screen |
+| iOS, later | Native Swift | Same |
+| All | One Rust client crate for SK's protocol, bound to Kotlin and Swift with UniFFI | Protocol logic written once |
+
+1. Agents make per-platform code cheap to write, not to review, test and release. The maintainer's attention is the scarce part.
+2. Tauri 3 is alpha (3.0.0-alpha.5, 2026-10-14). Its bundled Chromium (CEF) runtime is the way out if WebKit differences bite on desktop, without leaving Tauri. OpenCode left Tauri for Electron in 2026, reportedly over WebKit rendering.
+3. Electron is the industry default (Claude Desktop, Codex, Cursor, Goose, OpenCode) and stays the fallback. The React UI moves with little change.
+
+### Notifications: kelpie's own connection, no Google needed
+
+1. Tauri 2's notification plugin shows native notifications with action buttons on Android and iOS, but has no remote push. Its push PR has been open since 2024-11.
+2. Android allows a foreground service holding one connection, which keeps working in doze mode. ntfy's instant delivery works this way.
+3. So the Android app keeps one connection to SK, written fresh or borrowing ntfy-android's connection service (Apache-2.0). No FCM.
+4. It fixes what made ntfy painful: rulings grouped by project with a screen each, and pairing once by QR instead of re-entering a token.
+5. The phone reaches SK over Tailscale, or a small relay for people without it.
+6. Some phone makers' battery managers kill background connections; the app asks to be exempted.
+7. iOS allows no background connection, so it needs APNs. SK, or a small server it runs, calls APNs directly with the maintainer's own key. Nobody else sits in between.
 
 ## What changes in SK
 
