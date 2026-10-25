@@ -10,5 +10,7 @@ Every step of starting kelpie (the app), in order. Who: `maintainer`, `by hand` 
 | 0.4 | 2026-10-14 | First commit pushed straight to `main`, no pull request | by hand | No |
 | 0.5 | 2026-10-14 | Filed SK#897, the parent for starting a project from nothing | by hand | Partly: `shep kelpie issue` |
 | 0.6 | 2026-10-14 | Parked the notes (`docs/goals.md`, this file, `docs/roles.md`) through a pull request | by hand | No |
+| 0.7 | 2026-10-23 | Decided the backend, the repo split and the stack (`docs/backend.md`) | maintainer, by hand | No: the maintainer's call |
+| 0.8 | 2026-10-23 | Filed SK#1236, SK's own socket, and listed it in shep#1104 | by hand | Partly: `shep kelpie issue` |
 
 From 0.6 on, changes here go through pull requests.

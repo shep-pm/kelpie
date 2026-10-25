@@ -35,15 +35,16 @@ Parked on 2026-10-14 while the maintainer gathers their thoughts. Read this firs
 1. codebase-memory-mcp's own viewer (`--ui=true`, port 9749) is striking but too much at once. Being visual is not enough; it overwhelms.
 2. So each view in the app must answer one question with a few boxes (about 5 to 9). The full map stays in the background.
 3. shep and SK are nearly the same size: shep 127,570 lines of code in 8 crates, SK 103,374 in one crate (tracked `.rs`, tests not counted).
+   On 2026-10-23, counting tests: shep 302,668 lines, SK 304,352 in a workspace of 11 crates.
 4. shep looks orderly in the viewer. SK is a tangle: 37 of its 51 modules form one loop (`map/`).
 
 ## Parked until the maintainer's write-up
 
-1. The app's design, views and tech (`docs/gui-idea.md` has the first thoughts).
+1. The app's design and views (`docs/gui-idea.md`). The backend, repos and stack are decided in `docs/backend.md`.
 2. The slices of SK#897.
 3. Redoing step 0 properly with `init-shep`, through a pull request.
 
 ## Running meanwhile in SK
 
-1. Untangling SK into a workspace of crates, done by SK's own workers, not by hand in a session.
+1. Untangling SK into a workspace of crates, done by SK's own workers, not by hand in a session. Done: 11 crates by 2026-10-23.
 2. Two possible agent roles, discussed in `docs/roles.md`.
