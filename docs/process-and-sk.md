@@ -49,7 +49,7 @@ Embedding shep's daemon as a library doesn't fix this:
   - a stop ladder (TERM, grace, KILL)
 - The pty design: rustix, a broadcast tap, raw bytes both ways ✓. This is the recent attach work. It is unix-only, and ConPTY is deferred (`docs/specs/deferred.md:416`).
 
-`shep-tree` needs one upstream change: an opt-in `kill_on_close` for `Job`.
+`shep-tree` needs one upstream change: an opt-in `kill_on_close` for `Job` (shep#1616).
 
 ## The proposed tree
 
