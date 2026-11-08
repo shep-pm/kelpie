@@ -4,6 +4,15 @@ A desktop app where people and agents plan, run and follow work on a codebase. M
 
 Kelpie owns every process it starts: when it quits, crashes or is killed, they all stop, and the sessions resume on the next launch. The PM agent is the maintainer's one conversation, and the app is its front end. SK (shep-pm/shep-kelpie) builds kelpie until kelpie can build itself, then SK is archived.
 
+## Rules that are never broken
+
+From `docs/adr/0001-kelpie-owns-its-whole-process-tree.md`:
+
+- Every process kelpie starts goes through the engine's process tree. No bare `std::process::Command::spawn`, no Tauri shell plugin, no spawning from the webview.
+- Nothing detaches: no `setsid`, double fork, `nohup` or `disown`, and nothing installed into launchd, systemd or login items.
+- Every child runs in its own process group (a job object on Windows) with `KELPIE_RUN=<run id>` in its environment.
+- When kelpie quits, every process stops. Sessions are what persist: the next launch resumes them, and workers come back paused.
+
 ## Commands
 
 No code yet. The Phase 0 workspace adds the app and the Rust crates, and their commands go here (`docs/process-and-sk.md`, Order of work).
@@ -18,6 +27,9 @@ No code yet. The Phase 0 workspace adds the app and the Rust crates, and their c
 - `docs/gui-framework.md`: why Tauri 2 + React.
 - `docs/goals.md` and `docs/journey.md`: the two goals, and a log of every step of starting the project.
 - `map/`: builds SK's module map.
+- `docs/adr/`: decisions. Read the ones touching your area first.
+- `.claude/skills/`: read `tauri` before touching `src-tauri/`, `tauri.conf.json`, capabilities or any `invoke` call, since Tauri 2 differs from Tauri 1 in ways models get wrong. Read `lift-from-sk` before bringing in any SK code, and `zustand-subscription-patterns` before wiring a component to a store.
+- `docs/lifted.md`: every chunk lifted from SK, with what it handles and what was dropped.
 
 ## Style
 
