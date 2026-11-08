@@ -17,4 +17,4 @@ SK is shep-pm/shep-kelpie. Kelpie treats it as a treasure chest: lift what the c
 6. **Translate the words.** SK talks in sheep, lambs, flocks, dogs and the shepherd. In kelpie those are processes, sessions and the engine. `CONTEXT.md`, once it exists, holds the terms.
 7. **Record the lift.** Add a row to `docs/lifted.md`.
 
-Done when every SK test covering the lifted code passes in kelpie or appears in the row as dropped with its reason, and `git grep -n -i -E 'shep_client|shep_channel|shep_handover|SHEP_HOME|sheep|lamb'` over the lifted files prints nothing.
+Done when every SK test covering the lifted code passes in kelpie or appears in the row as dropped with its reason, and `git grep -n -i -E 'shep_client|shep_channel|shep_handover|SHEP_HOME|sheep|lamb' -- <lifted files>` prints nothing.

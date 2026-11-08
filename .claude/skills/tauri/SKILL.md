@@ -27,7 +27,7 @@ Kelpie runs Tauri 2.12 with React 19, Vite and TypeScript. Most of what a model 
 3. **Nothing is spawned through Tauri.** The shell plugin and `Command.sidecar` from JS break ADR 0001: every process goes through the engine's tree. The reaper is a sidecar for bundling only (`bundle.externalBin`, file named `<name>-<target triple>`), and the engine starts it.
 4. **Tauri kills nothing on exit, and `RunEvent::Exit` never fires on SIGKILL, abort or `process::exit`.** The engine's stop ladder runs on `ExitRequested`, and the reaper covers the rest. Exit hooks don't count as cleanup.
 5. **Build with `tauri build`.** A plain `cargo build --release` produces a dev-mode binary that loads `devUrl`.
-6. **Vite runs on port 1520** (Tauri's template default 1420, plus 100, so it never collides with another dev server). Set `server.port: 1520` with `strictPort: true` and `build.devUrl` to match. `--port` and `TAURI_CLI_PORT` don't move Vite.
+6. **Vite runs on port 1520** (Tauri's template default 1420, plus 100, to stay off a dev server already running on the default). Set `server.port: 1520` with `strictPort: true` and `build.devUrl` to match. `--port` and `TAURI_CLI_PORT` don't move Vite.
 7. **`src-tauri` is a member of the root Cargo workspace.** Artifacts and bundles land in the root `target/`, not `src-tauri/target`.
 8. **tauri-specta is pinned exact**, `=2.0.0-rc.26` (still a release candidate), with the `specta` rc it requires. It types `Channel<T>` arguments directly; a channel nested inside a struct needs `JavaScriptChannelId`.
 

@@ -7,7 +7,7 @@ Claude Desktop and Claude Code leave processes running after they quit, with not
 ## Decision
 
 - Every process kelpie starts is a descendant of the app, through the engine's tree. Nothing goes into launchd, systemd, a login item or any other init system, and nothing detaches (`setsid`, double fork, `nohup`, `disown`).
-- When kelpie quits, crashes or is killed, every process it started stops, grandchildren included.
+- When kelpie quits, crashes or is killed, every process it started stops, grandchildren included. The one known gap is on macOS (Consequences).
 - Each child gets its own process group (a job object on Windows) and `KELPIE_RUN=<run id>` in its environment.
 - A reaper sidecar holds a pipe from the app. When the pipe closes, it kills the recorded groups and sweeps for `KELPIE_RUN`. The next launch sweeps again before starting anything.
 - Linux adds `PR_SET_CHILD_SUBREAPER` and `PR_SET_PDEATHSIG`. Windows uses a job with `KILL_ON_JOB_CLOSE` (shep#1616).
