@@ -1,15 +1,18 @@
 # Kelpie, shep and SK
 
-Proposed on 2026-11-08 and not yet decided. It reopens three parts of `backend.md`:
-- **Shape:** SK as a headless daemon.
-- **Install:** shep and SK as sidecars.
-- **Next steps, 2:** the first tracer bullet.
+Proposed and decided on 2026-11-08. It reopens these parts of `backend.md`:
+- **Shape:** SK as a headless daemon, and "closing the app never stops work".
+- **Stack:** the Domain, Processes and Install rows.
+- **What changes in SK.**
+- **Order, 2:** the first tracer bullet.
+
+`backend.md` now points here for each of them.
 
 The code was read at origin/main of shep (`144517474`) and SK (`bdea157f`). Hob traced shep, and the claims below marked ✓ were checked against the source by hand.
 
 ## The two rules
 
-1. **Kelpie owns the whole process tree.** Nothing goes into launchd or systemd. When kelpie quits, crashes or is killed, everything it started goes with it, grandchildren included.
+1. **Kelpie owns the whole process tree.** Nothing goes into launchd or systemd. When kelpie quits, crashes or is killed, every process it started goes with it, grandchildren included. **Sessions outlive processes:** the next launch finds every conversation waiting, as Claude Desktop does.
 2. **The PM is the maintainer's one conversation.** It runs inside kelpie's tree, and the app's chat box is its front end. You pay for one Opus session, not two.
 3. Not negotiable: SK keeps building kelpie, as it does today, until kelpie can build itself.
 
@@ -18,7 +21,7 @@ The code was read at origin/main of shep (`144517474`) and SK (`bdea157f`). Hob 
 1. **Don't ship shep or SK.** Kelpie's engine is its own Rust code, hosted by the app.
 2. **Take one shep crate as a library: `shep-tree`.** It is 1.6k lines and depends on no other shep crate and no async runtime ✓ (`shep-tree/Cargo.toml`).
 3. **Treat SK as a treasure chest.** Lift chunks into kelpie as each slice needs them, tests included. Archive SK at the end. The ADRs, `docs/facts` and agent files come over first, as the spec.
-4. **The first tracer bullet is the PM chat**, not SK's board. It means one claude session in kelpie's tree, streaming into the chat box, gone when you quit.
+4. **The first tracer bullet is the PM chat**, not SK's board. It means one claude session in kelpie's tree, streaming into the chat box. Its process dies when you quit, and the conversation is waiting when you reopen.
 
 ## Why not ship shep: its job is the opposite of ours
 
@@ -82,6 +85,37 @@ How each way of quitting is covered:
 
 **Visibility:** the app shows the live tree (pid, command, CPU, age) and a count in the tray. If kelpie owns it, you can see it.
 
+## Sessions outlive processes
+
+Processes are short-lived. Conversations are not.
+
+| Session | On quit | On the next launch |
+|---|---|---|
+| PM | The process stops. Kelpie keeps the session id per project | The chat history shows at once, read from the transcript. The process starts with `claude --resume <id>` (or `codex exec resume`) only when you send a message, so nothing runs while you just look |
+| Worker mid-turn | Stopped. The turn is lost | Shown as **paused**, with one click to resume. It resumes from its transcript, which SK already does after a runner crash (ADR 0002) |
+| pty tab | Gone | Reopens in the same folder. Scrollback isn't kept |
+
+1. Workers come back paused, not running. Quitting is the maintainer saying "stop". A launch that quietly restarts five agents would break the rule from the other side.
+2. Both CLIs resume: `claude --resume <id>` works with `--print` and stream-json input, and `codex exec resume` exists. The PM tracer bullet confirms it end to end.
+
+## Updates: drain and resume, not handover
+
+`shep-handover` keeps children alive through an update: it `execve`s a new binary in place, and the sheep stay its children. That breaks no rule, since the pid never changes. Kelpie still doesn't take it now:
+
+| | Handover | Drain and resume |
+|---|---|---|
+| What's lost | Nothing | At most an in-flight turn, and only if you force it |
+| Platforms | Unix only. Windows falls back to stop-and-start | All three |
+| Fits a GUI process | Poorly. `execve` replaces the window, the webview's helper processes and the signed app bundle mid-flight | Yes. It is how Claude Desktop updates |
+| Code | The blob, the fitness check, the dry-run adoption, and re-adopting every pipe and pty | "Restart to update" plus resume, which kelpie needs anyway |
+
+How an update runs:
+1. The update downloads. The app shows "restart to update".
+2. On restart, kelpie drains. No new turns start, the turns already running finish, and the PM's turn finishes. A "now" button skips the wait.
+3. Kelpie quits, updates and relaunches. The sessions resume as above.
+
+Revisit this if updates mid-turn turn out to hurt. The move then would be to run the engine as a child process of the app. The engine could hand itself over with `shep-handover` while the window restarts on its own, and that option stays open.
+
 ## SK: a treasure chest, not a backend
 
 Measured at origin/main:
@@ -133,7 +167,7 @@ Measured at origin/main:
 | Phase | Kelpie | SK |
 |---|---|---|
 | 0, now | Workspace: app, `kelpie-engine`, `kelpie-protocol` (from SK's), shep-tree | Builds kelpie as a shep dog, unchanged |
-| 1, tracer | **PM chat:** one claude session in the tree, streamed over a Tauri Channel into the chat box. Quit kills it. Runs on macOS and Linux | Builds it |
+| 1, tracer | **PM chat:** one claude session in the tree, streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
 | 2 | Process panel, terminal tab (pty), worker sessions, adapters lifted | Builds it. SK's board view is optional and read-only |
 | 3 | Work-item loop, review and leases lifted. Kelpie builds kelpie | Archived |
 
@@ -147,7 +181,8 @@ Why the PM goes first:
 1. **Second-system effect.** The cap: lift only what the next slice needs, and SK keeps shipping meanwhile.
 2. **Losing edge cases on extraction.** Every lift brings its tests and a short note on what SK's version handles. The extraction is SK's own workers' job, since they wrote the code.
 3. **Windows pty.** Shep's pty is unix-only. The terminal tab needs ConPTY there (portable-pty has it), or the tab waits on Windows.
-4. **shep loses its biggest user.** That's a relief more than a loss. The kelpie-driven parts (dog plane, lookout panes, channel) can shrink back, which answers the Nov 5 worry that kelpie was bending shep.
+4. **The phone reaches kelpie only while the desktop app runs.** This reopens `backend.md`'s mobile plan, which assumed an always-on SK. Kelpie in the tray covers overnight. A phone that can wake a closed kelpie would break the rule.
+5. **shep loses its biggest user.** That's a relief more than a loss. The kelpie-driven parts (dog plane, lookout panes, channel) can shrink back, which answers the Nov 5 worry that kelpie was bending shep.
 
 ## Taken on trust (Hob, not re-read)
 

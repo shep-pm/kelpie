@@ -12,7 +12,7 @@ Private for now. Kelpie itself lives in shep-pm/shep-kelpie.
 - `docs/gui-idea.md`: the idea, the pushback and prior art, as short numbered points.
 - `docs/backend.md`: why kelpie exists, the backend, the repo split and the stack, decided 2026-10-23.
 - `docs/gui-framework.md`: the shell and frontend re-checked on 2026-11-08: Tauri 2 + React stays, Solid judged and ranked fourth.
-- `docs/process-and-sk.md`: proposed 2026-11-08: kelpie owns its process tree, ships neither shep nor SK, takes shep-tree, and lifts SK's code as needed.
+- `docs/process-and-sk.md`: decided 2026-11-08: kelpie owns its process tree, ships neither shep nor SK, takes shep-tree, and lifts SK's code as needed.
 - `docs/session-notes-2026-11.md`: everything said about the app during the shep-kelpie sessions, Oct 26 to Nov 8.
 - `map/build.py`: builds shep-kelpie's module map from its `src/` (which module uses which, and the loop they form).
 - `map/page.html`: the page template `build.py` fills in.

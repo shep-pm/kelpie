@@ -2,6 +2,13 @@
 
 From a session on 2026-10-23. Decided unless marked open.
 
+**Reopened on 2026-11-08 by `process-and-sk.md`:**
+- Kelpie owns its process tree, and ships neither shep nor SK.
+- The engine is kelpie's own and is hosted by the app.
+- SK is a treasure chest to lift code from, then archive.
+
+Shape, the Domain, Processes and Install rows of Stack, What changes in SK, and Order 2 below are marked where they changed.
+
 ## Why kelpie exists
 
 1. Claude Desktop routinely left zombie processes on the maintainer's laptop.
@@ -45,6 +52,19 @@ From a session on 2026-10-23. Decided unless marked open.
 2. shep stays the process layer only. SK owns the domain.
 3. Going through shep for the domain would be two layers, with every product decision waiting on shep.
 
+**Replaced on 2026-11-08** (`process-and-sk.md`):
+
+```
+  kelpie (Tauri 2): React + TS webview, and the engine in the same Rust process
+   ├─ reaper           kills everything below if kelpie dies
+   ├─ PM session       the maintainer's one conversation
+   ├─ worker sessions  and everything they start
+   └─ pty sessions
+```
+
+1. Closing the app stops every process, and the sessions resume on the next launch.
+2. Agents and the CLI reach the engine on its own local socket, through the `protocol` crate.
+
 ## What SK looks like today
 
 1. Its verbs (`Rule`, `Board`, `Triage`, `Drain`, ...) are SK's own `Request` enum in `crates/runner/src/runner/trigger/mod.rs`.
@@ -60,10 +80,10 @@ From a session on 2026-10-23. Decided unless marked open.
 | Types across | `tauri-specta` (still rc.25), TS types generated from Rust | One source of truth |
 | Tauri's Rust side | A client only | The app is a view, not the engine |
 | API | A `protocol` crate on the transport pattern of `shep_core::transport` | Borrows shep's crates; Windows already works there |
-| Domain | SK's crates, minus the dog wrapper | Kept as they are |
+| Domain | ~~SK's crates, minus the dog wrapper~~ Kelpie's own engine, with SK's code lifted as slices need it (2026-11-08) | SK's dog and shep coupling stays behind |
 | State | Files, as today; maybe SQLite for the board and journal later | Not a day-one change |
-| Processes | shep: SK runs workers as sheep | Why kelpie exists |
-| Install | Tauri bundles SK and shep as sidecars (`externalBin`) with their own `SHEP_HOME` | Nobody installs shep first |
+| Processes | ~~shep: SK runs workers as sheep~~ The engine, on the `shep-tree` crate, plus a reaper (2026-11-08) | shep's daemon is built to outlive its parent |
+| Install | ~~Tauri bundles SK and shep as sidecars~~ One app, with the reaper as its only sidecar (2026-11-08) | Nobody installs shep, and nothing runs once kelpie quits |
 
 The earlier view picks still stand (`gui-idea.md`, Tech), with one change: React Flow's docs now recommend dagre over ELK, and the layout for big graphs moves into SK (see Visualizers).
 
@@ -115,6 +135,10 @@ From a survey of the framework landscape as of October 2026. Sources are in the 
 
 Recommended, not decided: no new CLI or lookout surface in SK beyond what the app also needs.
 
+**Replaced on 2026-11-08:**
+- SK doesn't become the backend. It keeps building kelpie as a shep dog, unchanged, and its code is lifted into kelpie chunk by chunk, specs first.
+- SK is archived once kelpie builds itself. See `process-and-sk.md`, Order of work.
+
 ## For other people
 
 1. Not everyone uses Claude. SK's shipped agents name models and a local script only the maintainer has.
@@ -125,6 +149,7 @@ Recommended, not decided: no new CLI or lookout surface in SK beyond what the ap
 
 1. SK#1236: SK answers on its own socket, with a typed protocol and status events. Listed in shep#1104 after SK#1201.
 2. Here: redo step 0 with `init-shep`, then a Tauri window that shows one project's board through SK's client crate. That is the first tracer bullet.
+   **Replaced on 2026-11-08:** the first tracer bullet is the PM chat. One claude session in kelpie's tree streams into the chat box. It dies when kelpie quits and resumes on the next launch. A board view of SK is optional and comes later.
 
 ## Parked notes from the session
 
