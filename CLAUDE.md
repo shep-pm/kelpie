@@ -9,6 +9,7 @@ Kelpie owns every process it starts: when it quits, crashes or is killed, they a
 No code yet. The Phase 0 workspace adds the app and the Rust crates, and their commands go here (`docs/process-and-sk.md`, Order of work).
 
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
+- CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
 
 ## Where things live
 
