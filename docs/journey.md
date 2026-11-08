@@ -17,5 +17,6 @@ Every step of starting kelpie (the app), in order. Who: `maintainer`, `by hand` 
 | 0.11 | 2026-11-08 | Redid step 0.3 with `init-shep`, through a pull request | by hand | No: nothing in SK runs `init-shep` |
 | 0.12 | 2026-11-08 | Moved CI to the maintainer's runner-hub: App installed on shep-pm with only kelpie, shep-pm added to the hub's owners | maintainer and by hand | No: needs the browser and ssh to the hub |
 | 0.13 | 2026-11-08 | Registered the repo with SK as `kelpie-app` (`shep kelpie add`, env copied from crabpot), doctor clean | by hand | Partly: `add` is SK's verb, but someone has to clone and run it. Named `kelpie-app` so no sheep shares the dog's name |
+| 0.14 | 2026-11-08 | Set up the domain docs: `GLOSSARY.md` and ADRs 0002 to 0004, written from decisions already made, no grilling | by hand | Partly: a worker can write them, but someone has to say which decisions are settled |
 
 From 0.6 on, changes here went through pull requests. Since 2026-11-08, docs and research may go straight to `main`.
