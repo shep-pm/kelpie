@@ -40,9 +40,9 @@ Parked on 2026-10-14 while the maintainer gathers their thoughts. Read this firs
 
 ## Parked until the maintainer's write-up
 
-1. The app's design and views (`docs/gui-idea.md`). The backend, repos and stack are decided in `docs/backend.md`.
+1. The app's design and views (`docs/gui-idea.md`). The backend, repos and stack are decided in `docs/backend.md`, and partly replaced by `docs/process-and-sk.md`.
 2. The slices of SK#897.
-3. Redoing step 0 properly with `init-shep`, through a pull request.
+3. ~~Redoing step 0 properly with `init-shep`, through a pull request.~~ Done on 2026-11-08 (journey 0.11).
 
 ## Running meanwhile in SK
 
