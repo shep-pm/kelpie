@@ -4,6 +4,15 @@ A desktop app where people and agents plan, run and follow work on a codebase. M
 
 Kelpie owns every process it starts: when it quits, crashes or is killed, they all stop, and the sessions resume on the next launch. The PM agent is the maintainer's one conversation, and the app is its front end. SK (shep-pm/shep-kelpie) builds kelpie until kelpie can build itself, then SK is archived.
 
+## Rules that are never broken
+
+From `docs/adr/0001-kelpie-owns-its-whole-process-tree.md`:
+
+- Every process kelpie starts goes through the engine's process tree. No bare `std::process::Command::spawn`, no Tauri shell plugin, no spawning from the webview.
+- Nothing detaches: no `setsid`, double fork, `nohup` or `disown`, and nothing installed into launchd, systemd or login items.
+- Every child runs in its own process group (a job object on Windows) with `KELPIE_RUN=<run id>` in its environment.
+- When kelpie quits, every process stops. Sessions are what persist: the next launch resumes them, and workers come back paused.
+
 ## Commands
 
 No code yet. The Phase 0 workspace adds the app and the Rust crates, and their commands go here (`docs/process-and-sk.md`, Order of work).
