@@ -12,5 +12,8 @@ Every step of starting kelpie (the app), in order. Who: `maintainer`, `by hand` 
 | 0.6 | 2026-10-14 | Parked the notes (`docs/goals.md`, this file, `docs/roles.md`) through a pull request | by hand | No |
 | 0.7 | 2026-10-23 | Decided the backend, the repo split and the stack (`docs/backend.md`) | maintainer, by hand | No: the maintainer's call |
 | 0.8 | 2026-10-23 | Filed SK#1236, SK's own socket, and listed it in shep#1104 | by hand | Partly: `shep kelpie issue` |
+| 0.9 | 2026-11-08 | Re-checked the shell and frontend (`docs/gui-framework.md`) and decided the process tree and SK's role (`docs/process-and-sk.md`) | maintainer, by hand | No: the maintainer's call |
+| 0.10 | 2026-11-08 | Filed shep#1616, an opt-in kill-on-close job in `shep-tree` | by hand | Partly: `shep kelpie issue` |
+| 0.11 | 2026-11-08 | Redid step 0.3 with `init-shep`, through a pull request | by hand | No: nothing in SK runs `init-shep` |
 
-From 0.6 on, changes here go through pull requests.
+From 0.6 on, changes here went through pull requests. Since 2026-11-08, docs and research may go straight to `main`.

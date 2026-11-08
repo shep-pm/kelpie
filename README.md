@@ -1,8 +1,8 @@
 # kelpie
 
-Kelpie's visual side: an app where people and agents look at, plan and follow work on a codebase as pictures instead of chat.
+A desktop app where people and agents plan, run and follow work on a codebase, as pictures instead of chat.
 
-Private for now. Kelpie itself lives in shep-pm/shep-kelpie.
+Private for now. No code yet: shep-pm/shep-kelpie (SK) builds it, and SK's code is lifted in as kelpie needs it (`docs/process-and-sk.md`).
 
 ## What's here
 
@@ -27,3 +27,7 @@ open out/module-map.html
 ```
 
 The page's headline numbers and prose are still written by hand for c18cdb1b. Only the grid and the panel follow the data.
+
+## License
+
+MIT OR Apache-2.0, at your option.
