@@ -15,5 +15,7 @@ Every step of starting kelpie (the app), in order. Who: `maintainer`, `by hand` 
 | 0.9 | 2026-11-08 | Re-checked the shell and frontend (`docs/gui-framework.md`) and decided the process tree and SK's role (`docs/process-and-sk.md`) | maintainer, by hand | No: the maintainer's call |
 | 0.10 | 2026-11-08 | Filed shep#1616, an opt-in kill-on-close job in `shep-tree` | by hand | Partly: `shep kelpie issue` |
 | 0.11 | 2026-11-08 | Redid step 0.3 with `init-shep`, through a pull request | by hand | No: nothing in SK runs `init-shep` |
+| 0.12 | 2026-11-08 | Moved CI to the maintainer's runner-hub: App installed on shep-pm with only kelpie, shep-pm added to the hub's owners | maintainer and by hand | No: needs the browser and ssh to the hub |
+| 0.13 | 2026-11-08 | Registered the repo with SK as `kelpie-app` (`shep kelpie add`, env copied from crabpot), doctor clean | by hand | Partly: `add` is SK's verb, but someone has to clone and run it. Named `kelpie-app` so no sheep shares the dog's name |
 
 From 0.6 on, changes here went through pull requests. Since 2026-11-08, docs and research may go straight to `main`.
