@@ -2,7 +2,7 @@
 
 Phase 1's settings page and global agent editor. It places itself in `docs/design/ux.md` (Settings and agents) and serves `docs/design/pm-chat.md` (Switching harness or model, the PM's instructions). Terms are in `GLOSSARY.md`.
 
-**Status:** draft. Its four open questions were settled with the maintainer on 2026-11-09.
+**Status:** confirmed by the maintainer on 2026-11-09.
 
 ## Use case
 
