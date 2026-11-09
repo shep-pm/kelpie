@@ -36,6 +36,14 @@ The Rust workspace is `crates/*`, with `kelpie-engine` so far. CI runs the four 
 
 Iterate with `cargo test --workspace --lib --bins`.
 
+The web frontend is at the repo root and runs in a plain browser. Slice 3 puts it in the Tauri window. pnpm 12 is pinned in `packageManager`.
+
+- `pnpm dev`: Vite on port 1520, `strictPort`, so a taken port fails the run instead of moving.
+- `pnpm build`: `tsc -b && vite build`. Output lands in `dist/`.
+- `pnpm typecheck`: `tsc -b`.
+- `pnpm lint`: `biome check .`.
+- `pnpm test`: `vitest run`.
+- Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
 - CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
 

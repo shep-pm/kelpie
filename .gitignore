@@ -1,4 +1,6 @@
 out/
+dist/
+node_modules/
 target/
 .DS_Store
 __pycache__/
