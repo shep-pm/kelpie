@@ -13,3 +13,10 @@ workspace = true
 
 [dependencies]
 getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shep-tree.workspace = true
+sysinfo.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
