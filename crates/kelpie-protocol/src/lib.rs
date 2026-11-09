@@ -5,6 +5,9 @@
 //! not the engine, not Tauri, not ACP (ADR 0007). Everything here is wire
 //! format, serialized into kelpie's session log and across the app's IPC.
 //!
+//! What a harness offers ([`Options`]) is listed by the harness itself, which is
+//! how kelpie names no model outside the default (ADR 0006).
+//!
 //! # Quick start
 //!
 //! ```
@@ -172,6 +175,31 @@ pub enum CacheLifetime {
     OneHour,
 }
 
+/// What a harness says it offers, listed by the harness itself
+///
+/// A harness names its own models and efforts, so kelpie holds no model list of
+/// its own (ADR 0006). A harness that offers no effort leaves `efforts` empty.
+// wire format: changing this is a breaking change
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Options {
+    /// The models the harness lists, in the order it lists them
+    pub models: Vec<Choice>,
+    /// The efforts the harness lists, empty when it offers none
+    pub efforts: Vec<Choice>,
+}
+
+/// One model or effort a harness lists
+// wire format: changing this is a breaking change
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Choice {
+    /// The value kelpie sends back to the harness to pick this one
+    pub id: String,
+    /// The label the harness gives it
+    pub name: String,
+    /// What the harness says about it, `None` when it says nothing
+    pub description: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +249,28 @@ mod tests {
             assert_eq!(serde_json::to_string(&event).unwrap(), json);
             assert_eq!(serde_json::from_str::<SessionEvent>(json).unwrap(), event);
         }
+    }
+
+    #[test]
+    fn a_choice_keeps_the_id_the_harness_picks_it_with() {
+        let options = Options {
+            models: vec![Choice {
+                id: "claude-opus".to_owned(),
+                name: "Opus".to_owned(),
+                description: Some("the deepest reply".to_owned()),
+            }],
+            efforts: Vec::new(),
+        };
+        let json = concat!(
+            r#"{"models":[{"id":"claude-opus","name":"Opus","#,
+            r#""description":"the deepest reply"}],"efforts":[]}"#
+        );
+
+        assert_eq!(serde_json::to_string(&options).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Options>(json).unwrap(), options);
+        assert_eq!(
+            serde_json::from_str::<Options>(r#"{"models":[],"efforts":[]}"#).unwrap(),
+            Options::default()
+        );
     }
 }
