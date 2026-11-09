@@ -19,14 +19,17 @@ use agent_client_protocol::v1::schema::{
     SetSessionConfigOptionRequest, StopReason as AcpStopReason, TextContent, ToolCallStatus,
 };
 use agent_client_protocol::{
-    Agent, Client, Error, is_connection_terminated, is_incoming_transport_closed,
+    Agent, Client, Error, UntypedMessage, is_connection_terminated, is_incoming_transport_closed,
     on_receive_notification, on_receive_request,
 };
 use futures::StreamExt as _;
 use futures::future::{Either, select};
-use kelpie_protocol::{StopReason, ToolStatus, Usage};
+use kelpie_protocol::{CacheLifetime, StopReason, ToolStatus, Usage};
 
-use super::{Choice, Command, Inbox, Launch, Link, SessionEvent, SessionId, Setup, Sink, lock};
+use super::raw;
+use super::{
+    Choice, Command, Extension, Inbox, Launch, Link, SessionEvent, SessionId, Setup, Sink, lock,
+};
 
 /// Run one worker: wait for the first send, start the harness, serve turns
 /// until the session is dropped or the harness is gone
@@ -45,7 +48,7 @@ pub(super) async fn run(
             None => return,
         }
     };
-    shared.set_sink(Some(first.1));
+    shared.start_turn(first.1);
 
     let link = lock(&launcher).launch();
     match link {
@@ -130,6 +133,8 @@ struct State {
     /// A request failed on a connection that still works, such as an error the
     /// harness answered with, so the harness's end is not what to explain
     request_failed: bool,
+    /// How long this turn's prompt cache write lasts, from a harness that says
+    cache_lifetime: Option<CacheLifetime>,
 }
 
 impl Shared {
@@ -139,6 +144,38 @@ impl Shared {
 
     fn set_sink(&self, sink: Option<Sink>) {
         self.state().sink = sink;
+    }
+
+    /// A turn begins: its events go to `sink`, and what its raw messages said starts empty
+    fn start_turn(&self, sink: Sink) {
+        let mut state = self.state();
+        state.sink = Some(sink);
+        state.cache_lifetime = None;
+    }
+
+    /// The turn is over: its usage, with whatever its raw messages said about the cache
+    fn turn_ended(&self, response: PromptResponse) -> SessionEvent {
+        let lifetime = self.state().cache_lifetime.take();
+        SessionEvent::TurnEnded {
+            stop_reason: stop_reason(response.stop_reason),
+            usage: response.usage.map(|usage| Usage {
+                input: usage.input_tokens,
+                output: usage.output_tokens,
+                cache_read: usage.cached_read_tokens.unwrap_or(0),
+                cache_write: usage.cached_write_tokens.unwrap_or(0),
+                cache_lifetime: lifetime,
+            }),
+        }
+    }
+
+    /// Fold one extension notification the harness named into the turn in flight
+    fn read_extension(&self, read: &[Extension], method: &str, params: &serde_json::Value) {
+        let Some(extension) = read.iter().find(|extension| extension.method() == method) else {
+            return;
+        };
+        if let Some(lifetime) = raw::cache_lifetime(*extension, params) {
+            self.state().cache_lifetime = Some(lifetime);
+        }
     }
 
     fn set_replaying(&self, replaying: bool) {
@@ -254,19 +291,6 @@ fn stop_reason(reason: AcpStopReason) -> StopReason {
     }
 }
 
-fn turn_ended(response: PromptResponse) -> SessionEvent {
-    SessionEvent::TurnEnded {
-        stop_reason: stop_reason(response.stop_reason),
-        usage: response.usage.map(|usage| Usage {
-            input: usage.input_tokens,
-            output: usage.output_tokens,
-            cache_read: usage.cached_read_tokens.unwrap_or(0),
-            cache_write: usage.cached_write_tokens.unwrap_or(0),
-            cache_lifetime: None,
-        }),
-    }
-}
-
 /// Connect over `transport` and serve the session until it ends
 async fn connect(
     shared: &Arc<Shared>,
@@ -279,6 +303,8 @@ async fn connect(
 ) -> Result<(), Error> {
     let updates = Arc::clone(shared);
     let permissions = Arc::clone(shared);
+    let reads = Arc::clone(shared);
+    let named = setup.extensions.clone();
     Client
         .v1()
         .name("kelpie")
@@ -295,6 +321,15 @@ async fn connect(
                 responder.respond(RequestPermissionResponse::new(outcome))
             },
             on_receive_request!(),
+        )
+        // Last, so a typed handler claims its own message first and this one
+        // takes what a harness sends beyond ACP
+        .on_receive_notification(
+            async move |message: UntypedMessage, _cx| {
+                reads.read_extension(&named, message.method(), message.params());
+                Ok(())
+            },
+            on_receive_notification!(),
         )
         .connect_with(transport, async |cx: ConnectionTo<Agent>| {
             let result = serve(&cx, shared, setup, first, turns, commands, id).await;
@@ -339,7 +374,7 @@ async fn serve(
             },
         };
         if let Some(sink) = sink {
-            shared.set_sink(Some(sink));
+            shared.start_turn(sink);
         }
         let prompt = PromptRequest::new(
             session.clone(),
@@ -369,7 +404,7 @@ async fn serve(
             }
         };
         match result {
-            Ok(response) => shared.emit(turn_ended(response)),
+            Ok(response) => shared.emit(shared.turn_ended(response)),
             Err(error) if cx.is_incoming_closed() || is_gone(&error) => return Err(error),
             Err(error) => shared.emit(failed(format!("the turn failed: {error}"))),
         }

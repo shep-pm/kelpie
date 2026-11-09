@@ -44,12 +44,12 @@ use agent_client_protocol::v1::schema::{
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
     ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, Usage,
 };
-use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error};
+use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error, UntypedMessage};
 use futures::channel::oneshot;
 use futures::future::select;
 use serde::Serialize;
 
-use super::{Choice, Launch, Link, Session, SessionId};
+use super::{Choice, Extension, Launch, Link, Session, SessionId};
 
 /// What a session adds to the `Failed` message when it asks how the agent ended
 pub const EXPLANATION: &str = "the fake agent is gone";
@@ -69,9 +69,22 @@ pub struct Call {
 enum Step {
     Text(String),
     Thought(String),
-    ToolCall { id: String, title: String },
-    ToolUpdate { id: String, status: ToolCallStatus },
-    Permission { id: String, title: String },
+    ToolCall {
+        id: String,
+        title: String,
+    },
+    ToolUpdate {
+        id: String,
+        status: ToolCallStatus,
+    },
+    Permission {
+        id: String,
+        title: String,
+    },
+    Extension {
+        method: String,
+        params: serde_json::Value,
+    },
     UntilCancelled,
     Exit,
 }
@@ -156,6 +169,16 @@ impl Turn {
         self
     }
 
+    /// Send `params` as the extension notification `method` while the turn runs
+    #[must_use]
+    pub fn extension(mut self, method: &str, params: serde_json::Value) -> Self {
+        self.steps.push(Step::Extension {
+            method: method.to_owned(),
+            params,
+        });
+        self
+    }
+
     /// Wait for `session/cancel`, then end the turn `cancelled`
     #[must_use]
     pub fn until_cancelled(mut self) -> Self {
@@ -211,6 +234,7 @@ struct Script {
     known: Vec<String>,
     history: Vec<String>,
     offers: Vec<Offer>,
+    extensions: Vec<Extension>,
 }
 
 #[derive(Debug, Default)]
@@ -290,6 +314,14 @@ impl FakeAgent {
         self
     }
 
+    /// Name an extension notification this agent sends that the session should
+    /// read, as a harness names its own
+    #[must_use]
+    pub fn reads(mut self, extension: Extension) -> Self {
+        self.script.extensions.push(extension);
+        self
+    }
+
     /// Play `turn` for the next prompt nothing else has claimed
     #[must_use]
     pub fn turn(self, turn: Turn) -> Self {
@@ -301,7 +333,14 @@ impl FakeAgent {
     /// but no tree and no process
     #[must_use]
     pub fn session(&self, project: PathBuf, resume: Option<SessionId>, choice: Choice) -> Session {
-        Session::with_launcher(Box::new(self.clone()), project, resume, choice, None)
+        Session::with_launcher(
+            Box::new(self.clone()),
+            project,
+            resume,
+            choice,
+            None,
+            self.script.extensions.clone(),
+        )
     }
 
     /// Every request the agent got, oldest first
@@ -555,6 +594,10 @@ impl FakeAgent {
                         id,
                         ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
                     )))?;
+                }
+                Step::Extension { method, params } => {
+                    let message = UntypedMessage::new(&method, &params)?;
+                    cx.send_notification(message)?
                 }
                 Step::UntilCancelled => {
                     if let Some(cancelled) = cancelled.take() {
