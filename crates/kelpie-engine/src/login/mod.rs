@@ -124,14 +124,18 @@ impl Store {
     ///
     /// [`LoginError::Keychain`] when the keychain cannot be read.
     pub(crate) fn get(&self, harness: &str) -> Result<Option<String>, LoginError> {
-        match &self.backend {
+        let stored = match &self.backend {
             Backend::Keychain => match entry(harness)?.get_password() {
-                Ok(value) => Ok(Some(value)),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(error) => Err(error.into()),
+                Ok(value) => Some(value),
+                Err(keyring::Error::NoEntry) => None,
+                Err(error) => return Err(error.into()),
             },
-            Backend::Memory(logins) => Ok(lock(logins).get(harness).cloned()),
-        }
+            Backend::Memory(logins) => lock(logins).get(harness).cloned(),
+        };
+        // An entry written outside `set` is held to the same rule: no blank login
+        Ok(stored
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()))
     }
 }
 

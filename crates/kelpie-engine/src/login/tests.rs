@@ -1,4 +1,4 @@
-use super::{LoginError, Store};
+use super::{Backend, LoginError, Store};
 
 #[test]
 fn a_login_is_set_read_and_cleared() {
@@ -55,6 +55,31 @@ fn a_blank_login_is_refused_and_leaves_the_old_one() {
 
     assert_eq!(error, LoginError::Blank);
     assert_eq!(store.get("claude").unwrap().as_deref(), Some("token"));
+}
+
+/// Writes `value` under `harness` the way another program could: past `Store::set`
+fn written_outside(store: &Store, harness: &str, value: &str) {
+    let Backend::Memory(logins) = &store.backend else {
+        unreachable!("a memory store");
+    };
+    logins
+        .lock()
+        .unwrap()
+        .insert(harness.to_owned(), value.to_owned());
+}
+
+#[test]
+fn a_login_written_outside_kelpie_is_read_as_set_would_keep_it() {
+    let store = Store::memory();
+
+    written_outside(&store, "claude", "token\n");
+    assert_eq!(store.get("claude").unwrap().as_deref(), Some("token"));
+
+    for blank in ["", " \n"] {
+        written_outside(&store, "claude", blank);
+        assert_eq!(store.get("claude").unwrap(), None, "{blank:?}");
+        assert!(!store.status("claude").unwrap(), "{blank:?}");
+    }
 }
 
 #[test]
