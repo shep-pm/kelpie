@@ -160,14 +160,14 @@ pub enum SessionError {
         /// The error the harness answered with
         message: String,
     },
-    /// `name` is not one file name, so no answer can be kept for that harness
+    /// The harness id is not one file name, so no answer can be kept under it
     Name {
         /// The harness id kelpie was asked about
         name: String,
     },
-    /// The answer kept in the data folder could not be read or written
+    /// The answer could not be written to the data folder
     Cache {
-        /// The file kelpie could not read or write
+        /// The file kelpie could not write
         path: PathBuf,
         /// What the OS said
         source: io::Error,
