@@ -33,7 +33,7 @@ kelpie is a desktop app where people and coding agents plan, run and follow work
 | Sandbox | What confines an agent's reads, writes and network | jail |
 | Harness | The agent program a session runs on (Claude Code, Codex, pi, goose) | provider |
 
-**Real copy to match:** "Read 4 files" · "Searched for `ProcessTree`" · "PM wants to reach docs.rs: Allow once · Allow for this project · Deny" · "Switched from Claude Code (Opus 5.5) to pi (qwen)" · "Couldn't resume, started a new session" · "Interrupted when kelpie quit" · "3 need you".
+**Real copy to match:** "Read 4 files" · "Searched for `ProcessTree`" · "PM wants to reach docs.rs: Allow once · Allow for this project · Deny" · "Switched from Claude Code (Opus 5.5) to goose (qwen)" · "Couldn't resume, started a new session" · "Interrupted when kelpie quit" · "3 need you".
 
 ## Colour
 
