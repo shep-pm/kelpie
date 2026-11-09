@@ -394,6 +394,129 @@ fn an_unlisted_model_fails_and_keeps_the_default() {
     assert!(agent.params("session/set_config_option").is_empty());
 }
 
+/// One value the fake agent lists, which names it the same way it values it
+fn listed(value: &str) -> kelpie_protocol::Choice {
+    kelpie_protocol::Choice {
+        id: value.to_owned(),
+        name: value.to_owned(),
+        description: None,
+    }
+}
+
+/// A folder of this test's own, for what kelpie keeps of a harness's answers
+fn data_folder() -> PathBuf {
+    use crate::run::RunId;
+
+    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn asking_options_sends_no_prompt_and_stops_the_harness() {
+    let mut agent = FakeAgent::new()
+        .can_close()
+        .offers_models("small", &["small", "large"])
+        .offers_efforts("low", &["low", "high"]);
+    let data = data_folder();
+    let meta = json!({ "claudeCode": { "emitRawSDKMessages": true } });
+
+    let options = options::offerings_at(
+        &mut agent,
+        "fake",
+        &data,
+        &PathBuf::from("/project"),
+        Some(&meta),
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(options.models, [listed("small"), listed("large")]);
+    assert_eq!(options.efforts, [listed("low"), listed("high")]);
+    assert_eq!(
+        agent.methods(),
+        ["initialize", "session/new", "session/close"],
+        "the harness was asked, never prompted"
+    );
+    assert_eq!(
+        agent.params("session/new")[0]["_meta"],
+        meta,
+        "the harness was asked the way a session would ask it"
+    );
+    assert_eq!(agent.launches(), 1);
+    assert_eq!(
+        agent.stopped(),
+        1,
+        "the harness was stopped, not left running"
+    );
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn options_are_read_from_the_cache_until_a_refresh() {
+    let mut agent = FakeAgent::new().offers_models("small", &["small", "large"]);
+    let data = data_folder();
+    let project = PathBuf::from("/project");
+
+    let asked = options::offerings_at(&mut agent, "fake", &data, &project, None, false).unwrap();
+    assert_eq!(agent.launches(), 1);
+
+    let kept = options::offerings_at(&mut agent, "fake", &data, &project, None, false).unwrap();
+    assert_eq!(kept, asked);
+    assert_eq!(
+        agent.launches(),
+        1,
+        "the kept answer is read, not asked again"
+    );
+
+    let fresh = options::offerings_at(&mut agent, "fake", &data, &project, None, true).unwrap();
+    assert_eq!(fresh, asked);
+    assert_eq!(agent.launches(), 2, "a refresh asks the harness again");
+
+    let kept = std::fs::read_to_string(data.join("options").join("fake.json")).unwrap();
+    let kept: serde_json::Value = serde_json::from_str(&kept).unwrap();
+    assert!(
+        kept["asked_at"].as_u64().is_some_and(|at| at > 0),
+        "the answer says when it was asked: {kept}"
+    );
+    assert_eq!(kept["models"][1]["id"], "large");
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn a_harness_with_no_model_option_lists_none() {
+    let mut agent = FakeAgent::new();
+
+    let options = options::asked(&mut agent, &PathBuf::from("/project"), None).unwrap();
+
+    assert_eq!(options, kelpie_protocol::Options::default());
+    assert!(options.models.is_empty());
+    assert!(options.efforts.is_empty());
+}
+
+#[test]
+fn a_harness_id_that_names_no_file_starts_nothing() {
+    let mut agent = FakeAgent::new();
+    let data = data_folder();
+
+    let error = options::offerings_at(
+        &mut agent,
+        "../escape",
+        &data,
+        &PathBuf::from("/project"),
+        None,
+        true,
+    )
+    .expect_err("no answer can be kept under a path");
+
+    assert!(
+        matches!(&error, SessionError::Name { name } if name == "../escape"),
+        "{error}"
+    );
+    assert_eq!(agent.launches(), 0, "a bad name started no harness");
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 #[test]
 fn cancel_ends_the_turn_cancelled() {
     let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
@@ -702,6 +825,7 @@ impl Launch for DeadOnWrite {
                 agent_client_protocol::ByteStreams::new(Broken, Broken),
             ),
             explain: Box::new(|| Some(EXPLANATION.to_owned())),
+            stop: Box::new(|_| Some(EXPLANATION.to_owned())),
         })
     }
 }

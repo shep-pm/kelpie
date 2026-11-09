@@ -6,6 +6,7 @@
 //! them over one at a time and before the turn's response.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -60,6 +61,7 @@ pub(super) async fn run(
         Ok(Link {
             transport,
             mut explain,
+            ..
         }) => {
             let result = connect(
                 &shared,
@@ -109,7 +111,7 @@ fn failed(message: String) -> SessionEvent {
     SessionEvent::Failed { message }
 }
 
-fn describe(error: &Error) -> String {
+pub(super) fn describe(error: &Error) -> String {
     if is_connection_terminated(error) || is_incoming_transport_closed(error) {
         "the harness ended the connection".to_owned()
     } else {
@@ -421,7 +423,7 @@ async fn serve(
     }
 }
 
-fn is_gone(error: &Error) -> bool {
+pub(super) fn is_gone(error: &Error) -> bool {
     is_connection_terminated(error) || is_incoming_transport_closed(error)
 }
 
@@ -502,9 +504,23 @@ async fn open(
             ))),
         }
     }
-    let mut request =
-        NewSessionRequest::new(setup.project.clone()).system_prompt(system_prompt(init, setup));
-    match &setup.meta {
+    let request = new_session(setup.project.clone(), setup.meta.as_ref())?
+        .system_prompt(system_prompt(init, setup));
+    let response = cx.send_request(request).block_task().await?;
+    Ok((
+        response.session_id,
+        response.config_options.unwrap_or_default(),
+        true,
+    ))
+}
+
+/// `session/new` for `project`, with the harness's `_meta` on it
+pub(super) fn new_session(
+    project: PathBuf,
+    meta: Option<&serde_json::Value>,
+) -> Result<NewSessionRequest, Error> {
+    let mut request = NewSessionRequest::new(project);
+    match meta {
         None => {}
         Some(serde_json::Value::Object(meta)) => request = request.meta(meta.clone()),
         Some(_) => {
@@ -513,12 +529,7 @@ async fn open(
             );
         }
     }
-    let response = cx.send_request(request).block_task().await?;
-    Ok((
-        response.session_id,
-        response.config_options.unwrap_or_default(),
-        true,
-    ))
+    Ok(request)
 }
 
 /// Set the model and effort the person chose, where the harness lists them
