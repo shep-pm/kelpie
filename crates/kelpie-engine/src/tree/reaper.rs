@@ -18,6 +18,11 @@ use shep_tree::Tree;
 
 use crate::run::{ENV, RunId};
 
+// Link only: `ProcessTree` is in the parent module, and rustdoc needs it in
+// scope to resolve the `stop_all` links above and below
+#[cfg(doc)]
+use super::ProcessTree;
+
 /// The reaper process, and the pipe whose close tells it to sweep
 ///
 /// Dropping it closes the pipe and leaves the reaper running to finish its
