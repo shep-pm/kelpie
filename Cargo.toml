@@ -21,6 +21,18 @@ self_named_module_files = "deny"
 # The system's random bytes, on Unix and Windows alike
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
 
+# The run file's JSON, written and read by the engine
+serde = { version = "1.0", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# Own process group per child, stop ladder and the sweep (ADR 0001). `sysinfo`
+# is the process table the sweep reads.
+shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo"] }
+# The process table the engine reads each process's environment from; the
+# version shep-tree uses, so the build holds one copy.
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+# Linux: the child-subreaper flag
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
+
 # Tauri 2 with the Wry webview (ADR 0002). `x11` and `dbus` are the Linux window
 # and menu plumbing; default-features drops `dynamic-acl` and `common-controls-v6`,
 # which kelpie has no capability or menu to use yet.

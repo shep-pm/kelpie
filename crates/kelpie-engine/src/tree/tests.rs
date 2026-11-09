@@ -1,0 +1,237 @@
+use std::fs;
+use std::io::{BufRead as _, BufReader};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use super::*;
+
+/// How long a test waits for something it forced to happen
+const WAIT: Duration = Duration::from_secs(10);
+
+const GRACE: Duration = Duration::from_secs(5);
+
+/// A folder of its own for one test's run file
+struct Dir(PathBuf);
+
+impl Dir {
+    fn new() -> Self {
+        let dir = std::env::temp_dir().join(format!("kelpie-tree-{}", RunId::new().unwrap()));
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn run_file(&self) -> PathBuf {
+        self.0.join("run.json")
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn sh(script: &str) -> Command {
+    let mut command = Command::new("sh");
+    command.args(["-c", script]).stdout(Stdio::piped());
+    command
+}
+
+/// Read the `pid <n>` lines a script prints up to the line `ready`, and keep
+/// the reader
+fn ready(stdout: ChildStdout) -> (BufReader<ChildStdout>, Vec<u32>) {
+    let mut reader = BufReader::new(stdout);
+    let mut pids = Vec::new();
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line).unwrap();
+        assert_ne!(read, 0, "the script ended before it was ready");
+        match line.trim().strip_prefix("pid ") {
+            Some(pid) => pids.push(pid.parse().unwrap()),
+            None if line.trim() == "ready" => return (reader, pids),
+            None => {}
+        }
+    }
+}
+
+/// Not a test: a process the tests start, because it has an environment the
+/// sweep may read where a system binary's is hidden
+#[test]
+#[ignore = "a helper process that other tests start"]
+fn sleep_a_minute() {
+    println!("pid {}", std::process::id());
+    println!("ready");
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// Wait until none of `pids` is running
+///
+/// Pipes would do, but on macOS a child another test starts at the same moment
+/// can inherit a pipe's write end and hold it open.
+fn assert_gone(pids: &[u32]) {
+    let deadline = Instant::now() + WAIT;
+    while let Some(pid) = pids
+        .iter()
+        .find(|pid| sweep::read(**pid).is_some_and(|reading| !reading.zombie))
+    {
+        assert!(Instant::now() < deadline, "pid {pid} still runs");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Kills a process that is not under a tree, even when a test fails
+struct Stranger(std::process::Child);
+
+impl Drop for Stranger {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn a_child_carries_the_run_in_its_environment() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::new(run, dir.run_file()).unwrap();
+
+    // A value the command already had is replaced
+    let mut child = tree
+        .spawn(sh("echo $KELPIE_RUN").env(ENV, "not-this-run"))
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+
+    assert_eq!(line.trim(), run.to_string());
+    child.wait().unwrap();
+}
+
+#[test]
+fn stop_all_ends_a_child_and_its_grandchild() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut child = tree
+        .spawn(&mut sh(r#"sleep 60 & echo "pid $!"; echo ready; sleep 60"#))
+        .unwrap();
+    let (_stdout, mut pids) = ready(child.stdout.take().unwrap());
+    pids.push(child.id());
+
+    tree.stop_all(GRACE).unwrap();
+
+    assert_gone(&pids);
+    assert!(!child.wait().unwrap().success());
+}
+
+#[test]
+fn a_grandchild_that_leaves_the_group_is_still_swept_by_its_mark() {
+    // `perl`, since `setsid(1)` is absent on macOS
+    let script = r#"perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$0" --ignored --exact --nocapture tree::tests::sleep_a_minute & sleep 60"#;
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut command = sh(script);
+    command.arg(std::env::current_exe().unwrap());
+    let mut child = tree.spawn(&mut command).unwrap();
+    let (_stdout, mut pids) = ready(child.stdout.take().unwrap());
+    pids.push(child.id());
+
+    tree.stop_all(GRACE).unwrap();
+
+    assert_gone(&pids);
+}
+
+#[test]
+fn leftovers_of_a_dead_run_are_stopped_at_launch() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut child = tree
+        .spawn(&mut sh(r#"sleep 60 & echo "pid $!"; echo ready; sleep 60"#))
+        .unwrap();
+    let (_stdout, mut pids) = ready(child.stdout.take().unwrap());
+    pids.push(child.id());
+    // The app dies without a word: nothing stops the tree or reaps its children
+    std::mem::forget(child);
+    std::mem::forget(tree);
+
+    sweep_leftovers(&dir.run_file()).unwrap();
+
+    assert_gone(&pids);
+}
+
+/// A process with no mark, alone in its group, and a run file that names it
+/// with `started` moved by `skew`
+fn recorded_stranger(dir: &Dir, skew: u64) -> Stranger {
+    use std::os::unix::process::CommandExt as _;
+
+    let child = Command::new("sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let started = sweep::read(child.id()).unwrap().started;
+    RunFile {
+        run: RunId::new().unwrap().to_string(),
+        groups: vec![Group {
+            pid: child.id(),
+            started: started + skew,
+        }],
+    }
+    .write(&dir.run_file())
+    .unwrap();
+    Stranger(child)
+}
+
+#[test]
+fn a_recorded_group_is_stopped_by_its_leader_alone() {
+    let dir = Dir::new();
+    let mut leader = recorded_stranger(&dir, 0);
+
+    sweep_leftovers(&dir.run_file()).unwrap();
+
+    assert!(
+        leader.0.wait().unwrap().code().is_none(),
+        "ended by a signal"
+    );
+}
+
+#[test]
+fn a_recorded_pid_with_another_start_time_is_left_alone() {
+    let dir = Dir::new();
+    let mut stranger = recorded_stranger(&dir, 1000);
+
+    sweep_leftovers(&dir.run_file()).unwrap();
+
+    assert_eq!(stranger.0.try_wait().unwrap(), None);
+}
+
+#[test]
+fn the_run_file_lists_live_groups_only() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::new(run, dir.run_file()).unwrap();
+    let listed = || {
+        let file = RunFile::read(&dir.run_file()).unwrap();
+        assert_eq!(file.run, run.to_string());
+        file.groups
+            .iter()
+            .map(|group| group.pid)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(listed(), Vec::<u32>::new());
+
+    // `cat` ends when its input does
+    let mut first = tree
+        .spawn(Command::new("cat").stdin(Stdio::piped()))
+        .unwrap();
+    let second = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+    assert_eq!(listed(), [first.id(), second.id()]);
+
+    drop(first.stdin.take());
+    first.wait().unwrap();
+    assert_eq!(listed(), [second.id()]);
+
+    tree.stop_all(GRACE).unwrap();
+    assert_eq!(listed(), Vec::<u32>::new());
+}
