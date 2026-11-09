@@ -28,6 +28,18 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 # `derive` is the `JsonSchema` derive; `std` is off because no schema type here
 # is a std one.
 schemars = { version = "1.2.3", default-features = false, features = ["derive"] }
+# The ACP client (ADR 0007). `unstable_end_turn_token_usage` is the per-turn
+# token counts on a prompt's response; `process` stays off, since every process
+# goes through the engine's tree (ADR 0001).
+agent-client-protocol = { version = "5.1", default-features = false, features = ["unstable_end_turn_token_usage"] }
+# The channels, executor and I/O traits the ACP client is built on. The engine
+# drives each connection on a thread of its own, so it needs `executor`.
+futures = { version = "0.3.32", default-features = false, features = ["std", "async-await", "executor"] }
+# A child's blocking pipes as the async streams ACP reads and writes, without a
+# runtime
+blocking = { version = "1.6", default-features = false }
+# The types the engine and the app share
+kelpie-protocol = { path = "crates/kelpie-protocol" }
 # Own process group per child, stop ladder and the sweep (ADR 0001). `sysinfo`
 # is the process table the sweep reads.
 shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo"] }
