@@ -25,7 +25,7 @@ kelpie is a desktop app where people and coding agents plan, run and follow work
 
 Neutral first. The window is warm stone greys and ink; colour is spent on status and nowhere else.
 
-- Ground: `background` for the graph canvas, `sidebar` for docked panels and the drawer, `rail` for the project rail and status bar. Text is `foreground`; secondary text `muted-foreground`.
+- Ground: `background` for the graph canvas, `sidebar` for docked panels and the drawer, `rail` for the project rail. Text is `foreground`; secondary text `muted-foreground`.
 - Cards and nodes on the canvas are `card`; anything floating (menus, tooltips, the selection toolbar) is `popover`.
 - The strong action is ink: `primary` on `primary-foreground`. There is no brand hue on buttons.
 - Hairlines are `border`. Anything that must be seen to be used (inputs, checkboxes, outline buttons, the Unsorted edge) is `border-strong`, which holds 3:1.
@@ -108,8 +108,8 @@ Quiet and short. 120ms ease-out for hover, fold and dim; 200ms ease-out for pane
 ```
 
 - The graph takes all remaining space. Panels (PM, Board, Git) dock right: resizable, stacked or side by side, collapsible to an icon strip, maximisable. They never float over the graph.
-- The drawer is shared by every panel. The status bar shows the base branch, process count, running workers, the needs-you count, and the PM's harness and model.
-- One needs-you count appears wherever it applies: the project in the rail, the panel it lives in, the area on the graph, the status bar.
+- The drawer is shared by every panel.
+- One needs-you count appears wherever it applies: the project in the rail, the panel it lives in, the area on the graph.
 - Each project reopens with the layout it was left in.
 
 ## Iconography

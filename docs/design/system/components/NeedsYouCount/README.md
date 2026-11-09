@@ -7,7 +7,6 @@ The count of what is blocked on the maintainer, such as an open sandbox request.
 **Where it appears** (one count, scoped to where it sits)
 - The project rail: the project's total, on the project tile's top-right corner.
 - A panel's tab or icon strip button: what is waiting inside that panel.
-- The status bar: the window's total, with the needs-you glyph and the words "need you".
 - The graph: an area that holds a waiting item gets a `status-needs` pip (see `GraphArea`), not a number.
 
 **Rules**
