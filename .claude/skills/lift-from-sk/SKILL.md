@@ -9,7 +9,7 @@ SK is shep-pm/shep-kelpie. Kelpie treats it as a treasure chest: lift what the c
 
 ## Steps
 
-1. **Pin the source.** Read SK at `origin/main` and note the commit. Every later step refers to that commit.
+1. **Pin the source.** Clone SK at the commit the issue pins into `$TMPDIR`: `git clone --filter=blob:none https://github.com/shep-pm/shep-kelpie "$TMPDIR/sk" && git -C "$TMPDIR/sk" checkout <commit>`. A worker's sandbox reads no checkout outside its own and reaches github.com, and SK is public. With no commit pinned, use `origin/main` and note its commit. Every later step refers to that commit.
 2. **Read the why.** Read the ADRs in SK's `docs/adr/` and the files in `docs/facts/` that touch the chunk. Done when you can name each edge case the chunk handles and the incident or ADR behind it.
 3. **Map the edges.** List every import the chunk makes from outside itself: `shep_client`, `shep_channel`, `shep_handover`, SK's `core` ports, settings, the runner. Each one is either replaced by a kelpie equivalent, narrowed to a small trait kelpie implements, or left behind together with the code that needed it.
 4. **Lift the tests first.** Copy every test that covers the lifted code and run it before changing anything around it. Tests stay in kelpie's own test names and style once they pass.
