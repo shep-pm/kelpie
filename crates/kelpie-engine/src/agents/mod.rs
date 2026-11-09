@@ -37,7 +37,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -178,12 +178,13 @@ impl Agents {
     ///
     /// A folder that is not there holds no files, and nothing is created. A
     /// `.md` file whose name starts with `_` is ignored, one whose name is not
-    /// lowercase letters, digits and `-` is skipped, and one that cannot be used
-    /// is left out with its error in [`Agents::problems`].
+    /// lowercase letters, digits and `-` is skipped, and one that cannot be read
+    /// or used, such as a file that is not UTF-8, is left out with its error in
+    /// [`Agents::problems`].
     ///
     /// # Errors
     ///
-    /// [`AgentsError::Read`] naming the folder or the first file that cannot be read.
+    /// [`AgentsError::Read`] naming the folder, or an entry in it the listing cannot read.
     pub fn load(dir: &ConfigDir) -> Result<Self, AgentsError> {
         let folder = dir.path().join(FOLDER);
         let mut agents = Self {
@@ -211,14 +212,27 @@ impl Agents {
         agents.ignored.sort();
         // Every file is read first, since one may extend another that sorts after it.
         let mut texts = BTreeMap::new();
+        let mut unreadable = BTreeSet::new();
         for path in files {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             if !is_name(stem) {
                 agents.skipped.push(path);
                 continue;
             }
-            let text = fs::read_to_string(&path).map_err(|e| failed(path.clone(), &e))?;
-            texts.insert(stem.to_owned(), (path, text));
+            // A file that cannot be read is one that cannot be used: it is left
+            // out, so a draft saved in another encoding stops nothing else.
+            match fs::read_to_string(&path) {
+                Ok(text) => {
+                    texts.insert(stem.to_owned(), (path, text));
+                }
+                Err(e) => {
+                    let message = format!("cannot be read: {e}");
+                    unreadable.insert(stem.to_owned());
+                    agents
+                        .broken
+                        .insert(stem.to_owned(), AgentsError::File { path, message });
+                }
+            }
         }
         let parent = |name: &str| match name.strip_prefix(extends::SHIPPED) {
             Some(shipped) => built_in_text(shipped).ok_or_else(|| {
@@ -228,6 +242,9 @@ impl Agents {
                     names.join(", ")
                 )
             }),
+            None if unreadable.contains(name) => Err(format!(
+                "`extends: {name}` names a file that cannot be read"
+            )),
             None => texts
                 .get(name)
                 .map(|(_, text)| extends::ParentText::File(text))
@@ -464,7 +481,7 @@ fn yaml_error(yaml: &str, error: &serde_saphyr::Error) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AgentsError {
-    /// The folder, or a file in it, could not be read
+    /// The folder, or an entry in it, could not be listed
     Read {
         /// The folder or file
         path: PathBuf,
