@@ -12,7 +12,10 @@ export default defineConfig({
     port: 1520,
     strictPort: true,
   },
-  envPrefix: ["VITE_", "TAURI_ENV_*"],
+  // Vite matches each prefix with `key.startsWith(prefix)`, so a trailing `*`
+  // matches no variable name at all. `TAURI_ENV_` is what lets slice 3 read
+  // `import.meta.env.TAURI_ENV_PLATFORM`.
+  envPrefix: ["VITE_", "TAURI_ENV_"],
   build: {
     // The Tauri window will load this in slice 3 (`build.frontendDist`).
     target: "es2022",
