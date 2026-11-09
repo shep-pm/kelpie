@@ -101,6 +101,27 @@ describe("the chat store", () => {
     });
   });
 
+  it("a turn that goes on after a failed event is running again", async () => {
+    await useChat.getState().send("go");
+    emit({ kind: "failed", message: "kept the default model" });
+    emit({ kind: "text", delta: "still here" });
+
+    expect(useChat.getState().turns[0]).toMatchObject({
+      state: "running",
+      reply: "still here",
+      error: "kept the default model",
+    });
+
+    await useChat.getState().send("second");
+    expect(pmSend).toHaveBeenCalledTimes(1);
+
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+    expect(useChat.getState().turns[0]).toMatchObject({
+      state: "done",
+      error: "kept the default model",
+    });
+  });
+
   it("send is refused while a turn runs", async () => {
     await useChat.getState().send("first");
     await useChat.getState().send("second");

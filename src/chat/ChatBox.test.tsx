@@ -167,6 +167,44 @@ describe("the chat box", () => {
     expect(footer.textContent).toBe("1.2k in · 340 out");
   });
 
+  it("the footer rolls a count just under a million up to M", async () => {
+    await sendMessage("hello");
+    emit({
+      kind: "turn_ended",
+      stop_reason: "end_turn",
+      usage: { ...baseUsage, input: 999_960 },
+    });
+
+    const footer = await screen.findByLabelText("Usage");
+    expect(footer.textContent).toBe("1.0M in · 340 out");
+  });
+
+  it("a long reply folds behind the rest, and a code block that crosses the fold stays one block", async () => {
+    await sendMessage("explain");
+    const code = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+    emit({
+      kind: "text",
+      delta: `Intro\n\n\`\`\`\n${code}\n\`\`\`\n\nAfter the code`,
+    });
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+
+    const trigger = await screen.findByRole("button", {
+      name: /^Show the rest · \d+ lines$/,
+    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    const after = screen.getByText("After the code");
+    expect(after.closest('[data-streamdown="code-block"]')).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(
+      screen
+        .getByText("After the code")
+        .closest('[data-streamdown="code-block"]'),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
+  });
+
   it("shows a failed turn's message under the turn", async () => {
     await sendMessage("hello");
     emit({ kind: "failed", message: "claude is not installed" });

@@ -1,16 +1,13 @@
 import { useState } from "react";
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 import { type Turn as TurnData, useChat } from "./store";
 import { ToolSteps } from "./ToolSteps";
 import { UsageFooter } from "./UsageFooter";
 
-/** A reply longer than this many lines folds behind "Show the rest". */
+/** A reply longer than this many lines (22px each, a screenful) folds behind "Show the rest". */
 export const SCREENFUL = 24;
 
 /** The turn with `id`, read one field at a time so a delta re-renders only its reader. */
@@ -38,37 +35,35 @@ function Reply({ id }: { id: number }) {
   const [open, setOpen] = useState(false);
 
   if (reply === "") return null;
-  const lines = reply.split("\n");
-  const hidden = lines.length - SCREENFUL;
-  const prose = "text-base [&_p]:my-0 [&>*+*]:mt-2";
-
-  if (hidden <= 0) {
-    return (
-      <Streamdown className={prose} isAnimating={running}>
-        {reply}
-      </Streamdown>
-    );
-  }
+  // The reply stays one Markdown document, so a code block or a list that
+  // crosses the fold is not cut in two. The fold clamps its height instead.
+  const hidden = reply.split("\n").length - SCREENFUL;
+  const folded = hidden > 0 && !open;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <Streamdown className={prose} isAnimating={running && !open}>
-        {lines.slice(0, SCREENFUL).join("\n")}
-      </Streamdown>
-      <CollapsibleContent>
-        <Streamdown className={prose} isAnimating={running}>
-          {lines.slice(SCREENFUL).join("\n")}
-        </Streamdown>
-      </CollapsibleContent>
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-1 text-muted-foreground"
+      <div
+        data-state={folded ? "closed" : "open"}
+        className={cn(folded && "max-h-[528px] overflow-hidden")}
+      >
+        <Streamdown
+          className="text-base [&_p]:my-0 [&>*+*]:mt-2"
+          isAnimating={running}
         >
-          {open ? "Show less" : `Show the rest · ${hidden} lines`}
-        </Button>
-      </CollapsibleTrigger>
+          {reply}
+        </Streamdown>
+      </div>
+      {hidden > 0 && (
+        <CollapsibleTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-1 text-muted-foreground"
+          >
+            {open ? "Show less" : `Show the rest · ${hidden} lines`}
+          </Button>
+        </CollapsibleTrigger>
+      )}
     </Collapsible>
   );
 }

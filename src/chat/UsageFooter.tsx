@@ -7,8 +7,11 @@ const LIFETIME: Record<CacheLifetime, string> = {
 
 /** 1234 -> "1.2k", 2_500_000 -> "2.5M", to one decimal, as the footer's rules say. */
 function abbreviate(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  const k = (n / 1_000).toFixed(1);
+  // 999_960 rounds to "1000.0k", which is "1.0M"
+  if (n >= 1_000_000 || Number(k) >= 1_000)
+    return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${k}k`;
   return String(n);
 }
 
