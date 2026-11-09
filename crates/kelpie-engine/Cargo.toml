@@ -30,5 +30,12 @@ schemars.workspace = true
 shep-tree.workspace = true
 sysinfo.workspace = true
 
+# The bridge installer: download, sha256 and the two archive formats (ADR 0007)
+ureq.workspace = true
+sha2.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true

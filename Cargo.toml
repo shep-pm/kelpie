@@ -53,6 +53,19 @@ sysinfo = { version = "0.38.4", default-features = false, features = ["system"] 
 # Linux: the child-subreaper flag
 rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
+# The bridge installer's download (ADR 0007): a blocking client over rustls, so
+# no downloader process enters the tree (ADR 0001). `rustls` alone drops gzip,
+# cookies, json and brotli, which kelpie does not use here.
+ureq = { version = "3.1.2", default-features = false, features = ["rustls"] }
+# The sha256 the registry publishes for each bridge archive, checked before unpacking
+sha2 = { version = "0.10.9", default-features = false }
+# The registry ships bridges as `.tar.gz` on Linux and `.zip` on macOS (ADR 0007).
+# `rust_backend` keeps the C zlib out of the build.
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4.45", default-features = false }
+# `deflate` only: the registry's archives are stored or deflated
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+
 # Tauri 2 with the Wry webview (ADR 0002). `x11` and `dbus` are the Linux window
 # and menu plumbing; default-features drops `dynamic-acl` and `common-controls-v6`,
 # which kelpie has no capability or menu to use yet.
