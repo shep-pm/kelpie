@@ -50,6 +50,7 @@ use crate::tree::{Child, ProcessTree};
 mod acp;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
+mod raw;
 mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
@@ -70,6 +71,8 @@ pub struct Harness {
     pub env: Vec<(OsString, OsString)>,
     /// Sent as `_meta` on `session/new`, a JSON object
     pub new_session_meta: Option<serde_json::Value>,
+    /// The extension notifications this harness sends that kelpie reads
+    pub extensions: Vec<Extension>,
 }
 
 impl Harness {
@@ -81,6 +84,32 @@ impl Harness {
             args: Vec::new(),
             env: Vec::new(),
             new_session_meta: None,
+            extensions: Vec::new(),
+        }
+    }
+}
+
+/// A notification a harness sends beyond the ACP standard ones, which kelpie reads
+///
+/// ACP's own messages do not carry everything a harness knows. Each variant is
+/// one extension notification, named by its JSON-RPC method, and what kelpie
+/// takes from it (ADR 0007). A harness names the ones it sends, so kelpie reads
+/// no notification it was not told about.
+// kelpie-engine is a library: each harness slice adds its own
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Extension {
+    /// `_claude/sdkMessage`: Claude Code's raw SDK messages, which carry the
+    /// split between the one-hour and the five-minute prompt cache
+    ClaudeSdkMessage,
+}
+
+impl Extension {
+    /// The JSON-RPC method it names
+    #[must_use]
+    pub fn method(&self) -> &'static str {
+        match self {
+            Self::ClaudeSdkMessage => "_claude/sdkMessage",
         }
     }
 }
@@ -97,6 +126,7 @@ impl fmt::Debug for Harness {
                 &self.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
             )
             .field("new_session_meta", &self.new_session_meta.is_some())
+            .field("extensions", &self.extensions)
             .finish()
     }
 }
@@ -144,6 +174,7 @@ struct Setup {
     resume: Option<SessionId>,
     choice: Choice,
     meta: Option<serde_json::Value>,
+    extensions: Vec<Extension>,
     instructions: Option<String>,
 }
 
@@ -156,6 +187,7 @@ pub struct Session {
     project: PathBuf,
     choice: Choice,
     meta: Option<serde_json::Value>,
+    extensions: Vec<Extension>,
     instructions: Option<String>,
     id: Arc<Mutex<Option<SessionId>>>,
     /// The running worker's inbox, `None` before the first send
@@ -185,12 +217,20 @@ impl Session {
         choice: Choice,
     ) -> Self {
         let meta = harness.new_session_meta.clone();
+        let extensions = harness.extensions.clone();
         let launcher = ProcessLauncher {
             tree,
             harness,
             project: project.clone(),
         };
-        Self::with_launcher(Box::new(launcher), project, resume, choice, meta)
+        Self::with_launcher(
+            Box::new(launcher),
+            project,
+            resume,
+            choice,
+            meta,
+            extensions,
+        )
     }
 
     pub(crate) fn with_launcher(
@@ -199,12 +239,14 @@ impl Session {
         resume: Option<SessionId>,
         choice: Choice,
         meta: Option<serde_json::Value>,
+        extensions: Vec<Extension>,
     ) -> Self {
         Self {
             launcher: Arc::new(Mutex::new(launcher)),
             project,
             choice,
             meta,
+            extensions,
             instructions: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
@@ -258,6 +300,7 @@ impl Session {
             resume: lock(&self.id).clone(),
             choice: self.choice.clone(),
             meta: self.meta.clone(),
+            extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
         };
         let launcher = Arc::clone(&self.launcher);

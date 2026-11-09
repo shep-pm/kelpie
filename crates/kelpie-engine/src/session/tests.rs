@@ -3,7 +3,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use kelpie_protocol::{StopReason, ToolStatus, Usage};
+use kelpie_protocol::{CacheLifetime, StopReason, ToolStatus, Usage};
 use serde_json::json;
 
 use super::fake::{EXPLANATION, FakeAgent, Turn};
@@ -177,6 +177,111 @@ fn the_turn_ends_with_its_usage() {
             }),
         })
     );
+}
+
+/// The `_claude/sdkMessage` params a real Claude Code turn sent, with its
+/// one-hour cache (`docs/acp.md`, Checked by hand)
+fn sdk_result() -> serde_json::Value {
+    json!({
+        "sessionId": "fake-1",
+        "message": {
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "duration_ms": 4123,
+            "num_turns": 1,
+            "result": "Hello",
+            "session_id": "fake-1",
+            "total_cost_usd": 0.031,
+            "usage": {
+                "input_tokens": 6,
+                "cache_creation_input_tokens": 28157,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 12,
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 28157,
+                    "ephemeral_5m_input_tokens": 0
+                }
+            }
+        }
+    })
+}
+
+/// A turn's end, with the cache lifetime its usage names
+fn ended_with(lifetime: Option<CacheLifetime>) -> SessionEvent {
+    SessionEvent::TurnEnded {
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            input: 10,
+            output: 20,
+            cache_read: 30,
+            cache_write: 40,
+            cache_lifetime: lifetime,
+        }),
+    }
+}
+
+/// A turn that reports usage and sends `params` as one raw Claude Code message
+fn raw_turn(params: serde_json::Value) -> Turn {
+    Turn::new()
+        .text("Hi")
+        .extension(Extension::ClaudeSdkMessage.method(), params)
+        .usage(10, 20, 30, 40)
+}
+
+#[test]
+fn the_raw_result_gives_the_cache_lifetime() {
+    let agent = FakeAgent::new()
+        .reads(Extension::ClaudeSdkMessage)
+        .turn(raw_turn(sdk_result()));
+
+    let heard = say(&session(&agent), "Hello");
+
+    assert_eq!(
+        heard.last(),
+        Some(&ended_with(Some(CacheLifetime::OneHour)))
+    );
+}
+
+#[test]
+fn the_shorter_cache_wins_when_it_holds_more_of_the_write() {
+    let mut result = sdk_result();
+    result["message"]["usage"]["cache_creation"]["ephemeral_1h_input_tokens"] = json!(4000);
+    result["message"]["usage"]["cache_creation"]["ephemeral_5m_input_tokens"] = json!(24157);
+    let agent = FakeAgent::new()
+        .reads(Extension::ClaudeSdkMessage)
+        .turn(raw_turn(result));
+
+    let heard = say(&session(&agent), "Hello");
+
+    assert_eq!(
+        heard.last(),
+        Some(&ended_with(Some(CacheLifetime::FiveMinutes)))
+    );
+}
+
+#[test]
+fn a_raw_message_that_is_not_the_result_names_no_lifetime() {
+    let init = json!({
+        "sessionId": "fake-1",
+        "message": { "type": "system", "subtype": "init", "output_style": "Explanatory" }
+    });
+    let agent = FakeAgent::new()
+        .reads(Extension::ClaudeSdkMessage)
+        .turn(raw_turn(init));
+
+    let heard = say(&session(&agent), "Hello");
+
+    assert_eq!(heard.last(), Some(&ended_with(None)));
+}
+
+#[test]
+fn an_extension_the_harness_does_not_name_is_not_read() {
+    let agent = FakeAgent::new().turn(raw_turn(sdk_result()));
+
+    let heard = say(&session(&agent), "Hello");
+
+    assert_eq!(heard.last(), Some(&ended_with(None)));
 }
 
 #[test]
@@ -380,7 +485,10 @@ fn a_harness_shows_the_names_of_its_environment_and_no_values() {
 
     assert_eq!(
         format!("{harness:?}"),
-        r#"Harness { program: "agent", args: [], env: ["TOKEN"], new_session_meta: true }"#
+        concat!(
+            r#"Harness { program: "agent", args: [], env: ["TOKEN"], "#,
+            r#"new_session_meta: true, extensions: [] }"#
+        )
     );
 }
 
@@ -509,6 +617,7 @@ fn a_send_while_the_worker_explains_a_dead_harness_starts_a_new_worker() {
         None,
         Choice::default(),
         None,
+        Vec::new(),
     );
     let (sink, first) = events();
     session.send("A", sink);
@@ -535,6 +644,7 @@ fn a_failure_that_is_not_the_harness_ending_does_not_blame_it() {
         None,
         Choice::default(),
         Some(json!("not an object")),
+        Vec::new(),
     );
 
     let (sink, heard) = events();
@@ -604,6 +714,7 @@ fn a_harness_gone_before_the_first_write_is_explained() {
         None,
         Choice::default(),
         None,
+        Vec::new(),
     );
 
     let (sink, heard) = events();
