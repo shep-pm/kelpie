@@ -5,9 +5,11 @@
 // No console window beside the app on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod sys;
+
 fn main() {
     if let Err(error) = kelpie_app::run() {
-        eprintln!("kelpie could not open its window: {error}");
+        sys::failure(&error.to_string());
         std::process::exit(1);
     }
 }

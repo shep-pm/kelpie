@@ -32,6 +32,11 @@ tauri = { version = "2.12.5", default-features = false, features = [
 ] }
 # The config, ACL and asset codegen behind `generate_context!`
 tauri-build = { version = "2.7.4", default-features = false, features = ["config-json"] }
+# The Win32 bindings `src-tauri/src/sys.rs` calls one message box through
+windows = { version = "0.62.2", default-features = false, features = [
+  "std",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 # Debug info dominates a debug build, and dependencies never need theirs.
 [profile.dev]
