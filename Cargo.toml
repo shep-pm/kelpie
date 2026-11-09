@@ -70,6 +70,11 @@ tar = { version = "0.4.45", default-features = false }
 # `deflate` only: the registry's archives are stored or deflated
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
+# The OS keychain a harness's login lives in (`docs/design/settings.md`). `v1` is
+# the crate's own pick of the native store per OS: Keychain Services on macOS,
+# Credential Manager on Windows, the Secret Service over pure-Rust zbus on Linux.
+keyring = { version = "4.2", default-features = false, features = ["v1"] }
+
 # Tauri 2 with the Wry webview (ADR 0002). `x11` and `dbus` are the Linux window
 # and menu plumbing; default-features drops `dynamic-acl` and `common-controls-v6`,
 # which kelpie has no capability or menu to use yet.

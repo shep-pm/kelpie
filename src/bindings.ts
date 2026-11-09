@@ -39,6 +39,30 @@ export const commands = {
 	 *  since a sync command runs on the main thread.
 	 */
 	pmCancel: () => __TAURI_INVOKE<void>("pm_cancel"),
+	/**
+	 *  Keep `value` as `harness`'s login, replacing any it had
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the keychain refused it, or that the value was blank.
+	 */
+	loginSet: (harness: string, value: string) => typedError<null, string>(__TAURI_INVOKE("login_set", { harness, value })),
+	/**
+	 *  Whether `harness` has a login
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the keychain could not be read.
+	 */
+	loginStatus: (harness: string) => typedError<boolean, string>(__TAURI_INVOKE("login_status", { harness })),
+	/**
+	 *  Forget `harness`'s login
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the keychain refused it.
+	 */
+	loginClear: (harness: string) => typedError<null, string>(__TAURI_INVOKE("login_clear", { harness })),
 };
 
 /* Types */

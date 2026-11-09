@@ -3,7 +3,7 @@
 //! Kelpie installs the bridge the registry publishes, `claude-acp`, and never
 //! Claude Code itself. The bridge drives the person's own `claude` through the
 //! Claude Agent SDK, so kelpie points it there with `CLAUDE_CODE_EXECUTABLE` and
-//! hands the session the person's own login (ADR 0006). The bridge's archive
+//! hands the session the person's own login from the keychain (ADR 0006). The bridge's archive
 //! carries a `claude` of its own, which [`crate::bridge::ensure`] leaves out.
 //!
 //! Each session gets `<state_dir>/claude/` as its config folder, so the person's
@@ -25,7 +25,9 @@ use serde_json::json;
 use crate::bridge::{Download, Pin, Platform};
 use crate::session::{Extension, Harness};
 
-use super::{HarnessError, Login};
+use crate::login::Store;
+
+use super::HarnessError;
 
 /// The registry id of the bridge kelpie installs
 const ID: &str = "claude-acp";
@@ -45,7 +47,10 @@ const NAME: &str = "Claude Code";
 /// The command kelpie looks for on `PATH`: the person's own Claude Code
 const CLAUDE: &str = "claude";
 
-/// The variable kelpie reads the login from, and sets for the bridge
+/// The id Claude Code's login is kept under in the [`Store`]
+pub const LOGIN: &str = "claude";
+
+/// The variable the bridge reads the login from
 pub const LOGIN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /// The variable that tells the bridge which `claude` to drive
@@ -122,15 +127,16 @@ pub fn pin() -> &'static Pin<'static> {
 /// `bridge` is the installed bridge command, from [`crate::bridge::ensure`] with [`pin`].
 /// `state_dir` is the folder the caller keeps for this session, such as
 /// `<data_dir>/projects/<id>/pm/`; Claude Code gets `<state_dir>/claude/`.
-/// `login` is the person's own Claude Code login.
+/// The person's own Claude Code login is read from `logins` under [`LOGIN`].
 ///
 /// # Errors
 ///
-/// [`HarnessError::NotInstalled`] when `PATH` holds no `claude`, and
-/// [`HarnessError::NoLogin`] when `login` holds no token.
-pub fn harness(bridge: PathBuf, state_dir: &Path, login: Login) -> Result<Harness, HarnessError> {
+/// [`HarnessError::NotInstalled`] when `PATH` holds no `claude`,
+/// [`HarnessError::NoLogin`] when `logins` holds no Claude Code login, and
+/// [`HarnessError::Login`] when `logins` cannot be read.
+pub fn harness(bridge: PathBuf, state_dir: &Path, logins: &Store) -> Result<Harness, HarnessError> {
     let path = env::var_os("PATH").unwrap_or_default();
-    harness_on_path(bridge, state_dir, &login, &path)
+    harness_on_path(bridge, state_dir, logins, &path)
 }
 
 /// [`harness`], searching `path` for the person's Claude Code instead of this
@@ -138,16 +144,15 @@ pub fn harness(bridge: PathBuf, state_dir: &Path, login: Login) -> Result<Harnes
 pub(super) fn harness_on_path(
     bridge: PathBuf,
     state_dir: &Path,
-    login: &Login,
+    logins: &Store,
     path: &OsStr,
 ) -> Result<Harness, HarnessError> {
     let claude = on_path(CLAUDE, path).ok_or_else(|| HarnessError::NotInstalled {
         harness: NAME.to_owned(),
         cmd: CLAUDE.to_owned(),
     })?;
-    let token = login.token().ok_or_else(|| HarnessError::NoLogin {
+    let token = logins.get(LOGIN)?.ok_or_else(|| HarnessError::NoLogin {
         harness: NAME.to_owned(),
-        env: LOGIN_ENV.to_owned(),
         setup: SETUP.to_owned(),
     })?;
     Ok(Harness {
@@ -156,7 +161,7 @@ pub(super) fn harness_on_path(
         env: vec![
             (EXECUTABLE_ENV.into(), claude.into()),
             (CONFIG_DIR_ENV.into(), state_dir.join(CONFIG_FOLDER).into()),
-            (LOGIN_ENV.into(), token.to_owned().into()),
+            (LOGIN_ENV.into(), token.into()),
         ],
         // The raw SDK messages are the only route to the cache lifetime (ADR 0007)
         new_session_meta: Some(json!({ "claudeCode": { "emitRawSDKMessages": true } })),

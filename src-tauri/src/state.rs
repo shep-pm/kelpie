@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::{Session, SessionId};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
@@ -151,6 +152,9 @@ pub struct Opening<'a> {
 
     /// The folder for the harness's state: `<data_dir>/projects/<id>/pm/`
     pub state_dir: &'a Path,
+
+    /// Where the person's harness logins are kept
+    pub logins: &'a Store,
 }
 
 /// Builds the PM's session for a project
@@ -163,6 +167,7 @@ pub type Opener = Box<dyn Fn(&Opening<'_>) -> Result<Session, String> + Send + S
 pub struct AppState {
     data_dir: PathBuf,
     tree: Arc<ProcessTree>,
+    logins: Store,
     projects: Arc<Mutex<Projects>>,
     /// The first project's PM, `None` until the first send. Held only for a
     /// look or a swap, never while the opener runs.
@@ -185,8 +190,8 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    /// Open the state in `data_dir`, with `opener` to build each PM session and
-    /// `picker` to ask for a folder
+    /// Open the state in `data_dir`, with `opener` to build each PM session from
+    /// `logins`, and `picker` to ask for a folder
     ///
     /// Sweeps what the previous run's file lists before the new tree starts
     /// anything, then writes a run file of its own. Starts no process and no
@@ -196,7 +201,12 @@ impl AppState {
     ///
     /// The data folder or a file in it cannot be read or written, or the
     /// previous run's file is not a run file.
-    pub fn open(data_dir: PathBuf, opener: Opener, picker: Picker) -> io::Result<Self> {
+    pub fn open(
+        data_dir: PathBuf,
+        logins: Store,
+        opener: Opener,
+        picker: Picker,
+    ) -> io::Result<Self> {
         fs::create_dir_all(&data_dir)?;
         let run_file = data_dir.join(RUN_FILE);
         sweep_leftovers(&run_file)?;
@@ -205,6 +215,7 @@ impl AppState {
         Ok(Self {
             data_dir,
             tree,
+            logins,
             projects: Arc::new(Mutex::new(projects)),
             session: Mutex::new(None),
             opening: Mutex::new(()),
@@ -296,6 +307,7 @@ impl AppState {
             data_dir: &self.data_dir,
             project: &project,
             state_dir: &state_dir,
+            logins: &self.logins,
         })?);
         *lock(&self.session) = Some(Arc::clone(&session));
         Ok((session, handle))
@@ -443,6 +455,7 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
         )
@@ -470,6 +483,7 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
         )

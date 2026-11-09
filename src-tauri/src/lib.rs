@@ -17,11 +17,14 @@
 
 use std::path::Path;
 
+use kelpie_engine::login::Store;
+
 use tauri::{Manager as _, RunEvent, Runtime};
 use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::collect_commands;
 
 pub mod pm;
+pub mod settings;
 pub mod state;
 
 use state::AppState;
@@ -37,6 +40,9 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             pm::project_pick,
             pm::pm_send,
             pm::pm_cancel,
+            settings::login_set,
+            settings::login_status,
+            settings::login_clear,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
@@ -63,11 +69,20 @@ pub fn export_bindings(path: impl AsRef<Path>) -> Result<(), specta_typescript::
 /// wires the real `tauri::Wry` runtime.
 ///
 /// On setup the app opens its state in the app data folder, sweeping what the
-/// previous run left running before anything starts (ADR 0001).
+/// previous run left running before anything starts (ADR 0001). Logins are kept
+/// in the OS keychain.
 pub fn builder<R: Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
-    app.plugin(tauri_plugin_dialog::init())
+    builder_with(app, Store::keychain())
+}
+
+/// [`builder`], keeping logins in `logins` instead of the OS keychain
+///
+/// A test passes `Store::memory()`, so it never touches the person's keychain.
+pub fn builder_with<R: Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri::Builder<R> {
+    app.manage(logins.clone())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(commands::<R>().invoke_handler())
-        .setup(|app| {
+        .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             let handle = app.handle().clone();
             let picker = Box::new(move || {
@@ -78,7 +93,12 @@ pub fn builder<R: Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
                     .map(|folder| folder.into_path().map_err(|error| error.to_string()))
                     .transpose()
             });
-            app.manage(AppState::open(data_dir, Box::new(pm::open), picker)?);
+            app.manage(AppState::open(
+                data_dir,
+                logins,
+                Box::new(pm::open),
+                picker,
+            )?);
             Ok(())
         })
 }

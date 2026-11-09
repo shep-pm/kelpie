@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use kelpie_engine::agents::{Agents, PM};
 use kelpie_engine::bridge;
-use kelpie_engine::harness::{Login, claude};
+use kelpie_engine::harness::claude;
 use kelpie_engine::session::{Choice, Session, SessionEvent};
 use kelpie_engine::settings::Harness;
 use tauri::State;
@@ -58,14 +58,14 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         data_dir,
         project,
         state_dir,
+        logins,
     } = *opening;
     let harness = match PM_DEFAULT.harness {
         Harness::ClaudeCode => {
             fs::create_dir_all(state_dir)
                 .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
             let bridge = bridge::ensure(data_dir, claude::pin()).map_err(|e| e.to_string())?;
-            claude::harness(bridge, state_dir, Login::from_env(claude::LOGIN_ENV))
-                .map_err(|e| e.to_string())?
+            claude::harness(bridge, state_dir, logins).map_err(|e| e.to_string())?
         }
         // `Harness` grows with each harness's slice, and none but the default is built here
         other => return Err(format!("{other:?} is not wired to the PM yet")),
@@ -170,6 +170,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use kelpie_engine::login::Store;
     use kelpie_engine::run::RunId;
     use kelpie_engine::session::SessionId;
     use kelpie_engine::session::fake::{FakeAgent, Turn};
@@ -224,7 +225,7 @@ mod tests {
                 );
                 fs::write(dir.join("projects.json"), list).unwrap();
             }
-            let state = AppState::open(dir.clone(), opener, picker).unwrap();
+            let state = AppState::open(dir.clone(), Store::memory(), opener, picker).unwrap();
             let app = mock_builder()
                 .manage(state)
                 .build(mock_context(noop_assets()))
