@@ -4,7 +4,7 @@
 //! (`docs/design/settings.md`). [`Store`] is the one place that holds it. The
 //! app's commands reach [`Store::set`], [`Store::status`] and [`Store::clear`],
 //! so the settings form can say whether a login is set and never what it is.
-//! [`Store::get`] is the engine's own: a harness slice reads the login there
+//! `Store::get` is the engine's own: a harness slice reads the login there
 //! when it builds a session.
 //!
 //! Each harness has one keychain entry, under the service `kelpie` and the

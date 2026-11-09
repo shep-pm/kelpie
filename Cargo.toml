@@ -44,6 +44,8 @@ futures = { version = "0.3.32", default-features = false, features = ["std", "as
 blocking = { version = "1.6", default-features = false }
 # The types the engine and the app share
 kelpie-protocol = { path = "crates/kelpie-protocol" }
+# The engine the app hosts
+kelpie-engine = { path = "crates/kelpie-engine" }
 # Own process group per child, stop ladder and the sweep (ADR 0001). `sysinfo`
 # is the process table the sweep reads.
 shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo"] }
