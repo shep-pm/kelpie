@@ -134,7 +134,7 @@ One count of what needs the maintainer, shown wherever it applies: the project i
 | The stream-json reader (#12) | The PM, threads and workers |
 | The process tree (ADR 0001) | Every session and CMM, all shown in the drawer |
 | crabpot (ADR 0005) | Every agent session |
-| The harness interface (ADR 0006) | The PM, threads and workers, on Claude Code and pi from Phase 1 |
+| The harness interface (ADRs 0006, 0007) | The PM, threads and workers, on Claude Code and goose from Phase 1 |
 | The layers component | Settings, agent files and the agent environment |
 | Kelpie's own tools for the PM | The PM, threads, and the graph's and board's actions, which call the same tools |
 | SK's work-item loop, lifted in Phase 3 | The board |
