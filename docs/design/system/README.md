@@ -28,7 +28,7 @@ The handoff from design to code: the tokens, the rules, and an HTML preview of e
 
 1. Restyle shadcn's components to the brand book rather than writing new primitives. They still carry shadcn's own sizes and focus style: controls are 28px tall here (`h-7`, `h-6` small, `h-8` large) and focus is a 2px solid `ring` outline at a 2px offset.
 2. Kelpie's own parts (StatusBadge, NeedsYouCount, LayeredField, ToolSteps, UsageFooter, Composer, SandboxRequest, TurnMarkers, ThreadList, GraphArea, Diff) are built from those primitives. Match the preview, and take every value from a token: `bg-status-needs-soft`, `text-diff-add-fg`, `outline-graph-lit`. Never a literal colour.
-3. Use the labels in the brand book's vocabulary exactly.
+3. Use the terms in `GLOSSARY.md` as labels, exactly.
 4. Check both themes. The previews use `data-theme="dark"`; the app uses the `.dark` class. The values are the same.
 
 ## Changing it

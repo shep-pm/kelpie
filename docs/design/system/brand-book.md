@@ -17,21 +17,7 @@ kelpie is a desktop app where people and coding agents plan, run and follow work
 - No emoji in the UI. Status is a glyph and a word, not an emoji.
 - Numbers abbreviate with one decimal (`18.4k`) and use tabular figures.
 
-**Vocabulary.** Use these labels exactly.
-
-| Term | Meaning | Avoid |
-|---|---|---|
-| Project | One codebase kelpie works on | workspace, repo (in UI) |
-| Graph | The picture of the project's code | map, diagram |
-| Area | A named group of code on the graph (folder rules plus hand-picked symbols). Code matching no area sits in **Unsorted** | module, region, cluster |
-| PM | The project's one long-lived agent conversation | assistant, bot |
-| Thread | A side conversation forked from the PM, tied to a ticket or topic. Its outcome returns to the PM in one line | sub-chat, branch |
-| Worker | An agent session building one ticket | runner, bot |
-| Ticket | A unit of planned work on the board | card, work item |
-| Draft ticket | A ticket the PM is still researching | |
-| Link | What ties a ticket to an area, symbol, file or lines | anchor, tag |
-| Sandbox | What confines an agent's reads, writes and network | jail |
-| Harness | The agent program a session runs on (Claude Code, Codex, pi, goose) | provider |
+**Vocabulary.** Labels use the terms in `GLOSSARY.md` exactly, and never a word it lists under *Avoid* for the same thing. Code matching no area sits in an area called **Unsorted** (`docs/design/ux.md`, The graph).
 
 **Real copy to match:** "Read 4 files" · "Searched for `ProcessTree`" · "PM wants to reach docs.rs: Allow once · Allow for this project · Deny" · "Switched from Claude Code (Opus 5.5) to goose (qwen)" · "Couldn't resume, started a new session" · "Interrupted when kelpie quit" · "3 need you".
 
