@@ -32,6 +32,8 @@ Built-in, then global, then project. A field shows its value and the layer it ca
 
 The same component edits agent files, where `extends` is one more layer: a field set by `kelpie:pm` shows *from kelpie:pm*.
 
+The PM's harness, model and effort are kept once: their global value is the global `pm` agent's keys, and a project's override is its `pm` setting. The settings page and the agent editor edit the same value, so the PM resolves as `kelpie:pm`, then the global `pm` agent, then the project.
+
 ### One schema
 
 The settings types live in Rust, and `schemars` writes their JSON Schema. The form, the validation, the `$schema` file and the docs all come from it. A field's description in Rust is its help text in the form.
