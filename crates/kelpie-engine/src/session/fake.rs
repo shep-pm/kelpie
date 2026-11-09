@@ -51,6 +51,9 @@ use serde::Serialize;
 
 use super::{Choice, Launch, Link, Session, SessionId};
 
+/// What a session adds to the `Failed` message when it asks how the agent ended
+pub const EXPLANATION: &str = "the fake agent is gone";
+
 /// One request the agent got, as the client sent it
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
@@ -392,7 +395,7 @@ impl Launch for FakeAgent {
             })?;
         Ok(Link {
             transport: DynConnectTo::new(client_side),
-            explain: Box::new(|| None),
+            explain: Box::new(|| Some(EXPLANATION.to_owned())),
         })
     }
 }

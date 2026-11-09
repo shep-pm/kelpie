@@ -217,7 +217,10 @@ impl Session {
     /// Send `text` as the next message, and stream the turn into `sink`
     ///
     /// Returns at once. Every send ends with one `TurnEnded`, or with a
-    /// `Failed` when the harness could not carry on. `sink` runs on the
+    /// `Failed` when the harness could not carry on. A `Failed` can also come
+    /// first and the send go on: the session started over because the id could
+    /// not be resumed, or kept its default because a model or effort was not
+    /// taken. Those come before the turn's own `TurnEnded`. `sink` runs on the
     /// session's own thread and must not block for long.
     pub fn send(&self, text: impl Into<String>, sink: impl FnMut(SessionEvent) + Send + 'static) {
         let mut command = Command::Send {

@@ -37,33 +37,44 @@ pub(super) async fn run(
     id: Arc<Mutex<Option<SessionId>>>,
 ) {
     let shared = Arc::new(Shared::default());
-    let mut turns = VecDeque::new();
-    loop {
+    let mut turns: Turns = VecDeque::new();
+    let first = loop {
         match commands.next().await {
-            Some(Command::Send { text, sink }) => {
-                turns.push_back((text, sink));
-                break;
-            }
+            Some(Command::Send { text, sink }) => break (text, sink),
             Some(Command::Cancel) => {}
             None => return,
         }
-    }
-    let Some((text, sink)) = turns.pop_front() else {
-        return;
     };
-    shared.set_sink(Some(sink));
+    shared.set_sink(Some(first.1));
 
     let link = lock(&launcher).launch();
     match link {
-        Err(error) => shared.emit(failed(format!("could not start the harness: {error}"))),
+        Err(error) => {
+            commands.close();
+            shared.emit(failed(format!("could not start the harness: {error}")));
+        }
         Ok(Link {
             transport,
             mut explain,
         }) => {
-            let result = connect(&shared, transport, &setup, text, &mut commands, &id).await;
+            let result = connect(
+                &shared,
+                transport,
+                &setup,
+                first.0,
+                &mut turns,
+                &mut commands,
+                &id,
+            )
+            .await;
             if let Err(error) = result {
+                // From here a send finds the inbox closed and starts a new
+                // worker, which can take a while to explain
+                commands.close();
                 let mut message = describe(&error);
-                if let Some(explained) = explain() {
+                if shared.state().harness_ended
+                    && let Some(explained) = explain()
+                {
                     message = format!("{message}: {explained}");
                 }
                 shared.emit(failed(message));
@@ -73,14 +84,22 @@ pub(super) async fn run(
 
     // A send that raced the end of this worker is answered, not dropped
     commands.close();
+    for (_, sink) in turns {
+        if let Some(mut sink) = sink {
+            sink(failed(ENDED_BEFORE.to_owned()));
+        }
+    }
     while let Ok(command) = commands.try_recv() {
         if let Command::Send { mut sink, .. } = command {
-            sink(failed(
-                "the session ended before this message ran".to_owned(),
-            ));
+            sink(failed(ENDED_BEFORE.to_owned()));
         }
     }
 }
+
+const ENDED_BEFORE: &str = "the session ended before this message ran";
+
+/// Messages waiting for the turn in flight, each with the sink it streams to
+type Turns = VecDeque<(String, Option<Sink>)>;
 
 fn failed(message: String) -> SessionEvent {
     SessionEvent::Failed { message }
@@ -108,6 +127,8 @@ struct State {
     steps: HashMap<String, (String, ToolStatus)>,
     /// Calls kelpie refused, which stay refused when the agent reports them failed
     refused: HashSet<String>,
+    /// The connection to the harness closed, as against a request it refused
+    harness_ended: bool,
 }
 
 impl Shared {
@@ -251,6 +272,7 @@ async fn connect(
     transport: agent_client_protocol::DynConnectTo<Client>,
     setup: &Setup,
     first: String,
+    turns: &mut Turns,
     commands: &mut Inbox,
     id: &Mutex<Option<SessionId>>,
 ) -> Result<(), Error> {
@@ -274,7 +296,13 @@ async fn connect(
             on_receive_request!(),
         )
         .connect_with(transport, async |cx: ConnectionTo<Agent>| {
-            serve(&cx, shared, setup, first, commands, id).await
+            let result = serve(&cx, shared, setup, first, turns, commands, id).await;
+            if let Err(error) = &result
+                && (cx.is_incoming_closed() || is_gone(error))
+            {
+                shared.state().harness_ended = true;
+            }
+            result
         })
         .await
 }
@@ -285,6 +313,7 @@ async fn serve(
     shared: &Shared,
     setup: &Setup,
     first: String,
+    turns: &mut Turns,
     commands: &mut Inbox,
     id: &Mutex<Option<SessionId>>,
 ) -> Result<(), Error> {
@@ -298,7 +327,6 @@ async fn serve(
     shared.emit(SessionEvent::Started { session_id });
     apply_choice(cx, &session, &options, &setup.choice, shared).await;
 
-    let mut turns: VecDeque<(String, Option<Sink>)> = VecDeque::new();
     turns.push_back((first, None));
     loop {
         let (text, sink) = match turns.pop_front() {
@@ -319,7 +347,16 @@ async fn serve(
         let mut response = std::pin::pin!(cx.send_request(prompt).block_task());
         let result = loop {
             match select(response.as_mut(), commands.next()).await {
-                Either::Left((result, _)) => break result,
+                Either::Left((result, _)) => {
+                    // A cancel that lost the race with the turn's end is meant
+                    // for this turn, not the next one
+                    while let Ok(command) = commands.try_recv() {
+                        if let Command::Send { text, sink } = command {
+                            turns.push_back((text, Some(sink)));
+                        }
+                    }
+                    break result;
+                }
                 Either::Right((Some(Command::Send { text, sink }), _)) => {
                     turns.push_back((text, Some(sink)));
                 }

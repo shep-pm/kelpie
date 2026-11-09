@@ -1,10 +1,12 @@
-use std::sync::mpsc::{Receiver, channel};
+use std::io;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kelpie_protocol::{StopReason, ToolStatus, Usage};
 use serde_json::json;
 
-use super::fake::{FakeAgent, Turn};
+use super::fake::{EXPLANATION, FakeAgent, Turn};
 use super::*;
 
 /// How long a test waits for an event it forced to happen
@@ -321,7 +323,10 @@ fn the_agent_exiting_mid_turn_ends_with_failed() {
 
     assert_eq!(next(&heard), started("fake-1"));
     assert_eq!(next(&heard), text("Starting"));
-    assert!(matches!(next(&heard), SessionEvent::Failed { .. }));
+    let SessionEvent::Failed { message } = next(&heard) else {
+        panic!("the agent exiting did not end the turn with Failed");
+    };
+    assert!(message.contains(EXPLANATION), "{message}");
 }
 
 #[test]
@@ -401,4 +406,142 @@ fn a_harness_that_exits_is_explained_from_its_status_and_stderr() {
     assert!(message.contains("exit status: 3"), "{message}");
     assert!(message.contains("no login"), "{message}");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_send_queued_behind_a_turn_that_dies_is_answered() {
+    let agent = FakeAgent::new().turn(Turn::new().text("a").exit());
+    let session = Arc::new(session(&agent));
+    let (second, second_heard) = events();
+    let (first, first_heard) = {
+        let session = Arc::clone(&session);
+        let mut second = Some(second);
+        let (sender, heard) = channel();
+        // The worker is inside this sink, so the second message is queued
+        // while the first turn runs
+        let sink = move |event: SessionEvent| {
+            if matches!(event, SessionEvent::Text { .. })
+                && let Some(second) = second.take()
+            {
+                session.send("B", second);
+            }
+            let _ = sender.send(event);
+        };
+        (sink, heard)
+    };
+
+    session.send("A", first);
+
+    assert_eq!(next(&first_heard), started("fake-1"));
+    assert_eq!(next(&first_heard), text("a"));
+    assert!(matches!(next(&first_heard), SessionEvent::Failed { .. }));
+    assert!(matches!(next(&second_heard), SessionEvent::Failed { .. }));
+}
+
+#[test]
+fn a_cancel_that_lost_the_race_with_its_turn_does_not_reach_the_next() {
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("a"))
+        .turn(Turn::new().text("b"));
+    let session = Arc::new(session(&agent));
+    let (second, second_heard) = events();
+    let (sender, first_heard) = channel();
+    let mut second = Some(second);
+    let inside = Arc::clone(&session);
+    // The worker is inside this sink, so both land before it looks again
+    let first = move |event: SessionEvent| {
+        if matches!(event, SessionEvent::Text { .. })
+            && let Some(second) = second.take()
+        {
+            inside.send("B", second);
+            inside.cancel();
+        }
+        let _ = sender.send(event);
+    };
+
+    session.send("A", first);
+
+    until_turn_ends(&first_heard);
+    assert_eq!(until_turn_ends(&second_heard).last(), Some(&ended()));
+    assert_ne!(
+        agent.methods().last().map(String::as_str),
+        Some("session/cancel")
+    );
+}
+
+/// Blocks inside `explain` until told, and says when it got there
+struct Slow {
+    agent: FakeAgent,
+    entered: Sender<()>,
+    release: Arc<Mutex<Receiver<()>>>,
+}
+
+impl Launch for Slow {
+    fn launch(&mut self) -> io::Result<Link> {
+        let mut link = self.agent.launch()?;
+        let (entered, release) = (self.entered.clone(), Arc::clone(&self.release));
+        link.explain = Box::new(move || {
+            let _ = entered.send(());
+            let _ = release.lock().unwrap().recv_timeout(WAIT);
+            None
+        });
+        Ok(link)
+    }
+}
+
+#[test]
+fn a_send_while_the_worker_explains_a_dead_harness_starts_a_new_worker() {
+    let agent = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().exit())
+        .turn(Turn::new().text("back"));
+    let (entered, in_explain) = channel();
+    let (release, released) = channel();
+    let launcher = Slow {
+        agent: agent.clone(),
+        entered,
+        release: Arc::new(Mutex::new(released)),
+    };
+    let session = Session::with_launcher(
+        Box::new(launcher),
+        PathBuf::from("/project"),
+        None,
+        Choice::default(),
+        None,
+    );
+    let (sink, first) = events();
+    session.send("A", sink);
+    in_explain.recv_timeout(WAIT).unwrap();
+
+    let (sink, second) = events();
+    session.send("B", sink);
+    release.send(()).unwrap();
+
+    assert_eq!(next(&first), started("fake-1"));
+    assert!(matches!(next(&first), SessionEvent::Failed { .. }));
+    assert_eq!(
+        until_turn_ends(&second),
+        [started("fake-1"), text("back"), ended()]
+    );
+}
+
+#[test]
+fn a_failure_that_is_not_the_harness_ending_does_not_blame_it() {
+    let agent = FakeAgent::new();
+    let session = Session::with_launcher(
+        Box::new(agent.clone()),
+        PathBuf::from("/project"),
+        None,
+        Choice::default(),
+        Some(json!("not an object")),
+    );
+
+    let (sink, heard) = events();
+    session.send("Hello", sink);
+
+    let SessionEvent::Failed { message } = next(&heard) else {
+        panic!("a bad `_meta` did not end the send with Failed");
+    };
+    assert!(!message.contains(EXPLANATION), "{message}");
 }

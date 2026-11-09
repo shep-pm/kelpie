@@ -97,7 +97,11 @@ pub enum SessionEvent {
         /// The tokens the turn used, when the harness says
         usage: Option<Usage>,
     },
-    /// Something went wrong that the turn or the session did not survive
+    /// Something went wrong
+    ///
+    /// Usually the turn or the session did not survive it and nothing follows.
+    /// A session that started over, or kept its default model or effort, says
+    /// so with a `Failed` and then goes on with `Started` or `TurnEnded`.
     Failed {
         /// What happened, for the maintainer to read
         message: String,
