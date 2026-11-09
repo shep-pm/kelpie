@@ -33,8 +33,8 @@ One codebase kelpie works on, with its own PM, graph, board and git history. Pro
 _Avoid_: repo (the GitHub side), workspace
 
 **Pillar**:
-One of a project's four tabs: Graph, PM, Board and Git. The graph is the default, and each project reopens on the pillar it was left on.
-_Avoid_: view, page, mode
+One of a project's four parts: the graph, which fills the window, and the PM, Board and Git panels docked beside it. Each project reopens with the layout it was left in.
+_Avoid_: tab, view, page, mode
 
 **Graph**:
 The picture of a project built from its code, which grows as the code changes without anyone asking.
