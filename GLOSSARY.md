@@ -103,6 +103,14 @@ _Avoid_: CLI, backend, provider
 What lets kelpie use one outside tool through an interface shared by every tool of its kind: a harness, a forge such as GitHub, an indexer such as CMM. Kelpie is a hub of adapters and favours none.
 _Avoid_: plugin, integration, driver
 
+**Agent**:
+A named way to run a session: its harness, model, effort and instructions, kept as a file that may extend another, such as kelpie's built-in `kelpie:pm`.
+_Avoid_: profile, persona, bot
+
+**Layer**:
+One level a setting's value can come from: kelpie's built-in default, then global, then project. An agent's `extends` chain adds layers of its own. The nearest layer that sets a value wins.
+_Avoid_: scope, level, override
+
 **Paused**:
 The state of a worker whose process stopped mid-turn. It resumes only when the maintainer says so, never on its own.
 _Avoid_: stopped, suspended
