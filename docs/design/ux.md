@@ -84,14 +84,14 @@ First interactions:
 ## Workers
 
 1. Click a ticket that's building, or its overlay on the graph, to open the worker's session in the same chat view the PM uses: its live stream, its diff so far, its processes, and a message box.
-2. **Note** is the default send. Claude reads it at its next tool boundary. **Stop and tell** interrupts the turn.
+2. **Note** is the default send. The agent reads it at its next tool boundary, or at the end of its turn on a harness that cannot take one mid-turn. **Stop and tell** interrupts the turn.
 3. A note goes into the ticket's record. When it changes the scope, the PM updates the ticket's text so review checks the new ask. The PM gets one line saying what the maintainer told the worker.
 
 ## Sandbox
 
 Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, starting with the PM tracer bullet.
 
-1. The PM reads wide (the project, worktrees, sibling repos, secrets denied) and writes only its own folder and Claude's config folder.
+1. The PM reads wide (the project, worktrees, sibling repos, secrets denied) and writes only its own folder and its harness's config folder.
 2. Every other change goes through kelpie's own tools: tickets, links, areas, notes to workers, GitHub. The PM's permissions are its tool list.
 3. When the sandbox refuses something, the agent asks through a kelpie tool and a prompt appears in its panel: *"PM wants to reach docs.rs: Allow once · Allow for this project · Deny"*. The sandbox widens while the session runs. "Allow for this project" is saved to the project's settings, where it can be undone.
 4. A per-project setting, **Read anywhere by default**, lifts the read limit (secrets still denied). It is off by default.
@@ -131,7 +131,6 @@ One count of what needs the maintainer, shown wherever it applies: the project i
 | Piece | Reused by |
 |---|---|
 | The chat view | The PM, threads and workers |
-| The stream-json reader (#12) | The PM, threads and workers |
 | The process tree (ADR 0001) | Every session and CMM, all shown in the drawer |
 | crabpot (ADR 0005) | Every agent session |
 | The harness interface (ADRs 0006, 0007) | The PM, threads and workers, on Claude Code and goose from Phase 1 |
