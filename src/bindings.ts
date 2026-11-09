@@ -38,6 +38,9 @@ export type Options = {
 };
 
 /** What `harness` offers: its own model and effort lists, kept until `refresh`. */
-export function harnessOptions(harness: string, refresh: boolean): Promise<Options> {
+export function harnessOptions(
+  harness: string,
+  refresh: boolean,
+): Promise<Options> {
   return invoke("harness_options", { harness, refresh });
 }
