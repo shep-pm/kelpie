@@ -235,3 +235,71 @@ fn the_run_file_lists_live_groups_only() {
     tree.stop_all(GRACE).unwrap();
     assert_eq!(listed(), Vec::<u32>::new());
 }
+
+/// Kills a group when a test ends, so a failed one leaves no loop running
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        let _ = shep_tree::group::signal_group(self.0, Signal::Kill);
+    }
+}
+
+#[test]
+fn a_group_member_that_ignores_term_is_killed_after_its_leader_is_gone() {
+    use std::os::unix::process::CommandExt as _;
+
+    // The member has no mark and ends only on `SIGKILL`; the leader dies on `SIGTERM`
+    let script =
+        r#"sh -c 'trap "" TERM; echo "pid $$"; echo ready; while :; do sleep 1; done' & wait"#;
+    let dir = Dir::new();
+    let mut leader = sh(script).process_group(0).spawn().unwrap();
+    let _cleanup = KillGroup(leader.id());
+    let (_stdout, pids) = ready(leader.stdout.take().unwrap());
+    RunFile {
+        run: RunId::new().unwrap().to_string(),
+        groups: vec![Group {
+            pid: leader.id(),
+            started: sweep::read(leader.id()).unwrap().started,
+        }],
+    }
+    .write(&dir.run_file())
+    .unwrap();
+    // Reaped as soon as it dies, as init would
+    std::thread::spawn(move || leader.wait());
+
+    sweep_leftovers(&dir.run_file()).unwrap();
+
+    assert_gone(&pids);
+}
+
+#[test]
+fn nothing_starts_after_stop_all() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    tree.stop_all(GRACE).unwrap();
+
+    let refused = tree.spawn(Command::new("sleep").arg("60"));
+
+    assert!(refused.is_err());
+}
+
+#[test]
+fn an_exit_noticed_while_another_handle_drops_leaves_the_run_file() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut first = tree
+        .spawn(Command::new("cat").stdin(Stdio::piped()))
+        .unwrap();
+    let second = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+    drop(first.stdin.take());
+    assert_gone(&[first.id()]);
+    // The process table stops listing a process a moment before `wait` can reap it
+    std::thread::sleep(Duration::from_millis(200));
+
+    drop(second);
+
+    let file = RunFile::read(&dir.run_file()).unwrap();
+    assert_eq!(file.groups.len(), 1, "only the sleep is listed: {file:?}");
+    tree.stop_all(GRACE).unwrap();
+}

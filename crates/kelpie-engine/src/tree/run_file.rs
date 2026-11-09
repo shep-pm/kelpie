@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -35,12 +35,16 @@ impl RunFile {
     ///
     /// # Errors
     ///
-    /// The sibling cannot be written or renamed.
+    /// The sibling cannot be written, synced or renamed.
     pub fn write(&self, path: &Path) -> io::Result<()> {
         let mut sibling = OsString::from(path);
         sibling.push(".tmp");
-        fs::write(&sibling, serde_json::to_vec(self)?)?;
-        fs::rename(&sibling, path)
+        let mut file = fs::File::create(&sibling)?;
+        file.write_all(&serde_json::to_vec(self)?)?;
+        // Without these a power cut can leave `path` empty after the rename
+        file.sync_all()?;
+        fs::rename(&sibling, path)?;
+        sync_folder(path)
     }
 
     /// Read the file at `path`
@@ -51,4 +55,20 @@ impl RunFile {
     pub fn read(path: &Path) -> io::Result<RunFile> {
         Ok(serde_json::from_slice(&fs::read(path)?)?)
     }
+}
+
+/// Make a rename in `path`'s folder durable; a folder cannot be synced on Windows
+fn sync_folder(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    if let Some(folder) = path.parent() {
+        let folder = if folder.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            folder
+        };
+        fs::File::open(folder)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }

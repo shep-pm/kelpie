@@ -65,9 +65,10 @@ pub fn sweep_marked(run: &RunId) -> SweepReport {
 /// Stop what a previous run left behind, before anything of this run starts
 ///
 /// Each group in the run file whose leader still has its recorded start time
-/// gets `SIGTERM`, then `SIGKILL` after a few seconds; a pid with another start
-/// time is a stranger and is left alone. Then [`sweep_marked`] ends whatever
-/// still carries the old run's mark. A missing file is a first launch.
+/// gets `SIGTERM`. Then [`sweep_marked`] ends whatever still carries the old
+/// run's mark, and last the groups get `SIGKILL`, even when their leader has
+/// exited. A pid with another start time is a stranger and is left alone. A
+/// missing file is a first launch.
 ///
 /// A group is stopped by signalling its leader's group, so only unix does that
 /// step; the mark sweep runs everywhere.
@@ -88,8 +89,11 @@ pub fn sweep_leftovers(run_file: &Path) -> io::Result<SweepReport> {
         .parse()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     #[cfg(unix)]
-    stop_groups(&file.groups);
-    Ok(sweep_marked(&run))
+    let termed = term_groups(&file.groups);
+    let report = sweep_marked(&run);
+    #[cfg(unix)]
+    kill_groups(&termed);
+    Ok(report)
 }
 
 /// Pids of every other process marked with `run`
@@ -120,8 +124,10 @@ fn recorded(group: &super::run_file::Group) -> Option<Reading> {
     read(group.pid).filter(|reading| reading.started == group.started)
 }
 
+/// Send `SIGTERM` to each recorded group whose leader is still the recorded
+/// process, wait for the leaders to exit, and return those groups' ids
 #[cfg(unix)]
-fn stop_groups(groups: &[super::run_file::Group]) {
+fn term_groups(groups: &[super::run_file::Group]) -> Vec<u32> {
     use shep_tree::Signal;
     use shep_tree::group::signal_group;
     use std::time::Instant;
@@ -142,8 +148,21 @@ fn stop_groups(groups: &[super::run_file::Group]) {
     {
         std::thread::sleep(POLL);
     }
-    // A zombie leader still holds its pid, so its group is still its own
-    for group in groups.iter().filter(|group| recorded(group).is_some()) {
-        let _ = signal_group(group.pid, Signal::Kill);
+    groups.iter().map(|group| group.pid).collect()
+}
+
+/// `SIGKILL` the groups [`term_groups`] returned
+///
+/// Their leaders matched a moment ago, and a group id is not reused while a
+/// member lives, so a leader that has since exited does not make the group a
+/// stranger's. This reaches a member that ignored `SIGTERM` and whose
+/// environment the mark sweep cannot read.
+#[cfg(unix)]
+fn kill_groups(groups: &[u32]) {
+    use shep_tree::Signal;
+    use shep_tree::group::signal_group;
+
+    for &pid in groups {
+        let _ = signal_group(pid, Signal::Kill);
     }
 }

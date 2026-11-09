@@ -67,6 +67,8 @@ struct Shared {
 
 #[derive(Debug, Default)]
 struct State {
+    /// Set by `stop_all`: nothing may start after the tree was stopped
+    closed: bool,
     next: u64,
     children: BTreeMap<u64, Entry>,
 }
@@ -109,15 +111,19 @@ impl Shared {
 }
 
 impl State {
-    /// Note every child that has exited, and forget those nobody will ask about
-    fn note_exits(&mut self) {
+    /// Note every child that has exited, and forget those nobody will ask
+    /// about. Returns whether a live child was found to have exited.
+    fn note_exits(&mut self) -> bool {
+        let mut found = false;
         for entry in self.children.values_mut() {
             if entry.exited.is_none() {
                 entry.exited = entry.child.try_wait().ok().flatten();
+                found |= entry.exited.is_some();
             }
         }
         self.children
             .retain(|_, entry| !(entry.released && entry.exited.is_some()));
+        found
     }
 }
 
@@ -152,16 +158,20 @@ impl ProcessTree {
     ///
     /// # Errors
     ///
-    /// The child cannot be started, or the run file cannot be rewritten; in
-    /// that case the child is killed first.
+    /// The tree was stopped by [`ProcessTree::stop_all`], the child cannot be
+    /// started, or the run file cannot be rewritten; in the last case the child
+    /// is killed first.
     pub fn spawn(&self, command: &mut Command) -> io::Result<Child> {
         command.env(ENV, self.shared.run.to_string());
+        // Held across the spawn, so `stop_all` cannot sweep between the two
+        let mut state = self.shared.lock();
+        if state.closed {
+            return Err(io::Error::other("the process tree was stopped"));
+        }
         let (tree, mut child) = Tree::spawn(command)?;
         let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         let pid = child.id();
         let started = sweep::read(pid).map(|reading| reading.started);
-
-        let mut state = self.shared.lock();
         state.note_exits();
         let slot = state.next;
         state.next += 1;
@@ -199,7 +209,8 @@ impl ProcessTree {
     /// Each live child's tree is signalled with `SIGTERM` at once and killed
     /// when `grace` runs out. Then [`sweep_marked`] ends what is left, such as a
     /// grandchild that left its group. A child that already exited is not
-    /// signalled again.
+    /// signalled again. Afterwards [`ProcessTree::spawn`] refuses to start
+    /// anything.
     ///
     /// # Errors
     ///
@@ -207,6 +218,7 @@ impl ProcessTree {
     /// and the sweep ran.
     pub fn stop_all(&self, grace: Duration) -> io::Result<SweepReport> {
         let mut state = self.shared.lock();
+        state.closed = true;
         state.note_exits();
         let results: Vec<io::Result<()>> = std::thread::scope(|scope| {
             let stops: Vec<_> = state
@@ -307,7 +319,10 @@ impl Drop for Child {
         if let Some(entry) = state.children.get_mut(&self.slot) {
             entry.released = true;
         }
-        state.note_exits();
+        if state.note_exits() {
+            // A listed group that is gone is found gone at the next launch
+            let _ = self.shared.write(&state);
+        }
     }
 }
 
