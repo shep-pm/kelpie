@@ -356,9 +356,14 @@ pub struct Resolved {
 }
 
 /// The JSON Schema a settings file must satisfy, from the Rust types
+///
+/// Keys are sorted, so the text of `docs/settings.schema.json` does not depend
+/// on which features the build turned on.
 #[must_use]
 pub fn schema() -> Value {
-    schema::document().clone()
+    let mut document = schema::document().clone();
+    document.sort_all_objects();
+    document
 }
 
 impl Settings {
@@ -444,7 +449,11 @@ fn write(file: &Path, fields: &Map<String, Value>) -> Result<(), SettingsError> 
         SCHEMA_KEY.to_string(),
         Value::String(SCHEMA_REF.to_string()),
     );
-    let text = serde_json::to_string_pretty(&Value::Object(fields))
+    // Another crate in the build can turn on `serde_json`'s `preserve_order`,
+    // which would write keys in the order they were set
+    let mut document = Value::Object(fields);
+    document.sort_all_objects();
+    let text = serde_json::to_string_pretty(&document)
         .map_err(|source| failed(io::Error::other(source)))?;
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(failed)?;
