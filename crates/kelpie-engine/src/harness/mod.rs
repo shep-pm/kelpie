@@ -9,24 +9,38 @@
 //! Kelpie ships no harness and no login of its own (ADR 0006). Each slice points
 //! the harness at the person's own install and gives the session a config folder
 //! of kelpie's own, which keeps the person's global folder out until they turn
-//! it on.
+//! it on. A harness that speaks ACP itself, such as goose, is run directly; one
+//! that does not is run through its bridge from the registry.
 //!
 //! # Quick start
 //!
 //! ```no_run
 //! use std::path::Path;
 //!
-//! use kelpie_engine::harness::{Login, claude};
+//! use kelpie_engine::harness::{Login, claude, goose};
 //!
 //! let login = Login::from_env(claude::LOGIN_ENV);
 //! let harness = claude::harness("claude-agent-acp".into(), Path::new("pm"), login)?;
 //! println!("run {}", harness.program.display());
+//!
+//! let ollama = goose::Provider {
+//!     name: "ollama".to_owned(),
+//!     host: None,
+//! };
+//! let local = goose::harness(Path::new("pm"), ollama)?;
+//! let acp = local.args.first().expect("goose is run with its subcommand");
+//! println!("or run {} {}", local.program.display(), acp.to_string_lossy());
 //! # Ok::<(), kelpie_engine::harness::HarnessError>(())
 //! ```
 
+use std::env::{self, consts::EXE_SUFFIX};
+use std::ffi::OsStr;
+use std::fs;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 pub mod claude;
+pub mod goose;
 
 /// The login a harness session runs with
 ///
@@ -128,6 +142,39 @@ impl fmt::Display for HarnessError {
 }
 
 impl core::error::Error for HarnessError {}
+
+/// The first `cmd` on the `PATH` text `path`, as an absolute path
+///
+/// Each harness runs the person's own install, found here rather than trusted to
+/// whatever `PATH` the harness would search itself.
+pub(super) fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
+    let name = format!("{cmd}{EXE_SUFFIX}");
+    env::split_paths(path).find_map(|dir| {
+        let found = dir.join(&name);
+        is_program(&found).then(|| std::path::absolute(&found).unwrap_or(found))
+    })
+}
+
+/// Whether `path` is a file this OS can run
+fn is_program(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && runnable(&metadata)
+}
+
+/// Whether the OS says a file may be run
+#[cfg(unix)]
+fn runnable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+/// Windows runs a file by its extension, which `name` already carries
+#[cfg(not(unix))]
+fn runnable(_metadata: &fs::Metadata) -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests;
