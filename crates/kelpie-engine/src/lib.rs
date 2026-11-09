@@ -6,7 +6,8 @@
 //! sweep that stops what a run left behind. [`run`] is the id itself: what a
 //! child's environment carries, and what a sweep looks for. [`settings`] reads
 //! and writes the config folder ADR 0008 puts at `~/.config/kelpie`. [`session`]
-//! holds a conversation with a harness over ACP (ADR 0007). The crate
+//! holds a conversation with a harness over ACP (ADR 0007), and [`agents`] reads
+//! the Markdown files that say what a session runs as and what it is told. The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -23,10 +24,12 @@
 //!
 //! [`run`] holds the id and its text form; [`tree`] starts and stops the
 //! children; [`session`] streams a harness's events; [`settings`] holds the
-//! fields and the layers they resolve through.
+//! fields and the layers they resolve through; [`agents`] loads the agent files
+//! and the PM's binding.
 
 #![doc(test(attr(deny(warnings))))]
 
+pub mod agents;
 pub mod run;
 pub mod session;
 pub mod settings;
