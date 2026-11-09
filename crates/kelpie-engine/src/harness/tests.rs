@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::claude::{self, LOGIN_ENV, pin};
-use super::{HarnessError, Login};
+use super::HarnessError;
+use super::claude::{self, LOGIN, LOGIN_ENV, pin};
+use crate::login::Store;
 use crate::run::RunId;
 use crate::session::{Choice, Extension, Harness, Session, SessionEvent};
 
@@ -57,9 +58,16 @@ fn path_of(dirs: impl IntoIterator<Item: AsRef<OsStr>>) -> OsString {
     env::join_paths(dirs).unwrap()
 }
 
+/// A store that holds `TOKEN` as Claude Code's login
+fn logged_in() -> Store {
+    let store = Store::memory();
+    store.set(LOGIN, TOKEN).unwrap();
+    store
+}
+
 /// Build a harness with `path` as the `PATH` it searches
-fn build(path: &OsStr, login: Login) -> Result<Harness, HarnessError> {
-    claude::harness_on_path(BRIDGE.into(), Path::new(STATE), &login, path)
+fn build(path: &OsStr, logins: &Store) -> Result<Harness, HarnessError> {
+    claude::harness_on_path(BRIDGE.into(), Path::new(STATE), logins, path)
 }
 
 /// The value `harness` sets `name` to
@@ -75,7 +83,7 @@ fn env_of(harness: &Harness, name: &str) -> Option<OsString> {
 fn claude_points_the_bridge_at_the_persons_claude() {
     let dir = installed();
 
-    let harness = build(&path_of([dir.clone()]), Login::from_token(TOKEN)).unwrap();
+    let harness = build(&path_of([dir.clone()]), &logged_in()).unwrap();
 
     assert_eq!(harness.program, PathBuf::from(BRIDGE));
     assert!(harness.args.is_empty());
@@ -89,13 +97,28 @@ fn claude_points_the_bridge_at_the_persons_claude() {
 fn claude_gets_a_config_folder_of_its_own() {
     let dir = installed();
 
-    let harness = build(&path_of([dir.clone()]), Login::from_token(TOKEN)).unwrap();
+    let harness = build(&path_of([dir.clone()]), &logged_in()).unwrap();
 
     assert_eq!(
         env_of(&harness, "CLAUDE_CONFIG_DIR").unwrap(),
         Path::new(STATE).join("claude")
     );
-    assert_eq!(env_of(&harness, LOGIN_ENV).unwrap(), OsString::from(TOKEN));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn claude_takes_its_login_from_the_store() {
+    let dir = installed();
+    let logins = Store::memory();
+    logins.set(LOGIN, "  from-the-store\n").unwrap();
+    logins.set("goose", "another-harness-login").unwrap();
+
+    let harness = build(&path_of([dir.clone()]), &logins).unwrap();
+
+    assert_eq!(
+        env_of(&harness, LOGIN_ENV).unwrap(),
+        OsString::from("from-the-store")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -105,7 +128,7 @@ fn no_claude_on_path_says_to_install_it() {
     let broken = not_runnable();
 
     for path in [path_of([empty.clone()]), path_of([broken.clone()])] {
-        let error = build(&path, Login::from_token(TOKEN)).unwrap_err();
+        let error = build(&path, &logged_in()).unwrap_err();
         assert!(
             matches!(error, HarnessError::NotInstalled { .. }),
             "{error}"
@@ -118,15 +141,18 @@ fn no_claude_on_path_says_to_install_it() {
 }
 
 #[test]
-fn no_login_says_how_to_make_one() {
+fn no_login_points_at_the_settings_page() {
     let dir = installed();
+    let others = Store::memory();
+    others.set("goose", "not-claudes").unwrap();
 
-    for login in [Login::none(), Login::from_token("   ")] {
-        let error = build(&path_of([dir.clone()]), login).unwrap_err();
+    for logins in [Store::memory(), others] {
+        let error = build(&path_of([dir.clone()]), &logins).unwrap_err();
         assert!(matches!(error, HarnessError::NoLogin { .. }), "{error}");
         let message = error.to_string();
-        assert!(message.contains(LOGIN_ENV), "{message}");
+        assert!(message.contains("settings page"), "{message}");
         assert!(message.contains("claude setup-token"), "{message}");
+        assert!(!message.contains(LOGIN_ENV), "{message}");
     }
     fs::remove_dir_all(dir).unwrap();
 }
@@ -135,7 +161,7 @@ fn no_login_says_how_to_make_one() {
 fn the_new_session_meta_asks_for_the_raw_messages() {
     let dir = installed();
 
-    let harness = build(&path_of([dir.clone()]), Login::from_token(TOKEN)).unwrap();
+    let harness = build(&path_of([dir.clone()]), &logged_in()).unwrap();
 
     assert_eq!(
         harness.new_session_meta.unwrap(),
@@ -143,15 +169,6 @@ fn the_new_session_meta_asks_for_the_raw_messages() {
     );
     assert_eq!(harness.extensions, [Extension::ClaudeSdkMessage]);
     fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn a_login_keeps_its_token_out_of_debug() {
-    assert_eq!(
-        format!("{:?}", Login::from_token(TOKEN)),
-        r#"Login { token: true }"#
-    );
-    assert_eq!(format!("{:?}", Login::none()), r#"Login { token: false }"#);
 }
 
 #[test]
@@ -203,7 +220,14 @@ fn a_real_claude_answers_and_resumes() {
     let project = data.join("project");
     fs::create_dir_all(&project).unwrap();
     let bridge = bridge::ensure(&data, pin()).unwrap();
-    let harness = claude::harness(bridge, &data.join("pm"), Login::from_env(LOGIN_ENV)).unwrap();
+    let logins = Store::memory();
+    logins
+        .set(
+            LOGIN,
+            &env::var(LOGIN_ENV).expect("CLAUDE_CODE_OAUTH_TOKEN is not set"),
+        )
+        .unwrap();
+    let harness = claude::harness(bridge, &data.join("pm"), &logins).unwrap();
     let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), data.join("run.json")).unwrap());
     let choice = Choice {
         model: Some("haiku".to_owned()),
