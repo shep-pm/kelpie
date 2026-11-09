@@ -7,7 +7,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { SessionEvent } from "@/bindings";
 
 // The real Channel needs Tauri's IPC bridge, which jsdom has not got.
@@ -61,6 +69,12 @@ const baseUsage = {
   cache_write: 0,
   cache_lifetime: null,
 };
+
+beforeAll(() => {
+  // jsdom has no `Element.scrollTo`, which Streamdown calls from an animation
+  // frame to follow a streaming code block.
+  Element.prototype.scrollTo = () => {};
+});
 
 beforeEach(() => {
   pmSend.mockReset();
