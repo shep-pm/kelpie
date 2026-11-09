@@ -12,14 +12,17 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "biome check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.6",
+    "@tauri-apps/cli": "^2.12.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",

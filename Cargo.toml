@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "src-tauri"]
 resolver = "3"
 
 [workspace.package]
@@ -20,6 +20,18 @@ self_named_module_files = "deny"
 [workspace.dependencies]
 # The system's random bytes, on Unix and Windows alike
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
+
+# Tauri 2 with the Wry webview (ADR 0002). `x11` and `dbus` are the Linux window
+# and menu plumbing; default-features drops `dynamic-acl` and `common-controls-v6`,
+# which kelpie has no capability or menu to use yet.
+tauri = { version = "2.12.5", default-features = false, features = [
+  "wry",
+  "compression",
+  "x11",
+  "dbus",
+] }
+# The config, ACL and asset codegen behind `generate_context!`
+tauri-build = { version = "2.7.4", default-features = false, features = ["config-json"] }
 
 # Debug info dominates a debug build, and dependencies never need theirs.
 [profile.dev]

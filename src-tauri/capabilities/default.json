@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Kelpie's main window. It has no commands yet, so only the core permissions.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
