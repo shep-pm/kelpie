@@ -63,7 +63,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 
 ## Where things live
 
-- `docs/design/system/`: the design system. Read its `README.md` and `brand-book.md` before building any UI; `index.html` shows every component and screen. Its tokens are in `src/styles/globals.css`, and `src/components/ui/` is shadcn's base set, added with `pnpm dlx shadcn@4.22.2 add <name>` and restyled to the brand book.
+- `docs/design/system/`: the design system. Read its `README.md` and `brand-book.md` before building any UI; `index.html` shows every component and screen. Its tokens are in `src/styles/globals.css`, and `src/components/ui/` is shadcn's base set, added with `pnpm dlx shadcn@4.22.2 add <name>` as shadcn ships it. A slice restyles each one it uses to the brand book.
 - `docs/process-and-sk.md` is the current plan: the process tree, sessions, updates, and what to lift from SK.
 - `docs/backend.md` is partly replaced by it. Each replaced part is marked.
 - `docs/gui-framework.md`: why Tauri 2 + React.
