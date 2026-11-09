@@ -11,8 +11,18 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Option: `session::fake`, a scripted ACP agent that runs in-process, for tests
+# of the engine and of whatever holds a session. The engine's own tests have it
+# without the feature.
+testing = []
+
 [dependencies]
+agent-client-protocol.workspace = true
+blocking.workspace = true
+futures.workspace = true
 getrandom.workspace = true
+kelpie-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true

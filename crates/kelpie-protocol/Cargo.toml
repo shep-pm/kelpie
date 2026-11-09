@@ -1,0 +1,19 @@
+[package]
+name = "kelpie-protocol"
+description = "The types the engine and the app share: a session's harness-neutral events"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+# Only to test the wire form
+serde_json.workspace = true
