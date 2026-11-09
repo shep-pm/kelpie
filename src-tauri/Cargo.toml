@@ -1,0 +1,36 @@
+[package]
+name = "kelpie-app"
+description = "Kelpie's window: the Tauri 2 app crate that hosts the engine and its IPC"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Cargo will not mix `lints.workspace = true` with an override, so this crate
+# names the workspace set and swaps `forbid` for `deny`: `sys.rs` calls one
+# Win32 function, confined there (IR-22). Keep the rest in step with the
+# workspace by hand.
+[lints.rust]
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+self_named_module_files = "deny"
+
+[dependencies]
+tauri.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# `MessageBoxW` in `sys.rs`, for a failure a GUI subsystem process cannot print
+windows.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dev-dependencies]
+# `test` for `tauri::test`'s mock runtime, so the app can be built with no webview
+tauri = { workspace = true, features = ["test"] }

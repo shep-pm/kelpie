@@ -4,7 +4,13 @@ name: test
 # request reads main's build, and the repo holds one cache per job.
 #
 # Every job carries `timeout-minutes`, a ceiling against a hang rather than a
-# performance budget. GitHub's default when absent is 360.
+# performance budget. GitHub's default when absent is 360. The Rust jobs compile
+# `src-tauri`, so each installs the Linux packages Tauri links against, and each
+# has room for a cold build of the Tauri tree.
+#
+# The `app` job is the one that runs `tauri build`, which is what makes a release
+# binary: a plain `cargo build --release` leaves `custom-protocol` off and the
+# binary loads `devUrl`.
 on:
   push:
     branches: [main]
@@ -21,9 +27,13 @@ jobs:
   lint:
     name: fmt and clippy
     runs-on: [self-hosted]
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux packages Tauri builds against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
@@ -36,9 +46,13 @@ jobs:
 
   test:
     runs-on: [self-hosted]
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux packages Tauri builds against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
@@ -49,11 +63,15 @@ jobs:
 
   docs:
     runs-on: [self-hosted]
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       RUSTDOCFLAGS: -D warnings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux packages Tauri builds against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
@@ -64,9 +82,13 @@ jobs:
 
   msrv:
     runs-on: [self-hosted]
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the Linux packages Tauri builds against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       # Matches `rust-version` in Cargo.toml: Tauri 2's MSRV (ADR 0002).
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
@@ -75,3 +97,33 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo +1.90 check --workspace --all-targets --locked
+
+  app:
+    name: app
+    # `tauri build` compiles the whole Tauri tree in release and links
+    # WebKitGTK. Pinned to the x86 box: the pool's arm64 boxes do it far slower.
+    runs-on: [self-hosted, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # pnpm before setup-node, as in web.yml: setup-node's pnpm cache hashes
+      # the lockfile through the pnpm version `packageManager` pins.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install the Linux packages Tauri builds against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: pnpm install --frozen-lockfile
+      # `--no-bundle` builds the binary and skips deb/rpm/AppImage packaging,
+      # which needs the bundler's own toolchain and is not a gate here.
+      - run: pnpm tauri build --no-bundle

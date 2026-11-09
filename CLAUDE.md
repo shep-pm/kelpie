@@ -27,7 +27,7 @@ Each issue links its note. Workspace, CI and other plumbing with no behaviour of
 
 ## Commands
 
-The Rust workspace is `crates/*`, with `kelpie-engine` so far. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.90 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`.
+The Rust workspace is `crates/*` plus `src-tauri`, with `kelpie-engine` and `kelpie-app`. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.90 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`, plus `pnpm tauri build --no-bundle` in the `app` job.
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
@@ -36,13 +36,16 @@ The Rust workspace is `crates/*`, with `kelpie-engine` so far. CI runs the four 
 
 Iterate with `cargo test --workspace --lib --bins`.
 
-The web frontend is at the repo root and runs in a plain browser. Slice 3 puts it in the Tauri window. pnpm 12 is pinned in `packageManager`.
+The web frontend is at the repo root, and `src-tauri` loads it in the Tauri window. pnpm 12 is pinned in `packageManager`.
 
 - `pnpm dev`: Vite on port 1520, `strictPort`, so a taken port fails the run instead of moving.
 - `pnpm build`: `tsc -b && vite build`. Output lands in `dist/`.
 - `pnpm typecheck`: `tsc -b`.
 - `pnpm lint`: `biome check .`.
 - `pnpm test`: `vitest run`.
+- `pnpm tauri dev`: the Tauri window on the Vite dev server. It runs `pnpm dev` first, then waits on `build.devUrl`.
+- `pnpm tauri build`: the release build, then the bundles. `cargo build --release` is not a release build: it leaves Tauri's `custom-protocol` feature off, so the binary loads `devUrl` instead of its own assets.
+- `pnpm tauri icon src-tauri/icons/app-icon.png`: regenerates `src-tauri/icons/` from the committed placeholder.
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
 - CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
@@ -57,6 +60,7 @@ The web frontend is at the repo root and runs in a plain browser. Slice 3 puts i
 - `docs/adr/`: decisions. Read the ones touching your area first.
 - `.claude/skills/`: read `tauri` before touching `src-tauri/`, `tauri.conf.json`, capabilities or any `invoke` call, since Tauri 2 differs from Tauri 1 in ways models get wrong. Read `lift-from-sk` before bringing in any SK code, and `zustand-subscription-patterns` before wiring a component to a store.
 - `docs/lifted.md`: every chunk lifted from SK, with what it handles and what was dropped.
+- `src-tauri/`: the `kelpie-app` crate, `tauri.conf.json`, `capabilities/` and `icons/`. `src-tauri/gen/` is the ACL schema `build.rs` writes, and is ignored.
 
 ## Style
 

@@ -11,6 +11,11 @@ export default defineConfig({
   server: {
     port: 1520,
     strictPort: true,
+    // `src-tauri` is a workspace member, so `tauri dev` writes its build output
+    // to the root `target/`. Vite would watch every file in it.
+    watch: {
+      ignored: ["**/target/**"],
+    },
   },
   // Vite matches each prefix with `key.startsWith(prefix)`, so a trailing `*`
   // matches no variable name at all. `TAURI_ENV_` is what lets slice 3 read
