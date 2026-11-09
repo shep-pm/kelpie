@@ -160,6 +160,32 @@ fn leftovers_of_a_dead_run_are_stopped_at_launch() {
     assert_gone(&pids);
 }
 
+#[test]
+fn a_record_in_hand_is_swept_and_not_the_file_that_path_holds_now() {
+    let dir = Dir::new();
+    let dead = RunId::new().unwrap();
+    let fresh = RunId::new().unwrap();
+
+    // The run that died: its record is in hand, and its group is still running
+    let old = ProcessTree::new(dead, dir.run_file()).unwrap();
+    let leftover = old.spawn(Command::new("sleep").arg("60")).unwrap().id();
+    let record = RunFile::read(&dir.run_file()).unwrap();
+
+    // The next launch takes the same path and starts a group of its own, which
+    // is what a reaper of the dead run can race with
+    let live = ProcessTree::new(fresh, dir.run_file()).unwrap();
+    let running = live.spawn(Command::new("sleep").arg("60")).unwrap().id();
+
+    sweep_record(&record).unwrap();
+
+    assert_gone(&[leftover]);
+    assert!(
+        sweep::read(running).is_some_and(|reading| !reading.zombie),
+        "the newer launch's group was stopped by a sweep of the run before it"
+    );
+    live.stop_all(GRACE).unwrap();
+}
+
 /// A process with no mark, alone in its group, and a run file that names it
 /// with `started` moved by `skew`
 fn recorded_stranger(dir: &Dir, skew: u64) -> Stranger {
@@ -271,6 +297,50 @@ fn a_group_member_that_ignores_term_is_killed_after_its_leader_is_gone() {
     sweep_leftovers(&dir.run_file()).unwrap();
 
     assert_gone(&pids);
+}
+
+/// A stand-in reaper: it blocks on its standard input and exits when it ends
+///
+/// The reaper binary is another crate's. The engine's half of the deal is what
+/// this tests: it starts the path it is given, holds a pipe to it, and leaves
+/// it unmarked.
+fn stand_in_reaper(dir: &Dir) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = dir.0.join("reaper");
+    fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn the_reaper_is_not_marked_with_the_run() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::with_reaper(&stand_in_reaper(&dir), run, dir.run_file()).unwrap();
+    let reaper = tree.reaper_id().unwrap();
+    let child = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+
+    let file = RunFile::read(&dir.run_file()).unwrap();
+    assert_eq!(
+        file.groups
+            .iter()
+            .map(|group| group.pid)
+            .collect::<Vec<_>>(),
+        [child.id()],
+        "the run file records the marked child, and not the reaper"
+    );
+
+    tree.stop_all(GRACE).unwrap();
+
+    assert_gone(&[child.id()]);
+    assert!(
+        sweep::read(reaper).is_some_and(|reading| !reading.zombie),
+        "the sweep of the run's mark left the unmarked reaper running"
+    );
+
+    drop(tree);
+    assert_gone(&[reaper]);
 }
 
 #[test]

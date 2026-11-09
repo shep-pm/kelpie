@@ -5,12 +5,16 @@
 //! ends every child and then whatever else still carries the mark, which
 //! catches a grandchild that left its group. [`sweep_leftovers`] does the same
 //! for a run that died without stopping, and belongs before the first spawn
-//! of the next one.
+//! of the next one. [`sweep_record`] is that sweep on a record already read,
+//! which is what a reaper holds.
+//!
+//! [`ProcessTree::with_reaper`] starts a reaper first, so a run that dies
+//! without quitting still has something that stops what it started.
 //!
 //! - The run file ([`run_file`]) lists live groups only, each with its leader's
 //!   start time, so a pid the OS has reused is never mistaken for a group.
 //! - On Linux the process becomes a child subreaper, so orphans come back to
-//!   it. Nothing reaps them yet; the reaper sidecar will.
+//!   it. The reaper ([`reaper`]) is what stops them when this process cannot.
 //! - Windows has no job object here yet, so a child's group is not stopped.
 //!
 //! # Quick start
@@ -33,7 +37,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -42,10 +46,12 @@ use shep_tree::{Signal, SweepReport, Tree};
 
 use crate::run::{ENV, RunId};
 
+pub mod reaper;
 pub mod run_file;
 mod sweep;
 
-pub use sweep::{sweep_leftovers, sweep_marked};
+pub use reaper::Reaper;
+pub use sweep::{sweep_leftovers, sweep_marked, sweep_record};
 
 use run_file::{Group, RunFile};
 
@@ -56,6 +62,9 @@ const POLL: Duration = Duration::from_millis(10);
 #[derive(Debug)]
 pub struct ProcessTree {
     shared: Arc<Shared>,
+    /// The reaper [`ProcessTree::with_reaper`] started, holding the pipe whose
+    /// close tells it to sweep. `None` from [`ProcessTree::new`].
+    reaper: Option<Reaper>,
 }
 
 #[derive(Debug)]
@@ -148,7 +157,35 @@ impl ProcessTree {
         shared.write(&State::default())?;
         Ok(Self {
             shared: Arc::new(shared),
+            reaper: None,
         })
+    }
+
+    /// Start a tree with its reaper already running
+    ///
+    /// The reaper at `reaper` is the first process of the run, before any
+    /// [`ProcessTree::spawn`] can start another. It is not a child of the tree:
+    /// [`ProcessTree::stop_all`] leaves it running, and dropping the
+    /// `ProcessTree` closes its pipe, which is the sweep a quit does not need
+    /// and a crash does.
+    ///
+    /// # Errors
+    ///
+    /// As [`ProcessTree::new`], or the reaper could not be started.
+    pub fn with_reaper(reaper: &Path, run: RunId, run_file: PathBuf) -> io::Result<Self> {
+        let mut tree = Self::new(run, run_file)?;
+        tree.reaper = Some(Reaper::start(
+            reaper,
+            &tree.shared.run,
+            &tree.shared.run_file,
+        )?);
+        Ok(tree)
+    }
+
+    /// The reaper's pid, `None` for a tree started by [`ProcessTree::new`]
+    #[must_use]
+    pub fn reaper_id(&self) -> Option<u32> {
+        self.reaper.as_ref().map(Reaper::id)
     }
 
     /// Start `command` in a group of its own, carrying this run's mark
