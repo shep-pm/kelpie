@@ -150,11 +150,13 @@ pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<Sessi
 /// Stop the turn in flight
 ///
 /// The turn ends as the harness reports it, normally with `TurnEnded` and
-/// `Cancelled`. Between turns it does nothing.
+/// `Cancelled`. Between turns, and while the first send is still opening the
+/// session, it does nothing: it never builds a session, and never waits for one,
+/// since a sync command runs on the main thread.
 #[tauri::command]
 #[specta::specta]
 pub fn pm_cancel(state: State<'_, AppState>) {
-    if let Ok((session, _)) = state.pm_session() {
+    if let Some(session) = state.held_session() {
         session.cancel();
     }
 }
@@ -163,7 +165,9 @@ pub fn pm_cancel(state: State<'_, AppState>) {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{Receiver, channel};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use kelpie_engine::run::RunId;
@@ -235,16 +239,7 @@ mod tests {
 
         /// `pm_send`, with the events it streams
         fn send(&self, text: &str) -> Events {
-            let (events, heard) = channel();
-            let channel = Channel::new(move |body| {
-                let InvokeResponseBody::Json(json) = body else {
-                    panic!("an event should be JSON");
-                };
-                let _ = events.send(serde_json::from_str::<SessionEvent>(&json).unwrap());
-                Ok(())
-            });
-            pm_send(self.state(), text.to_owned(), channel);
-            Events(heard)
+            send_to(self.state(), text)
         }
 
         fn projects(&self) -> Projects {
@@ -256,6 +251,19 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.dir);
         }
+    }
+
+    fn send_to(state: State<'_, AppState>, text: &str) -> Events {
+        let (events, heard) = channel();
+        let channel = Channel::new(move |body| {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("an event should be JSON");
+            };
+            let _ = events.send(serde_json::from_str::<SessionEvent>(&json).unwrap());
+            Ok(())
+        });
+        pm_send(state, text.to_owned(), channel);
+        Events(heard)
     }
 
     /// The events a channel carried, in order
@@ -397,6 +405,54 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn pm_cancel_with_no_session_opens_none() {
+        let opened = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&opened);
+        let chat = Chat::with(
+            Box::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Err("not wanted".to_owned())
+            }),
+            Box::new(|| Ok(None)),
+            None,
+        );
+        chat.state().set_project(chat.dir.clone()).unwrap();
+
+        pm_cancel(chat.state());
+
+        assert_eq!(opened.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn pm_cancel_does_not_wait_for_the_first_send_to_open() {
+        let (opening, started) = channel();
+        let (release, released) = channel::<()>();
+        let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+        let make = Chat::opener(&agent);
+        let released = Mutex::new(released);
+        let chat = Chat::with(
+            Box::new(move |opening_with| {
+                opening.send(()).unwrap();
+                released.lock().unwrap().recv_timeout(WAIT).unwrap();
+                make(opening_with)
+            }),
+            Box::new(|| Ok(None)),
+            None,
+        );
+        chat.state().set_project(chat.dir.clone()).unwrap();
+
+        std::thread::scope(|scope| {
+            let handle = chat.app.handle().clone();
+            let sending = scope.spawn(move || send_to(handle.state::<AppState>(), "Hi"));
+            started.recv_timeout(WAIT).unwrap();
+            // The opener is running and holds the session slot's place: this returns
+            pm_cancel(chat.state());
+            release.send(()).unwrap();
+            sending.join().unwrap().until_turn_ends();
+        });
     }
 
     #[test]

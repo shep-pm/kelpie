@@ -95,8 +95,11 @@ impl Projects {
     ///
     /// The file cannot be written.
     pub fn replace_all(&mut self, project: Project) -> io::Result<()> {
-        self.list = vec![project];
-        self.save()
+        let list = vec![project];
+        // Kept in memory only once it is on disk, so a failed write changes nothing
+        write(&self.file, &list)?;
+        self.list = list;
+        Ok(())
     }
 
     /// Keep `session` as the PM session of the project `id`, when it is not already
@@ -112,20 +115,20 @@ impl Projects {
             return Ok(());
         }
         project.pm_session = Some(session);
-        self.save()
+        write(&self.file, &self.list)
     }
+}
 
-    /// Write the list beside the file and rename it into place, so a crash
-    /// leaves the old list or the new one
-    fn save(&self) -> io::Result<()> {
-        if let Some(folder) = self.file.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let json = serde_json::to_vec_pretty(&self.list).map_err(io::Error::other)?;
-        let partial = self.file.with_extension("json.partial");
-        fs::write(&partial, json)?;
-        fs::rename(&partial, &self.file)
+/// Write `list` beside `file` and rename it into place, so a crash leaves the
+/// old list or the new one
+fn write(file: &Path, list: &[Project]) -> io::Result<()> {
+    if let Some(folder) = file.parent() {
+        fs::create_dir_all(folder)?;
     }
+    let json = serde_json::to_vec_pretty(list).map_err(io::Error::other)?;
+    let partial = file.with_extension("json.partial");
+    fs::write(&partial, json)?;
+    fs::rename(&partial, file)
 }
 
 /// Asks the maintainer for a folder: the path they picked, `None` when they closed the dialog
@@ -161,8 +164,12 @@ pub struct AppState {
     data_dir: PathBuf,
     tree: Arc<ProcessTree>,
     projects: Arc<Mutex<Projects>>,
-    /// The first project's PM, `None` until the first send
+    /// The first project's PM, `None` until the first send. Held only for a
+    /// look or a swap, never while the opener runs.
     session: Mutex<Option<Arc<Session>>>,
+    /// Held while the PM is opened or the project replaced, so two sends open
+    /// one session and a replaced project never keeps the old one
+    opening: Mutex<()>,
     opener: Opener,
     picker: Picker,
 }
@@ -200,6 +207,7 @@ impl AppState {
             tree,
             projects: Arc::new(Mutex::new(projects)),
             session: Mutex::new(None),
+            opening: Mutex::new(()),
             opener,
             picker,
         })
@@ -253,9 +261,9 @@ impl AppState {
             path,
             pm_session: None,
         };
-        let mut session = lock(&self.session);
+        let _opening = lock(&self.opening);
         lock(&self.projects).replace_all(project)?;
-        *session = None;
+        *lock(&self.session) = None;
         Ok(())
     }
 
@@ -266,7 +274,7 @@ impl AppState {
     /// No project is picked yet, or the opener could not build the session. The
     /// text is for the maintainer to read.
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle), String> {
-        let mut held = lock(&self.session);
+        let _opening = lock(&self.opening);
         let project = lock(&self.projects)
             .first()
             .cloned()
@@ -275,8 +283,8 @@ impl AppState {
             id: project.id.clone(),
             projects: Arc::clone(&self.projects),
         };
-        if let Some(session) = held.as_ref() {
-            return Ok((Arc::clone(session), handle));
+        if let Some(session) = self.held_session() {
+            return Ok((session, handle));
         }
         let state_dir = self
             .data_dir
@@ -289,8 +297,17 @@ impl AppState {
             project: &project,
             state_dir: &state_dir,
         })?);
-        *held = Some(Arc::clone(&session));
+        *lock(&self.session) = Some(Arc::clone(&session));
         Ok((session, handle))
+    }
+
+    /// The PM session when one is open, `None` when none is
+    ///
+    /// Never builds one and never waits for one being built, so it is safe on
+    /// the main thread.
+    #[must_use]
+    pub fn held_session(&self) -> Option<Arc<Session>> {
+        lock(&self.session).as_ref().map(Arc::clone)
     }
 
     /// Stop every process of this run
@@ -395,6 +412,47 @@ mod tests {
             ["a", "b"]
         );
         assert_eq!(reloaded.list()[1].pm_session, Some("s-2".into()));
+    }
+
+    #[test]
+    fn a_list_that_cannot_be_written_is_not_kept_in_memory() {
+        let dir = Dir::new();
+        let file = dir.0.join("projects.json");
+        let mut projects = Projects::load(file.clone()).unwrap();
+        let old = Project {
+            id: "old".to_owned(),
+            path: PathBuf::from("/work/old"),
+            pm_session: None,
+        };
+        projects.replace_all(old.clone()).unwrap();
+        // A folder where the partial file goes, so the write fails
+        fs::create_dir(file.with_extension("json.partial")).unwrap();
+
+        let new = Project {
+            id: "new".to_owned(),
+            path: PathBuf::from("/work/new"),
+            pm_session: None,
+        };
+        projects.replace_all(new).unwrap_err();
+
+        assert_eq!(projects.list(), [old]);
+    }
+
+    #[test]
+    fn a_project_that_cannot_be_kept_leaves_the_session_of_the_old_one() {
+        let dir = Dir::new();
+        let state = AppState::open(
+            dir.0.clone(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+        )
+        .unwrap();
+        state.set_project(PathBuf::from("/work/old")).unwrap();
+        fs::create_dir(dir.0.join("projects.json.partial")).unwrap();
+
+        state.set_project(PathBuf::from("/work/new")).unwrap_err();
+
+        assert_eq!(state.project_path(), Some(PathBuf::from("/work/old")));
     }
 
     #[test]

@@ -34,7 +34,9 @@ export const commands = {
 	 *  Stop the turn in flight
 	 * 
 	 *  The turn ends as the harness reports it, normally with `TurnEnded` and
-	 *  `Cancelled`. Between turns it does nothing.
+	 *  `Cancelled`. Between turns, and while the first send is still opening the
+	 *  session, it does nothing: it never builds a session, and never waits for one,
+	 *  since a sync command runs on the main thread.
 	 */
 	pmCancel: () => __TAURI_INVOKE<void>("pm_cancel"),
 };
