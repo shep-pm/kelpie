@@ -14,7 +14,7 @@ The handoff from design to code: the tokens, the rules, and an HTML preview of e
 | `components/<Name>/preview.html` | One static HTML rendition per component or screen. |
 | `components/<Name>/README.md` | What it is, what the consumer provides, which shadcn component it builds on, and its rules. |
 | `components/bundle.css` | The previews' stylesheet. Reference for values and states, not code to ship. |
-| `tokens.css`, `fonts/` | What the previews load. The app does not use them. |
+| `tokens.css`, `fonts/` | What the previews load. The app does not use them. Their licences (SIL OFL 1.1) are in `fonts/` too. |
 | `assets/logos/` | The app icon and the mascot, with their usage rules. |
 
 ## Already in the app
