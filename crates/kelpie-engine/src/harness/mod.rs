@@ -35,8 +35,8 @@
 
 use std::env::{self, consts::EXE_SUFFIX};
 use std::ffi::OsStr;
-use std::fs;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod claude;

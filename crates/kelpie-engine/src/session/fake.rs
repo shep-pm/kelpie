@@ -1,9 +1,13 @@
 //! A scripted ACP agent that runs in-process
 //!
 //! [`FakeAgent`] speaks ACP from a thread of the test's own process, so a test
-//! of a [`Session`] runs no process and no model. It answers from a script:
+//! of a [`Session`] runs no harness and no model. It answers from a script:
 //! what it advertises, which sessions it knows, and the [`Turn`]s it plays,
 //! one for each prompt. It records every request it gets ([`FakeAgent::calls`]).
+//!
+//! A turn can also run a command in a process group of its own, as a harness's
+//! own shell tool does, which is how a test holds that a stop of the run reaches
+//! what the harness started ([`Turn::command_in_a_group`]).
 //!
 //! # Quick start
 //!
@@ -26,8 +30,12 @@
 //! ```
 
 use std::collections::VecDeque;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Child;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -49,6 +57,8 @@ use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error, Untyped
 use futures::channel::oneshot;
 use futures::future::select;
 use serde::Serialize;
+
+use crate::run::{ENV, RunId};
 
 use super::{Choice, Extension, Launch, Link, Session, SessionId};
 
@@ -88,6 +98,20 @@ enum Step {
     },
     UntilCancelled,
     Exit,
+    /// A command run in a process group of its own, carrying the run's mark
+    ///
+    /// What a harness's own shell tool does: goose puts every command it runs in
+    /// a group of its own (ADR 0007), which leaves the harness's group, so only
+    /// the mark in its environment reaches it (ADR 0001).
+    #[cfg(unix)]
+    Command {
+        /// What the child carries `KELPIE_RUN` as
+        run: String,
+        /// The program to run
+        program: PathBuf,
+        /// Its arguments
+        args: Vec<OsString>,
+    },
 }
 
 /// The reply to one prompt
@@ -180,6 +204,31 @@ impl Turn {
         self
     }
 
+    /// Run `program` with `args` in a process group of its own, carrying the
+    /// run's mark
+    ///
+    /// As a harness's own shell tool does: the child is its group's leader, so
+    /// it is out of reach of a stop of the harness's group, and only
+    /// `KELPIE_RUN=<run>` names it (ADR 0001, ADR 0007). [`FakeAgent::spawned`]
+    /// and [`FakeAgent::wait_spawned`] are what a test sees it through.
+    ///
+    /// Unix only: kelpie has no job object yet (`crate::tree`).
+    #[cfg(unix)]
+    #[must_use]
+    pub fn command_in_a_group(
+        mut self,
+        run: &RunId,
+        program: impl Into<PathBuf>,
+        args: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Self {
+        self.steps.push(Step::Command {
+            run: run.to_string(),
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        });
+        self
+    }
+
     /// Wait for `session/cancel`, then end the turn `cancelled`
     #[must_use]
     pub fn until_cancelled(mut self) -> Self {
@@ -245,6 +294,9 @@ struct Shared {
     turns: Mutex<VecDeque<Turn>>,
     launches: AtomicUsize,
     sessions: AtomicUsize,
+    /// The children a turn started in groups of their own, oldest first
+    #[cfg(unix)]
+    spawned: Mutex<Vec<Child>>,
 }
 
 /// A scripted ACP agent
@@ -378,6 +430,29 @@ impl FakeAgent {
     #[must_use]
     pub fn launches(&self) -> usize {
         self.shared.launches.load(Ordering::SeqCst)
+    }
+
+    /// The pid of every child a turn started with [`Turn::command_in_a_group`],
+    /// oldest first
+    #[cfg(unix)]
+    #[must_use]
+    pub fn spawned(&self) -> Vec<u32> {
+        lock(&self.shared.spawned).iter().map(Child::id).collect()
+    }
+
+    /// Wait for every child a turn started to exit, oldest first
+    ///
+    /// Takes them out of the agent, so a second call waits for nothing.
+    ///
+    /// # Errors
+    ///
+    /// The OS cannot report a child's exit.
+    #[cfg(unix)]
+    pub fn wait_spawned(&self) -> Vec<io::Result<std::process::ExitStatus>> {
+        lock(&self.shared.spawned)
+            .drain(..)
+            .map(|mut child| child.wait())
+            .collect()
     }
 
     fn record(&self, method: &str, params: &impl Serialize) {
@@ -611,6 +686,10 @@ impl FakeAgent {
                     let message = UntypedMessage::new(&method, &params)?;
                     cx.send_notification(message)?
                 }
+                #[cfg(unix)]
+                Step::Command { run, program, args } => {
+                    self.spawn_command(&run, &program, &args)?
+                }
                 Step::UntilCancelled => {
                     if let Some(cancelled) = cancelled.take() {
                         let _ = cancelled.await;
@@ -632,6 +711,26 @@ impl FakeAgent {
             }
         }
         Ok(PromptResponse::new(turn.stop).usage(turn.usage))
+    }
+
+    /// Start `program args` in a group of its own, carrying the run's mark
+    ///
+    /// The group is the point: the child leaves the group a stop of the harness
+    /// reaches, and only `KELPIE_RUN` names it (ADR 0001, ADR 0007).
+    #[cfg(unix)]
+    fn spawn_command(&self, run: &str, program: &Path, args: &[OsString]) -> Result<(), Error> {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut command = std::process::Command::new(program);
+        command.args(args).env(ENV, run).process_group(0);
+        let child = command.spawn().map_err(|error| {
+            Error::internal_error().data(serde_json::Value::from(format!(
+                "the fake could not run {}: {error}",
+                program.display()
+            )))
+        })?;
+        lock(&self.shared.spawned).push(child);
+        Ok(())
     }
 }
 

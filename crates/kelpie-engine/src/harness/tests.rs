@@ -235,7 +235,10 @@ fn no_goose_on_path_says_to_install_it() {
 
     for path in [path_of([empty.clone()]), path_of([broken.clone()])] {
         let error = build_on(&path, &provider("ollama", None)).unwrap_err();
-        assert!(matches!(error, HarnessError::NotInstalled { .. }), "{error}");
+        assert!(
+            matches!(error, HarnessError::NotInstalled { .. }),
+            "{error}"
+        );
         assert!(error.to_string().contains("goose is not installed"));
         assert!(error.to_string().contains("Install goose"));
     }

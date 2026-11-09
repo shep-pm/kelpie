@@ -162,4 +162,3 @@ pub(super) fn harness_on_path(
         extensions: vec![Extension::ClaudeSdkMessage],
     })
 }
-
