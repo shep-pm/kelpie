@@ -8,7 +8,9 @@ set -eu
 CARGO_TARGET_DIR="$HOME/kelpie-e2e-target"
 export CARGO_TARGET_DIR
 
-mkdir -p test-results
+# A failed run must not leave the last run's results to be copied back.
+rm -rf test-results
+mkdir test-results
 
 pnpm install --frozen-lockfile
 pnpm tauri build --debug --no-bundle
