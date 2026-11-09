@@ -17,8 +17,9 @@
 //! through the harness's group (ADR 0001, ADR 0007).
 //!
 //! A sandboxed session (ADR 0005) lets through the host of the provider's
-//! address, `localhost` included, and sets goose's `auto` mode, which approves
-//! every call.
+//! address, or goose's default host for the provider when it has none,
+//! `localhost` included, and sets goose's `auto` mode, which approves every
+//! call.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -108,13 +109,44 @@ pub(super) fn harness_on_path(
         new_session_meta: None,
         // kelpie reads no goose notification beyond ACP's own
         extensions: Vec::new(),
-        hosts: provider
-            .host
-            .iter()
-            .filter_map(|url| host_of(url))
-            .collect(),
+        hosts: hosts_of(provider),
         installs,
         unprompted: Some(UNPROMPTED.to_owned()),
+    })
+}
+
+/// The hosts a sandboxed session on `provider` may reach
+///
+/// The host of the address the person gave, or else the host goose's own
+/// default for the provider answers on, so a session on `anthropic` or `openai`
+/// with no address still reaches its model. A provider that is in neither place
+/// has no host here, and a sandboxed session on it reaches only what the
+/// project's allowlist names.
+fn hosts_of(provider: &Provider) -> Vec<String> {
+    match &provider.host {
+        Some(address) => host_of(address).into_iter().collect(),
+        None => default_host(&provider.name)
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The host goose's own default for a provider answers on, for the providers
+/// whose default is one host
+///
+/// Kelpie names no provider of its own (ADR 0006): this is only where goose
+/// sends a session that gave no address, so the sandbox lets that through.
+fn default_host(provider: &str) -> Option<&'static str> {
+    Some(match provider {
+        "anthropic" => "api.anthropic.com",
+        "openai" => "api.openai.com",
+        "google" => "generativelanguage.googleapis.com",
+        "openrouter" => "openrouter.ai",
+        "groq" => "api.groq.com",
+        "xai" => "api.x.ai",
+        "ollama" => "localhost",
+        _ => return None,
     })
 }
 
@@ -123,8 +155,7 @@ pub(super) fn harness_on_path(
 ///
 /// The sandbox lets this host through, so the session reaches the model the
 /// person chose and nothing else (ADR 0005). `None` for an address with no host
-/// in it. A provider with no address of its own has no host here, and a sandboxed
-/// session on it reaches only what the project's allowlist names.
+/// in it.
 fn host_of(address: &str) -> Option<String> {
     let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next()?;

@@ -14,6 +14,7 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -44,7 +45,11 @@ fn main() {
         {
             continue;
         }
+        let skipped = SKIPPED.load(Ordering::SeqCst);
         match panic::catch_unwind(AssertUnwindSafe(test)) {
+            Ok(()) if SKIPPED.load(Ordering::SeqCst) > skipped => {
+                println!("test {name} ... SKIPPED");
+            }
             Ok(()) => println!("test {name} ... ok"),
             Err(_) => {
                 println!("test {name} ... FAILED");
@@ -149,8 +154,15 @@ fn sh(sandbox: &Sandbox, script: &str) -> Output {
         .expect("the sandbox runs sh")
 }
 
-/// Set to make a host that cannot run a sandbox fail the tests, not skip them
-const REQUIRE: &str = "KELPIE_REQUIRE_SANDBOX";
+/// Set to skip, not fail, the tests on a host that cannot run a sandbox
+///
+/// Off by default, so a runner that cannot run one is red and not a false
+/// green. A skipped test is printed as `SKIPPED`, never as `ok`.
+const SKIP: &str = "KELPIE_SKIP_SANDBOX_TESTS";
+
+/// How many tests have skipped themselves, which `main` reads to print each
+/// test's verdict
+static SKIPPED: AtomicUsize = AtomicUsize::new(0);
 
 /// What bwrap prints first when the kernel gives it no user namespace, as the
 /// runner's does while `kernel.apparmor_restrict_unprivileged_userns` is on
@@ -163,9 +175,9 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
 ///
 /// A refusal test that ran in a sandbox which never started would pass, as a
 /// command that did not run leaves no file and exits non-zero. So each test
-/// asks for a sandbox that has run a command first, and a host that cannot is
-/// said so loudly instead of counted as a pass. `KELPIE_REQUIRE_SANDBOX` turns
-/// that into a failure, for a runner that is meant to hold the guarantee.
+/// asks for a sandbox that has run a command first, and a host that cannot
+/// fails the test. `KELPIE_SKIP_SANDBOX_TESTS` skips it instead, shown as
+/// `SKIPPED`, for a host known not to run one.
 fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
     let sandbox = scratch.sandbox(program);
     let probe = sh(&sandbox, "true");
@@ -174,9 +186,10 @@ fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sand
     }
     let stderr = String::from_utf8_lossy(&probe.stderr);
     assert!(
-        host_refuses_sandboxes(&stderr) && std::env::var_os(REQUIRE).is_none(),
-        "`true` did not run in the sandbox: {probe:?}"
+        host_refuses_sandboxes(&stderr) && std::env::var_os(SKIP).is_some(),
+        "`true` did not run in the sandbox: {probe:?}\nThis host cannot run a sandbox. Set {SKIP} to skip these tests."
     );
+    SKIPPED.fetch_add(1, Ordering::SeqCst);
     println!(
         "SKIPPED {test}: this host cannot run a sandbox ({})",
         stderr.trim()

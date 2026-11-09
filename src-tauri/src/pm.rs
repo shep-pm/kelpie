@@ -5,6 +5,10 @@
 //! process: the engine's session does, through the process tree (ADR 0001), and
 //! the app only forwards what it says.
 //!
+//! The PM runs inside a crabpot sandbox: it reads the project and the folders
+//! beside it, writes its state folder alone, and reaches its model's host
+//! (ADR 0005). The project's settings hold no allowlist yet, so it is empty.
+//!
 //! The PM runs on [`PM_DEFAULT`] until the settings page holds the choice
 //! (ADR 0006). Its bridge is installed on the first send, and whatever goes
 //! wrong before the session can start reaches the chat as a
@@ -16,6 +20,7 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Agents, PM};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
+use kelpie_engine::sandbox::{self, Sandbox};
 use kelpie_engine::session::{Choice, Session, SessionEvent};
 use kelpie_engine::settings::Harness;
 use tauri::State;
@@ -46,12 +51,15 @@ pub const PM_DEFAULT: PmDefault = PmDefault {
 
 /// The app's [`Opener`](crate::state::Opener): the PM on [`PM_DEFAULT`]
 ///
-/// Installs the bridge if it is not yet, and builds the session on it.
+/// Installs the bridge if it is not yet, confines the harness in a sandbox of
+/// its own, and builds the session on both. The sandbox lives as long as the
+/// session does.
 ///
 /// # Errors
 ///
-/// The state folder cannot be made, the bridge cannot be installed, or the
-/// harness is not installed or has no login. The text says which.
+/// The state folder cannot be made, the bridge cannot be installed, the
+/// harness is not installed or has no login, or the sandbox cannot start. The
+/// text says which.
 pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
     let Opening {
         tree,
@@ -74,9 +82,20 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         model: Some(PM_DEFAULT.model.to_owned()),
         effort: Some(PM_DEFAULT.effort.to_owned()),
     };
-    let session = Session::new(
+    let sandbox = Sandbox::start(
+        &harness,
+        &sandbox::Project {
+            folder: &project.path,
+            network_allowlist: &[],
+            read_anywhere: false,
+        },
+        state_dir,
+    )
+    .map_err(|e| format!("could not start the PM's sandbox: {e}"))?;
+    let session = Session::sandboxed(
         Arc::clone(tree),
         harness,
+        sandbox,
         project.path.clone(),
         project.pm_session.clone(),
         choice,

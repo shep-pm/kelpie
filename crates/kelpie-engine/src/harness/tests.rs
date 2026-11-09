@@ -500,14 +500,43 @@ fn goose_names_the_host_of_its_providers_address() {
 }
 
 #[test]
-fn goose_with_no_address_names_no_host_and_still_names_its_install_and_mode() {
+fn goose_with_no_address_names_the_default_host_of_a_provider_it_knows() {
     let dir = goose_installed();
 
-    let harness = build_on(&path_of([dir.clone()]), &provider("ollama", None)).unwrap();
+    for (name, host) in [
+        ("anthropic", "api.anthropic.com"),
+        ("openai", "api.openai.com"),
+        ("ollama", "localhost"),
+    ] {
+        let harness = build_on(&path_of([dir.clone()]), &provider(name, None)).unwrap();
+
+        assert_eq!(harness.hosts, [host], "{name}");
+    }
+}
+
+#[test]
+fn goose_with_no_address_on_a_provider_it_does_not_know_names_no_host_and_still_its_install_and_mode()
+ {
+    let dir = goose_installed();
+
+    let harness = build_on(&path_of([dir.clone()]), &provider("acme", None)).unwrap();
 
     assert!(harness.hosts.is_empty());
     assert!(harness.installs.contains(&dir), "{:?}", harness.installs);
     assert_eq!(harness.unprompted.as_deref(), Some("auto"));
+}
+
+#[test]
+fn an_address_the_person_gave_wins_over_the_providers_default_host() {
+    let dir = goose_installed();
+
+    let harness = build_on(
+        &path_of([dir]),
+        &provider("openai", Some("https://proxy.example.com:8443/v1")),
+    )
+    .unwrap();
+
+    assert_eq!(harness.hosts, ["proxy.example.com"]);
 }
 
 #[test]
