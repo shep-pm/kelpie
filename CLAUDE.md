@@ -38,7 +38,7 @@ Each issue links its note. Workspace, CI and other plumbing with no behaviour of
 
 ## Commands
 
-The Rust workspace is `crates/*` plus `src-tauri`, with `kelpie-engine` and `kelpie-app`. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.90 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`, plus `pnpm tauri build --no-bundle` in the `app` job.
+The Rust workspace is `crates/*` plus `src-tauri`, with `kelpie-engine` and `kelpie-app`. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.93 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`, plus `pnpm tauri build --no-bundle` in the `app` job.
 
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
