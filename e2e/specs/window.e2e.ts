@@ -15,6 +15,14 @@ describe("the app window", () => {
   });
 
   it("saves a screenshot of the page", async () => {
+    // Text stays invisible until the web fonts load, and the capture is a
+    // frame, so wait for both before taking it.
+    await browser.execute(async () => {
+      await document.fonts.ready;
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+    });
     mkdirSync(resultsDir, { recursive: true });
     await browser.saveScreenshot(join(resultsDir, "window.png"));
   });
