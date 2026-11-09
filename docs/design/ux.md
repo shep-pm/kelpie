@@ -102,7 +102,7 @@ Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, st
 Both get UI in Phase 1. Their own note is `docs/design/settings.md`.
 
 1. **No setting is file-only.** A setting gets UI in the slice that introduces it. Each form is generated from one schema, so form, validation and docs agree.
-2. **Stored as JSON** with a `$schema`, in kelpie's own data folder, not the repo, since allowlists and models are personal and a repo can be public.
+2. **Stored as JSON** with a `$schema`, in kelpie's own config folder (`~/.config/kelpie`, ADR 0008), not the repo, since allowlists and models are personal and a repo can be public.
 3. **Layers:** built-in, then global, then project. Each field shows which layer its value comes from, with a reset to that layer. Agent files use the same component, and `extends` is one more layer.
 4. **Agent editor:** global agents in Phase 1, per project later. SK's agent format comes over whole with its tests: its frontmatter, `extends` with `kelpie:<name>` built-ins, `_`-prefixed files ignored. A frontmatter form, an MDX body (chelone's components), and a preview of the agent with its `extends` chain resolved.
 
