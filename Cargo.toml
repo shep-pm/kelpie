@@ -28,6 +28,10 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 # `derive` is the `JsonSchema` derive; `std` is off because no schema type here
 # is a std one.
 schemars = { version = "1.2.3", default-features = false, features = ["derive"] }
+# An agent file's YAML frontmatter, read into typed keys that refuse an unknown
+# one by name (`docs/design/settings.md`, Agent files). SK's choice, lifted with
+# the loader.
+serde-saphyr = { version = "1", default-features = false, features = ["deserialize"] }
 # The ACP client (ADR 0007). `unstable_end_turn_token_usage` is the per-turn
 # token counts on a prompt's response; `process` stays off, since every process
 # goes through the engine's tree (ADR 0001).

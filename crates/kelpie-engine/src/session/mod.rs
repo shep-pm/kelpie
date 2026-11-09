@@ -144,6 +144,7 @@ struct Setup {
     resume: Option<SessionId>,
     choice: Choice,
     meta: Option<serde_json::Value>,
+    instructions: Option<String>,
 }
 
 /// One conversation with a harness
@@ -155,6 +156,7 @@ pub struct Session {
     project: PathBuf,
     choice: Choice,
     meta: Option<serde_json::Value>,
+    instructions: Option<String>,
     id: Arc<Mutex<Option<SessionId>>>,
     /// The running worker's inbox, `None` before the first send
     worker: Mutex<Option<UnboundedSender<Command>>>,
@@ -203,9 +205,24 @@ impl Session {
             project,
             choice,
             meta,
+            instructions: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
         }
+    }
+
+    /// Give the session instructions, such as its agent's body
+    ///
+    /// A harness that advertises `sessionCapabilities.systemPrompt` gets them
+    /// as its `systemPrompt` in `append` mode, on a new session and on a load or
+    /// a resume alike. For any other harness they lead the first message of a
+    /// new session, and a resumed one has them in its history already. Blank
+    /// instructions are none. Call this before the first send.
+    #[must_use]
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        let instructions = instructions.into();
+        self.instructions = (!instructions.trim().is_empty()).then_some(instructions);
+        self
     }
 
     /// The session's id: the one to resume, then the one the harness gave
@@ -241,6 +258,7 @@ impl Session {
             resume: lock(&self.id).clone(),
             choice: self.choice.clone(),
             meta: self.meta.clone(),
+            instructions: self.instructions.clone(),
         };
         let launcher = Arc::clone(&self.launcher);
         let id = Arc::clone(&self.id);
