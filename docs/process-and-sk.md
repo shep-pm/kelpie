@@ -151,7 +151,7 @@ Measured at origin/main:
 | Chunk | Lines | Ease |
 |---|---|---|
 | `protocol` | 1.2k | Easy. Becomes kelpie's own |
-| claude adapter (stream parsing) | part of the 22k | Medium. Shep coupling must go |
+| claude adapter: resume argv, the no-session error | part of the 22k | Easy. SK runs claude with `--output-format json`, so kelpie's stream-json reader is new code (#12) |
 | work_item, board, lease | ~8k | Medium |
 | PM and ruling | ~11k | Hard. Tangled with the runner |
 | fence, srt, confine | ~6k | Medium. Lift with its tests |
@@ -166,8 +166,8 @@ Measured at origin/main:
 
 | Phase | Kelpie | SK |
 |---|---|---|
-| 0, now | Workspace: app, `kelpie-engine`, `kelpie-protocol` (from SK's), shep-tree | Builds kelpie as a shep dog, unchanged |
-| 1, tracer | **PM chat:** one claude session in the tree, streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
+| 0, now | Workspace: app and `kelpie-engine` (#5). `kelpie-protocol` and shep-tree wait for Phase 1, where they are first used | Builds kelpie as a shep dog, unchanged |
+| 1, tracer (#9) | **PM chat:** one claude session in the tree, streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
 | 2 | Process panel, terminal tab (pty), worker sessions, adapters lifted | Builds it. SK's board view is optional and read-only |
 | 3 | Work-item loop, review and leases lifted. Kelpie builds kelpie | Archived |
 
