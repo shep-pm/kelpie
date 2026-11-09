@@ -50,7 +50,7 @@ What the interface carries, with each harness saying which it supports in ACP's 
 - pick model and effort
 - usage per turn, including what the prompt cache read and wrote
 
-Each harness runs the person's own install and login. Kelpie never ships a harness or a login of its own. A bridge is a prebuilt executable from the ACP registry, checked against the registry's sha256. Phase 1 pins one version of each in kelpie's code. Updating bridges from the registry, with an alert and a swap between turns, gets its own note later.
+Each harness runs the person's own install and login. Kelpie never ships a harness or a login of its own. A bridge is a prebuilt executable from the ACP registry, checked against the registry's sha256. Kelpie's code pins one version of each, and `docs/design/bridge-updates.md` keeps them current from the registry.
 
 goose puts its shell commands in process groups of their own, so stopping a session stops every process carrying its `KELPIE_RUN`, not only the harness's group (ADR 0001). A test holds it.
 

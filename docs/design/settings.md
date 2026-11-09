@@ -52,6 +52,7 @@ The form is rendered by `@rjsf/shadcn`. The layered field is its first test: if 
 | Network allowlist | Project | Domains a sandbox request saved with *Allow for this project* (ADR 0005) |
 | Read anywhere by default | Project | Off (`ux.md`, Sandbox) |
 | Harness global folder | Project | Off. Reads `~/.claude` or goose's own config when on (ADR 0006) |
+| Bridge updates | Global | Per bridge: *Registry, automatic* by default, *Registry, ask first*, or *Kelpie's pin* (`bridge-updates.md`) |
 
 ### Agent files
 
