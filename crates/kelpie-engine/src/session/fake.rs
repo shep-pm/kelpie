@@ -33,7 +33,9 @@ use std::collections::VecDeque;
 #[cfg(unix)]
 use std::ffi::OsString;
 use std::io;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::process::Child;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,6 +60,8 @@ use futures::channel::oneshot;
 use futures::future::select;
 use serde::Serialize;
 
+// Only the unix step uses them: a harness's command, and the run it carries
+#[cfg(unix)]
 use crate::run::{ENV, RunId};
 
 use super::{Choice, Extension, Launch, Link, Session, SessionId};

@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, Permissions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -40,6 +40,7 @@ fn installed_with(cmd: &str) -> PathBuf {
     fs::write(&program, "#!/bin/sh\necho kelpie harness fixture\n").unwrap();
     #[cfg(unix)]
     {
+        use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&program, Permissions::from_mode(0o755)).unwrap();
     }
