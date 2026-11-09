@@ -2,7 +2,7 @@
 
 A desktop app where people and agents plan, run and follow work on a codebase. Vocabulary accepted on 2026-11-08, from the terms settled in `docs/process-and-sk.md` and ADRs 0001 to 0004.
 
-shep's words (sheep, flock, lamb, dog, the shepherd) mean shep's things only. Kelpie's processes are not sheep. SK's own terms (project, work item, ruling, lease) come over with the code that uses them, when it is lifted.
+shep's words (sheep, flock, lamb, dog, the shepherd) mean shep's things only. Kelpie's processes are not sheep. SK's own terms (ruling, lease) come over with the code that uses them, when it is lifted. SK's work item is kelpie's ticket.
 
 ## Who
 
@@ -21,6 +21,40 @@ _Avoid_: lamb, runner
 **SK**:
 shep-kelpie, the shep dog that builds kelpie until kelpie can build itself, and is then archived.
 _Avoid_: kelpie (for SK), the backend
+
+## Projects
+
+**Project**:
+One codebase kelpie works on, with its own PM, graph, board and git history. Projects sit in a rail down the side of the window.
+_Avoid_: repo (the GitHub side), workspace
+
+**Pillar**:
+One of a project's four tabs: Graph, PM, Board and Git. The graph is the default, and each project reopens on the pillar it was left on.
+_Avoid_: view, page, mode
+
+**Graph**:
+The picture of a project built from its code, which grows as the code changes without anyone asking.
+_Avoid_: map, code map, diagram
+
+**Area**:
+A named part of a project on the graph, drawn by the maintainer or the PM, with the code under it. An area for a planned feature may hold no code yet.
+_Avoid_: module, region, cluster, component
+
+**Ticket**:
+An item on a project's board: one piece of work and everything known about it, including its conversation with the PM.
+_Avoid_: work item, card, issue (the GitHub side)
+
+**Draft ticket**:
+A ticket not yet filed on GitHub, while the maintainer and the PM shape it.
+_Avoid_: idea, proposal
+
+**Issue**:
+GitHub's record of a ticket, once filed. The ticket holds more than its issue does.
+_Avoid_: ticket (for the GitHub side)
+
+**Link**:
+A ticket's tie to the code: an area, a symbol, a file or lines within a symbol, kept pointing at the right place as the code moves.
+_Avoid_: anchor, reference, tag
 
 ## Processes
 
