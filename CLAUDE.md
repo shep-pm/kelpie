@@ -13,6 +13,18 @@ From `docs/adr/0001-kelpie-owns-its-whole-process-tree.md`:
 - Every child runs in its own process group (a job object on Windows) with `KELPIE_RUN=<run id>` in its environment.
 - When kelpie quits, every process stops. Sessions are what persist: the next launch resumes them, and workers come back paused.
 
+## Design before building
+
+The maintainer asked for this gate and wants it held even when they push to skip it. Say so plainly when a feature is being rushed.
+
+A feature's issues go `ready-for-agent` only once its design note in `docs/design/<feature>.md` has, confirmed by the maintainer:
+
+1. **Use case:** who does what, and why it matters to them.
+2. **Design:** the flow or a UI sketch, its terms in `GLOSSARY.md`, and an ADR where a decision is hard to reverse.
+3. **Synergy:** what it reuses or connects to (the PM, sessions, the process tree, the board), and what it would duplicate.
+
+Each issue links its note. Workspace, CI and other plumbing with no behaviour of its own need no note.
+
 ## Commands
 
 No code yet. The Phase 0 workspace adds the app and the Rust crates, and their commands go here (`docs/process-and-sk.md`, Order of work).
