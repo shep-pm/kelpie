@@ -1,0 +1,15 @@
+[package]
+name = "kelpie-engine"
+description = "The part of kelpie that starts, watches and stops every process, and holds the sessions"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+getrandom.workspace = true
