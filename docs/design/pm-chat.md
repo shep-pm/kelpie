@@ -2,7 +2,7 @@
 
 Phase 1's tracer bullet (#9, ADR 0004): the maintainer talks to a project's PM in kelpie's window. It places itself in `docs/design/ux.md` (The PM and threads, Sandbox, Settings and agents). Terms are in `GLOSSARY.md`.
 
-**Status:** draft, settled with the maintainer on 2026-11-09, awaiting their confirmation.
+**Status:** confirmed by the maintainer on 2026-11-09.
 
 ## Use case
 
