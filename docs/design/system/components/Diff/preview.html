@@ -1,0 +1,18 @@
+<!-- @dsCard group="Code" height=330 subtitle="A unified diff: added and removed lines, changed words, hunk header" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>Diff</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+<div class="k-pad" style="max-width:720px">
+<div class="k-diff">
+ <div class="k-diff-head"><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg><span class="path">crates/reaper/src/tree.rs</span><span class="k-grow"></span>
+  <span class="add">+3</span><span class="del">−2</span><span class="bars"><i class="a"></i><i class="a"></i><i class="a"></i><i class="d"></i><i class="d"></i></span></div>
+ <table><tr class="hunk"><td class="n"></td><td class="n"></td><td class="s"></td><td class="c">@@ -41,9 +41,10 @@ impl ProcessTree</td></tr><tr class=""><td class="n">41</td><td class="n">41</td><td class="s"> </td><td class="c">    pub fn reap(&amp;mut self) -&gt; Result&lt;()&gt; {</td></tr><tr class="del"><td class="n">42</td><td class="n"></td><td class="s">−</td><td class="c">        for child in self.<del>children.drain(..)</del> {</td></tr><tr class="add"><td class="n"></td><td class="n">42</td><td class="s">+</td><td class="c">        for child in self.<ins>children.iter_mut()</ins> {</td></tr><tr class=""><td class="n">43</td><td class="n">43</td><td class="s"> </td><td class="c">            child.kill()?;</td></tr><tr class="del"><td class="n">44</td><td class="n"></td><td class="s">−</td><td class="c">            <del>child.wait()?;</del></td></tr><tr class="add"><td class="n"></td><td class="n">44</td><td class="s">+</td><td class="c">            <ins>let status = child.wait()?;</ins></td></tr><tr class="add"><td class="n"></td><td class="n">45</td><td class="s">+</td><td class="c">            <ins>self.exits.push((child.id(), status));</ins></td></tr><tr class=""><td class="n">45</td><td class="n">46</td><td class="s"> </td><td class="c">        }</td></tr><tr class="fold"><td class="n"></td><td class="n"></td><td class="s"></td><td class="c">Show 14 unchanged lines</td></tr></table>
+</div></div>
+</body>
+</html>

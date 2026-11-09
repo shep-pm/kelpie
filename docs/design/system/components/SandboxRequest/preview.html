@@ -1,0 +1,21 @@
+<!-- @dsCard group="Chat" height=230 subtitle="An agent asks to widen its sandbox, inline in the chat" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>SandboxRequest</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+
+<div class="k-pad k-col" style="gap:12px;max-width:520px;background:var(--sidebar)">
+  <div class="k-request" data-s="needs">
+    <div class="head"><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg><span><b>PM wants to reach docs.rs</b></span></div>
+    <div class="why k-muted" style="color:var(--muted-foreground)">To read the <code>tokio::process</code> docs for the reaper ticket.</div>
+    <div class="acts"><button class="k-btn k-btn--sm">Allow once</button><button class="k-btn k-btn--sm k-btn--secondary">Allow for this project</button><button class="k-btn k-btn--sm k-btn--ghost">Deny</button></div>
+  </div>
+  <div class="k-request is-done"><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /> <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /> <path d="M2 12h20" /></svg><span>docs.rs allowed for this project · <span style="text-decoration:underline;text-underline-offset:3px">Undo in settings</span></span></div>
+</div>
+</body>
+</html>

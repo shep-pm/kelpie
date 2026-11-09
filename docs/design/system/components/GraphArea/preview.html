@@ -1,0 +1,26 @@
+<!-- @dsCard group="Graph" height=300 width=840 subtitle="Areas and nodes in every state they take on the graph" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>GraphArea</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+<div style="position:relative;height:300px;margin:0" class="k">
+<div class="k-canvas"></div>
+<span class="k-label" style="position:absolute;left:24px;top:16px">Default</span><div class="k-area " style="left:24px;top:40px;width:180px;height:92px"><div class="name">Engine</div><div class="sub">crates/engine/**</div><div class="foot"></div></div>
+<span class="k-label" style="position:absolute;left:228px;top:16px">Lit by the open ticket</span><div class="k-area is-lit" style="left:228px;top:40px;width:180px;height:92px"><div class="name">Engine</div><div class="sub">crates/engine/**</div><div class="foot"><span class="k-badge " data-s="needs"><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg>#42</span></div></div>
+<span class="k-label" style="position:absolute;left:432px;top:16px">Not lit (dimmed)</span><div class="k-area is-dim" style="left:432px;top:40px;width:180px;height:92px"><div class="name">Shell</div><div class="sub">src/shell/**</div><div class="foot"></div></div>
+<span class="k-label" style="position:absolute;left:636px;top:16px">Selected</span><div class="k-area is-selected" style="left:636px;top:40px;width:180px;height:92px"><div class="name">Graph</div><div class="sub">src/graph/**</div><div class="foot"></div></div>
+<span class="k-label" style="position:absolute;left:24px;top:160px">Worker branch overlay</span><div class="k-area has-worker" style="left:24px;top:184px;width:180px;height:92px"><div class="name">Sandbox</div><div class="sub">crates/crabpot-adapter/**</div><div class="foot"><span class="k-badge " data-s="running"><svg class="k-glyph" data-s="running" viewBox="0 0 12 12" aria-hidden="true"><circle class="track" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path class="k-spin" d="M6 1.75a4.25 4.25 0 0 1 4.25 4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>#51</span></div><span class="worker-band"></span></div>
+<span class="k-label" style="position:absolute;left:228px;top:160px">Needs you</span><div class="k-area " style="left:228px;top:184px;width:180px;height:92px"><span class="pips"><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" role="img" aria-label="Needs you"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg></span><div class="name">Harnesses</div><div class="sub">crates/harness/**</div><div class="foot"><span class="k-badge " data-s="needs"><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg>PM asks</span></div></div>
+<span class="k-label" style="position:absolute;left:432px;top:160px">Unsorted</span><div class="k-area is-unsorted" style="left:432px;top:184px;width:180px;height:92px"><div class="name">Unsorted <span class="k-count k-count--quiet">4</span></div><div class="sub">matches no area</div><div class="foot"></div></div>
+<span class="k-label" style="position:absolute;left:636px;top:160px">File and symbol nodes</span>
+<div class="k-node" style="left:636px;top:190px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>reaper.rs</span></div>
+<div class="k-node is-symbol" style="left:636px;top:226px"><span class="kind">fn</span><span>reap()</span></div>
+<div class="k-node is-symbol is-lit" style="left:736px;top:226px"><span class="kind">struct</span><span>Tree</span></div>
+</div>
+</body>
+</html>
