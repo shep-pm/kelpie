@@ -58,12 +58,14 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `docs/goals.md` and `docs/journey.md`: the two goals, and a log of every step of starting the project.
 - `map/`: builds SK's module map.
 - `docs/adr/`: decisions. Read the ones touching your area first.
+- `docs/lessons/`: incidents from SK and its tools, and what kelpie does about each. Read the ones touching your area before designing it.
 - `.claude/skills/`: read `tauri` before touching `src-tauri/`, `tauri.conf.json`, capabilities or any `invoke` call, since Tauri 2 differs from Tauri 1 in ways models get wrong. Read `lift-from-sk` before bringing in any SK code, and `zustand-subscription-patterns` before wiring a component to a store.
 - `docs/lifted.md`: every chunk lifted from SK, with what it handles and what was dropped.
 - `src-tauri/`: the `kelpie-app` crate, `tauri.conf.json`, `capabilities/` and `icons/`. `src-tauri/gen/` is the ACL schema `build.rs` writes, and is ignored.
 
 ## Style
 
+- `CMM` is codebase-memory-mcp (github.com/DeusData/codebase-memory-mcp), the code graph tool whose viewer inspired kelpie's graph.
 - When writing about shep, use shep's vocabulary: a `sheep` is one managed process, the plural is `flock`, dogs are plugin processes, and the daemon is only ever "the shepherd". Kelpie's own processes are not sheep.
 - Public text in other shep-pm repos never names kelpie while this repo is private.
 - Committed text says "the maintainer", never a name, and uses repo-relative paths.
