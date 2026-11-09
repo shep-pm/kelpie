@@ -1,0 +1,7 @@
+# Build scripts pnpm may run. WebdriverIO pulls in drivers for browsers the e2e
+# tests never use, and their install scripts download them: left off. esbuild's
+# script only checks the binary its platform package already carries.
+allowBuilds:
+  edgedriver: false
+  esbuild: false
+  geckodriver: false

@@ -11,3 +11,6 @@ src-tauri/gen/
 # Claude Code: per-session worktrees and personal settings
 .claude/worktrees/
 .claude/settings.local.json
+
+# Written by the e2e run: JUnit and screenshots
+test-results/

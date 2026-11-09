@@ -6,10 +6,11 @@
 //! sweep that stops what a run left behind. [`run`] is the id itself: what a
 //! child's environment carries, and what a sweep looks for. [`settings`] reads
 //! and writes the config folder ADR 0008 puts at `~/.config/kelpie`. [`bridge`]
-//! installs the ACP registry bridges ADR 0007 runs harnesses through. [`harness`]
-//! builds what one harness runs on: its bridge, the session's own state folder,
-//! and the person's own login. [`session`]
-//! holds a conversation with a harness over ACP (ADR 0007). The crate
+//! installs the ACP registry bridges ADR 0007 runs harnesses through. [`session`]
+//! holds a conversation with a harness over ACP (ADR 0007), and [`agents`] reads
+//! the Markdown files that say what a session runs as and what it is told.
+//! [`harness`] builds what one harness runs on: its bridge, the session's own
+//! state folder, and the person's own login. The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -27,11 +28,13 @@
 //! [`run`] holds the id and its text form; [`tree`] starts and stops the
 //! children; [`session`] streams a harness's events; [`settings`] holds the
 //! fields and the layers they resolve through; [`bridge`] installs a pinned
-//! bridge once and checks it before it is used; [`harness`] names the bridge and
-//! the login each harness runs on.
+//! bridge once and checks it before it is used; [`agents`] loads the agent files
+//! and the PM's binding; [`harness`] names the bridge and the login each harness
+//! runs on.
 
 #![doc(test(attr(deny(warnings))))]
 
+pub mod agents;
 pub mod bridge;
 pub mod harness;
 pub mod run;
