@@ -5,6 +5,9 @@
 //! not the engine, not Tauri, not ACP (ADR 0007). Everything here is wire
 //! format, serialized into kelpie's session log and across the app's IPC.
 //!
+//! The `specta` feature derives `specta::Type` on every type, which the app
+//! turns into TypeScript. The engine leaves it off.
+//!
 //! # Quick start
 //!
 //! ```
@@ -31,6 +34,7 @@ use serde::{Deserialize, Serialize};
 /// Kelpie keeps it to resume the session after the harness's process stopped.
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(transparent)]
 pub struct SessionId(String);
 
@@ -63,6 +67,7 @@ impl fmt::Display for SessionId {
 /// One thing a session did, in the order it happened
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive] // new kinds of event arrive with new harness features
 pub enum SessionEvent {
@@ -111,6 +116,7 @@ pub enum SessionEvent {
 /// How far a tool call got
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // harnesses report more states over time
 pub enum ToolStatus {
@@ -129,6 +135,7 @@ pub enum ToolStatus {
 /// Why a turn ended
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // the spec adds stop reasons over time
 pub enum StopReason {
@@ -147,6 +154,7 @@ pub enum StopReason {
 /// The tokens one turn used
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Usage {
     /// Tokens sent to the model
     pub input: u64,
@@ -163,6 +171,7 @@ pub struct Usage {
 /// How long a prompt cache entry lives
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // providers offer more lifetimes over time
 pub enum CacheLifetime {
