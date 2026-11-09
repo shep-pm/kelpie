@@ -1,0 +1,24 @@
+<!-- @dsCard group="Status" height=150 subtitle="One count of what needs you, wherever it applies" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>NeedsYouCount</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+
+<div class="k-pad k-row" style="gap:32px;align-items:flex-start">
+  <div class="k-col" style="gap:8px;align-items:center"><span class="k-label">Rail</span>
+    <div style="background:var(--rail);padding:12px 14px;border-radius:var(--radius-lg)"><div class="k-proj">sk<span class="k-count">3</span></div></div></div>
+  <div class="k-col" style="gap:8px"><span class="k-label">Panel tab</span>
+    <div class="k-row" style="gap:2px;background:var(--sidebar);padding:4px;border-radius:var(--radius-lg)">
+      <span class="k-tab is-active"><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>PM<span class="k-count">1</span></span>
+      <span class="k-tab"><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 5v11" /> <path d="M12 5v6" /> <path d="M18 5v14" /></svg>Board<span class="k-count">2</span></span>
+      <span class="k-tab"><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15" /> <circle cx="18" cy="6" r="3" /> <circle cx="6" cy="18" r="3" /> <path d="M18 9a9 9 0 0 1-9 9" /></svg>Git</span></div></div>
+  <div class="k-col" style="gap:8px"><span class="k-label">Nothing waiting</span>
+    <div class="k-row"><div class="k-proj" style="box-shadow:inset 0 0 0 1px var(--border)">dr</div><span class="k-cap k-muted">no badge at all</span></div></div>
+</div>
+</body>
+</html>

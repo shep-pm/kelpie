@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kelpie design system</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  body { margin:0; padding:24px; background:var(--background); color:var(--foreground); font:13px/20px var(--font-sans); }
+  header { display:flex; align-items:center; gap:16px; margin-bottom:8px; }
+  header img { width:56px; height:56px; }
+  h1 { margin:0; font-size:28px; line-height:32px; }
+  h2 { font-size:15px; margin:32px 0 8px; }
+  .meta { display:flex; gap:8px; align-items:baseline; margin-bottom:6px; }
+  .meta span { color:var(--muted-foreground); }
+  a { color:var(--foreground); }
+  iframe { display:block; max-width:100%; border:1px solid var(--border); border-radius:8px; background:var(--background); }
+  section { margin-bottom:20px; }
+  button { font:inherit; }
+</style>
+<script>
+  const theme = new URLSearchParams(location.search).get("theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = theme;
+  addEventListener("DOMContentLoaded", () => {
+    for (const f of document.querySelectorAll("iframe")) f.src += "?theme=" + theme;
+    document.getElementById("flip").href = "?theme=" + (theme === "dark" ? "light" : "dark");
+  });
+</script>
+</head>
+<body>
+<header><img src="assets/logos/kelpie-app-icon.svg" alt="kelpie app icon"><div><h1>kelpie</h1><div style="color:var(--muted-foreground)">Design system previews · <a id="flip" href="#">switch theme</a> · <a href="README.md">README</a> · <a href="brand-book.md">brand book</a></div></div></header>
+<h2>Cover</h2>
+<section><div class="meta"><b>Cover</b> <span></span> <a href="components/Cover/preview.html">open</a></div>
+<iframe src="components/Cover/preview.html" style="width:960px;height:308px" loading="lazy"></iframe></section>
+<h2>Status</h2>
+<section><div class="meta"><b>NeedsYouCount</b> <span>One count of what needs you, wherever it applies</span> <a href="components/NeedsYouCount/preview.html">open</a> · <a href="components/NeedsYouCount/README.md">README</a></div>
+<iframe src="components/NeedsYouCount/preview.html" style="width:760px;height:170px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>StatusBadge</b> <span>Six states, each a word, a glyph and a colour</span> <a href="components/StatusBadge/preview.html">open</a> · <a href="components/StatusBadge/README.md">README</a></div>
+<iframe src="components/StatusBadge/preview.html" style="width:760px;height:220px" loading="lazy"></iframe></section>
+<h2>Controls</h2>
+<section><div class="meta"><b>Button</b> <span>shadcn Button with kelpie's ink, sizes and states</span> <a href="components/Button/preview.html">open</a> · <a href="components/Button/README.md">README</a></div>
+<iframe src="components/Button/preview.html" style="width:760px;height:220px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>LayeredField</b> <span>A setting that shows which layer its value comes from</span> <a href="components/LayeredField/preview.html">open</a> · <a href="components/LayeredField/README.md">README</a></div>
+<iframe src="components/LayeredField/preview.html" style="width:760px;height:320px" loading="lazy"></iframe></section>
+<h2>Chat</h2>
+<section><div class="meta"><b>Composer</b> <span>The message box, idle and while a turn runs</span> <a href="components/Composer/preview.html">open</a> · <a href="components/Composer/README.md">README</a></div>
+<iframe src="components/Composer/preview.html" style="width:760px;height:290px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>SandboxRequest</b> <span>An agent asks to widen its sandbox, inline in the chat</span> <a href="components/SandboxRequest/preview.html">open</a> · <a href="components/SandboxRequest/README.md">README</a></div>
+<iframe src="components/SandboxRequest/preview.html" style="width:760px;height:250px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>ThreadList</b> <span>Side conversations forked from the PM</span> <a href="components/ThreadList/preview.html">open</a> · <a href="components/ThreadList/README.md">README</a></div>
+<iframe src="components/ThreadList/preview.html" style="width:760px;height:270px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>ToolSteps</b> <span>Tool calls folded into one-line steps</span> <a href="components/ToolSteps/preview.html">open</a> · <a href="components/ToolSteps/README.md">README</a></div>
+<iframe src="components/ToolSteps/preview.html" style="width:760px;height:250px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>TurnMarkers</b> <span>Interrupted turns and history dividers</span> <a href="components/TurnMarkers/preview.html">open</a> · <a href="components/TurnMarkers/README.md">README</a></div>
+<iframe src="components/TurnMarkers/preview.html" style="width:760px;height:270px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>UsageFooter</b> <span>One quiet mono line under each reply</span> <a href="components/UsageFooter/preview.html">open</a> · <a href="components/UsageFooter/README.md">README</a></div>
+<iframe src="components/UsageFooter/preview.html" style="width:760px;height:140px" loading="lazy"></iframe></section>
+<h2>Code</h2>
+<section><div class="meta"><b>Diff</b> <span>A unified diff: added and removed lines, changed words, hunk header</span> <a href="components/Diff/preview.html">open</a> · <a href="components/Diff/README.md">README</a></div>
+<iframe src="components/Diff/preview.html" style="width:760px;height:350px" loading="lazy"></iframe></section>
+<h2>Graph</h2>
+<section><div class="meta"><b>GraphArea</b> <span>Areas and nodes in every state they take on the graph</span> <a href="components/GraphArea/preview.html">open</a> · <a href="components/GraphArea/README.md">README</a></div>
+<iframe src="components/GraphArea/preview.html" style="width:840px;height:320px" loading="lazy"></iframe></section>
+<h2>Screens</h2>
+<section><div class="meta"><b>GraphAreas</b> <span>Areas zoom, with ticket #42 open lighting its links</span> <a href="components/GraphAreas/preview.html">open</a> · <a href="components/GraphAreas/README.md">README</a></div>
+<iframe src="components/GraphAreas/preview.html" style="width:920px;height:680px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>GraphZoom</b> <span>Files and symbols zoom, with a selection offering Comment and Ask the PM</span> <a href="components/GraphZoom/preview.html">open</a> · <a href="components/GraphZoom/README.md">README</a></div>
+<iframe src="components/GraphZoom/preview.html" style="width:860px;height:500px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>PMPanel</b> <span>The PM conversation with threads, folds, a sandbox request and a running turn</span> <a href="components/PMPanel/preview.html">open</a> · <a href="components/PMPanel/README.md">README</a></div>
+<iframe src="components/PMPanel/preview.html" style="width:440px;height:1220px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>ShellCollapsed</b> <span>Panels folded to an icon strip, drawer closed</span> <a href="components/ShellCollapsed/preview.html">open</a> · <a href="components/ShellCollapsed/README.md">README</a></div>
+<iframe src="components/ShellCollapsed/preview.html" style="width:1300px;height:840px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>ShellExpanded</b> <span>Graph centre, PM and Board stacked, drawer open</span> <a href="components/ShellExpanded/preview.html">open</a> · <a href="components/ShellExpanded/README.md">README</a></div>
+<iframe src="components/ShellExpanded/preview.html" style="width:1300px;height:840px" loading="lazy"></iframe></section>
+<section><div class="meta"><b>ShellMaximised</b> <span>The PM maximised to full width for focus</span> <a href="components/ShellMaximised/preview.html">open</a> · <a href="components/ShellMaximised/README.md">README</a></div>
+<iframe src="components/ShellMaximised/preview.html" style="width:1300px;height:840px" loading="lazy"></iframe></section>
+
+</body>
+</html>

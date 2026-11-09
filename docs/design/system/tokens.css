@@ -1,0 +1,198 @@
+/* kelpie: generated from tokens.json for the previews in this folder. The app's own theme is src/styles/globals.css. */
+:root, [data-theme="light"] {
+  --background: oklch(0.985 0.003 80);
+  --foreground: oklch(0.235 0.012 60);
+  --card: oklch(0.998 0.001 80);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.998 0.001 80);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.255 0.012 60);
+  --primary-foreground: oklch(0.985 0.003 80);
+  --secondary: oklch(0.95 0.006 80);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.955 0.005 80);
+  --muted-foreground: oklch(0.505 0.012 70);
+  --accent: oklch(0.935 0.007 80);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.53 0.19 27);
+  --destructive-foreground: oklch(0.985 0.003 80);
+  --border: oklch(0.905 0.006 80);
+  --border-strong: oklch(0.62 0.012 70);
+  --input: var(--border-strong);
+  --ring: oklch(0.5 0.03 250);
+  --sidebar: oklch(0.97 0.005 80);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.935 0.007 80);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --rail: oklch(0.94 0.007 80);
+  --rail-foreground: oklch(0.43 0.012 70);
+  --status-idle: oklch(0.6 0.01 75);
+  --status-idle-soft: oklch(0.945 0.005 80);
+  --status-idle-fg: oklch(0.47 0.012 70);
+  --status-running: oklch(0.56 0.15 252);
+  --status-running-soft: oklch(0.952 0.02 252);
+  --status-running-fg: oklch(0.47 0.15 255);
+  --status-needs: oklch(0.65 0.145 58);
+  --status-needs-soft: oklch(0.955 0.035 78);
+  --status-needs-fg: oklch(0.5 0.12 55);
+  --status-needs-on: oklch(0.235 0.012 60);
+  --status-blocked: oklch(0.56 0.13 330);
+  --status-blocked-soft: oklch(0.955 0.022 330);
+  --status-blocked-fg: oklch(0.48 0.13 330);
+  --status-done: oklch(0.6 0.1 180);
+  --status-done-soft: oklch(0.955 0.025 180);
+  --status-done-fg: oklch(0.47 0.085 182);
+  --status-failed: oklch(0.56 0.19 27);
+  --status-failed-soft: oklch(0.955 0.02 25);
+  --status-failed-fg: oklch(0.5 0.18 27);
+  --graph-grid: oklch(0.88 0.006 80);
+  --graph-area: oklch(0.965 0.006 80);
+  --graph-area-border: oklch(0.85 0.008 80);
+  --graph-node: var(--card);
+  --graph-edge: oklch(0.64 0.012 70);
+  --graph-lit: var(--foreground);
+  --brand-teal: #2fa597;
+  --brand-coat: #d9733a;
+  --brand-cream: #fbe7cc;
+  --brand-outline: #3b2620;
+  --diff-add-bg: oklch(0.965 0.028 175);
+  --diff-add-word: oklch(0.905 0.055 175);
+  --diff-add-fg: oklch(0.45 0.08 180);
+  --diff-add-bar: var(--status-done);
+  --diff-del-bg: oklch(0.965 0.016 20);
+  --diff-del-word: oklch(0.905 0.045 20);
+  --diff-del-fg: oklch(0.5 0.16 25);
+  --diff-del-bar: var(--status-failed);
+  --diff-hunk-bg: oklch(0.955 0.014 252);
+  --diff-hunk-fg: oklch(0.47 0.1 255);
+  --chart-1: var(--status-running);
+  --chart-2: var(--status-done);
+  --chart-3: var(--status-needs);
+  --chart-4: var(--status-blocked);
+  --chart-5: var(--status-idle);
+  --shadow-xs: 0 1px 0 0 rgb(40 30 20 / 0.04);
+  --shadow-md: 0 4px 12px -2px rgb(40 30 20 / 0.10), 0 1px 3px rgb(40 30 20 / 0.08);
+  --shadow-lg: 0 16px 40px -8px rgb(40 30 20 / 0.18), 0 2px 6px rgb(40 30 20 / 0.08);
+}
+[data-theme="dark"] {
+  --background: oklch(0.165 0.006 70);
+  --foreground: oklch(0.945 0.005 80);
+  --card: oklch(0.205 0.007 70);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.225 0.008 70);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.935 0.006 80);
+  --primary-foreground: oklch(0.205 0.008 70);
+  --secondary: oklch(0.255 0.008 70);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.235 0.008 70);
+  --muted-foreground: oklch(0.715 0.01 75);
+  --accent: oklch(0.275 0.009 70);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.66 0.19 25);
+  --destructive-foreground: oklch(0.18 0.02 25);
+  --border: oklch(0.275 0.008 70);
+  --border-strong: oklch(0.52 0.01 70);
+  --input: var(--border-strong);
+  --ring: oklch(0.75 0.03 250);
+  --sidebar: oklch(0.19 0.007 70);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.255 0.008 70);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --rail: oklch(0.135 0.006 70);
+  --rail-foreground: oklch(0.75 0.01 75);
+  --status-idle: oklch(0.6 0.01 75);
+  --status-idle-soft: oklch(0.255 0.006 70);
+  --status-idle-fg: oklch(0.76 0.01 75);
+  --status-running: oklch(0.7 0.14 250);
+  --status-running-soft: oklch(0.27 0.05 252);
+  --status-running-fg: oklch(0.8 0.1 250);
+  --status-needs: oklch(0.79 0.15 70);
+  --status-needs-soft: oklch(0.29 0.05 65);
+  --status-needs-fg: oklch(0.83 0.12 72);
+  --status-needs-on: oklch(0.2 0.03 60);
+  --status-blocked: oklch(0.71 0.12 330);
+  --status-blocked-soft: oklch(0.27 0.045 330);
+  --status-blocked-fg: oklch(0.81 0.09 330);
+  --status-done: oklch(0.74 0.1 180);
+  --status-done-soft: oklch(0.27 0.04 180);
+  --status-done-fg: oklch(0.82 0.08 180);
+  --status-failed: oklch(0.68 0.18 25);
+  --status-failed-soft: oklch(0.28 0.06 25);
+  --status-failed-fg: oklch(0.82 0.1 25);
+  --graph-grid: oklch(0.27 0.008 70);
+  --graph-area: oklch(0.215 0.008 70);
+  --graph-area-border: oklch(0.34 0.009 70);
+  --graph-node: var(--card);
+  --graph-edge: oklch(0.52 0.01 70);
+  --graph-lit: var(--foreground);
+  --brand-teal: #2fa597;
+  --brand-coat: #d9733a;
+  --brand-cream: #fbe7cc;
+  --brand-outline: #3b2620;
+  --diff-add-bg: oklch(0.235 0.035 178);
+  --diff-add-word: oklch(0.315 0.055 180);
+  --diff-add-fg: oklch(0.82 0.085 178);
+  --diff-add-bar: var(--status-done);
+  --diff-del-bg: oklch(0.235 0.035 22);
+  --diff-del-word: oklch(0.33 0.07 22);
+  --diff-del-fg: oklch(0.82 0.09 22);
+  --diff-del-bar: var(--status-failed);
+  --diff-hunk-bg: oklch(0.235 0.03 252);
+  --diff-hunk-fg: oklch(0.8 0.07 250);
+  --chart-1: var(--status-running);
+  --chart-2: var(--status-done);
+  --chart-3: var(--status-needs);
+  --chart-4: var(--status-blocked);
+  --chart-5: var(--status-idle);
+  --shadow-xs: 0 1px 0 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 16px 40px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4);
+}
+:root {
+  --space-0\.5: 2px;
+  --space-1: 4px;
+  --space-1\.5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+  --control-sm: 24px;
+  --control: 28px;
+  --control-lg: 32px;
+  --rail-width: 48px;
+  --panel-min: 320px;
+  --panel-default: 400px;
+  --drawer-default: 240px;
+  --opacity-dim: 0.45;
+  --opacity-disabled: 0.5;
+  --font-sans: "Atkinson Hyperlegible Next", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 28px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+.heading { font-family: var(--font-sans); font-size: 18px; line-height: 24px; font-weight: 600; }
+.title { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 600; }
+.prose { font-family: var(--font-sans); font-size: 14px; line-height: 22px; font-weight: 400; }
+.ui { font-family: var(--font-sans); font-size: 13px; line-height: 20px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 500; }
+.caption { font-family: var(--font-sans); font-size: 11px; line-height: 16px; font-weight: 500; }
+.code { font-family: var(--font-mono); font-size: 12.5px; line-height: 20px; font-weight: 400; }
+.code-sm { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 400; }
+@font-face { font-family: "Atkinson Hyperlegible Next"; src: url("fonts/AtkinsonHyperlegibleNext-wght.woff2") format("woff2"); font-weight: 200 800; font-style: normal; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible Next"; src: url("fonts/AtkinsonHyperlegibleNext-wght-italic.woff2") format("woff2"); font-weight: 200 800; font-style: italic; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible Mono"; src: url("fonts/AtkinsonHyperlegibleMono-wght.woff2") format("woff2"); font-weight: 200 800; font-style: normal; font-display: swap; }

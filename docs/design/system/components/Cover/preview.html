@@ -1,0 +1,59 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+
+<meta charset="utf-8">
+<title>kelpie</title>
+<style>
+  html, body { margin:0; height:100%; }
+  body { background:var(--background); color:var(--foreground); font-family:var(--font-sans); overflow:hidden; }
+  .cover { position:relative; width:960px; height:288px; overflow:hidden;
+    background-image: radial-gradient(var(--graph-grid) 1px, transparent 1.2px); background-size:16px 16px; background-position:8px 8px; }
+  .art { position:absolute; top:0; left:480px; width:480px; height:288px; overflow:hidden; }
+  .art svg { display:block; width:480px; height:288px; }
+  .ink { fill:var(--primary); }
+  .tan { fill:var(--status-needs); }
+  .run { fill:var(--status-running); }
+  .area { fill:var(--graph-area); stroke:var(--graph-area-border); stroke-width:1; }
+  .lit { fill:none; stroke:var(--graph-lit); stroke-width:2; }
+  .uns { fill:none; stroke:var(--border-strong); stroke-width:1.5; stroke-dasharray:5 4; }
+  .edge { fill:none; stroke:var(--graph-edge); stroke-width:1.25; }
+  .lg { rx:var(--radius-lg); }
+  .md { rx:var(--radius-md); }
+  .words { position:absolute; left:var(--space-8); bottom:var(--space-6); max-width:440px; }
+  .name { margin:0; font-size:120px; line-height:.9; font-weight:700; letter-spacing:-.03em; color:var(--foreground); }
+  .tag { margin:var(--space-3) 0 0 6px; font-size:14px; line-height:20px; color:var(--muted-foreground); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 288" width="480" height="288">
+<!--
+  blocks      primary (ink) 160×232 bled off the top · status-needs (the kelpie tan, the one warm hue) 120×64 · status-running 64×120 · two graph-area tiles 120×96 and 96×112, the second bled off the right, ≈30% of 960×288
+  arrangement the graph itself: seven boxes (its 5-to-9 rule) on a space-4 grid, bottoms on one line at y=216, joined by edges
+  pattern     node-and-edge, from "the graph is the centre of the app": three graph-edge curves between boxes, one graph-lit outline round the tile the open ticket lights, one dashed Unsorted box on the ground
+  scales      sides and gutters in space-4 multiples; corners radius-lg on blocks and radius-md on the small tiles; outline offset space-1
+-->
+<rect class="ink lg" x="16" y="-16" width="160" height="232" rx="8"/>
+<rect class="area lg" x="208" y="32" width="120" height="96" rx="8"/>
+<rect class="lit lg" x="204" y="28" width="128" height="104" rx="10"/>
+<rect class="tan lg" x="208" y="152" width="120" height="64" rx="8"/>
+<rect class="run lg" x="352" y="96" width="64" height="120" rx="8"/>
+<rect class="area lg" x="432" y="16" width="96" height="112" rx="8"/>
+<rect class="uns md" x="16" y="240" width="96" height="64" rx="6"/>
+<path class="edge" d="M176 72 C192 72 192 80 204 80"/>
+<path class="edge" d="M268 132 C268 140 268 144 268 152"/>
+<path class="edge" d="M332 80 C384 80 384 72 432 72"/>
+</svg>
+</div>
+<div class="words">
+  <h1 class="name">kelpie</h1>
+  <p class="tag">Plan, run and follow agent work on a picture of your code.</p>
+</div>
+</div>
+</body>
+</html>

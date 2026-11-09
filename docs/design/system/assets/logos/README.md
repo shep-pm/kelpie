@@ -1,0 +1,1 @@
+The kelpie's two marks, as SVG, from SK's `assets/`. `kelpie-app-icon.svg` is the app icon: the face on a `brand-teal` rounded square, used whole, and the source of `src-tauri/icons/`. `kelpie-mascot.svg` is the sitting mascot for onboarding, empty states and loading, shown at 96 to 160px on `background`, `card` or `brand-cream`.

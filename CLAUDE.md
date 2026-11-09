@@ -56,13 +56,14 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `pnpm test`: `vitest run`.
 - `pnpm tauri dev`: the Tauri window on the Vite dev server. It runs `pnpm dev` first, then waits on `build.devUrl`.
 - `pnpm tauri build`: the release build, then the bundles. `cargo build --release` is not a release build: it leaves Tauri's `custom-protocol` feature off, so the binary loads `devUrl` instead of its own assets.
-- `pnpm tauri icon src-tauri/icons/app-icon.png`: regenerates `src-tauri/icons/` from the committed placeholder.
+- `pnpm tauri icon docs/design/system/assets/logos/kelpie-app-icon.svg`: regenerates `src-tauri/icons/` from the app icon.
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
 - CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
 
 ## Where things live
 
+- `docs/design/system/`: the design system. Read its `README.md` and `brand-book.md` before building any UI; `index.html` shows every component and screen. Its tokens are in `src/styles/globals.css`, and `src/components/ui/` is shadcn's base set, added with `pnpm dlx shadcn@4.22.2 add <name>` as shadcn ships it. A slice restyles each one it uses to the brand book.
 - `docs/process-and-sk.md` is the current plan: the process tree, sessions, updates, and what to lift from SK.
 - `docs/backend.md` is partly replaced by it. Each replaced part is marked.
 - `docs/gui-framework.md`: why Tauri 2 + React.

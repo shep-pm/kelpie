@@ -1,0 +1,35 @@
+<!-- @dsCard group="Controls" height=300 subtitle="A setting that shows which layer its value comes from" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>LayeredField</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+
+<div class="k-pad" style="max-width:640px">
+<div class="k-field">
+  <div><div class="k-field-name">PM harness</div><div class="k-field-help">The agent program the PM runs on.</div></div>
+  <div class="k-field-ctl"><div class="k-input" style="width:280px"><span class="k-grow">Claude Code</span><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></div>
+    <div class="k-field-meta"><span class="k-layers" title="built-in · global · project"><span class="step on"></span><span class="step"></span><span class="step"></span></span><span class="k-layer">from kelpie</span></div></div>
+</div>
+<div class="k-field">
+  <div><div class="k-field-name">PM model</div><div class="k-field-help">Applies from the next message.</div></div>
+  <div class="k-field-ctl"><div class="k-input" style="width:280px"><span class="k-grow">Opus 5.5 · high effort</span><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></div>
+    <div class="k-field-meta"><span class="k-layers" title="built-in · global · project"><span class="step on"></span><span class="step on"></span><span class="step"></span></span><span class="k-layer">from global</span></div></div>
+</div>
+<div class="k-field">
+  <div><div class="k-field-name">Base branch</div><div class="k-field-help">Workers branch from it; the graph shows it.</div></div>
+  <div class="k-field-ctl"><div class="k-input" style="width:280px"><span class="k-grow mono">develop</span><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></div>
+    <div class="k-field-meta"><span class="k-layers" title="built-in · global · project"><span class="step on"></span><span class="step on"></span><span class="step on"></span></span><span class="k-layer is-set">set in this project</span><button class="k-btn k-btn--link" style="font-size:12px;font-weight:500"><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /> <path d="M3 3v5h5" /></svg>Reset to global <span class='mono' style='font-size:11px'>(main)</span></button></div></div>
+</div>
+<div class="k-field">
+  <div><div class="k-field-name">Read anywhere by default</div><div class="k-field-help">Lifts the PM's read limit. Secrets stay denied.</div></div>
+  <div class="k-field-ctl"><div class="k-row" style="gap:8px"><span style="width:28px;height:16px;border-radius:9999px;background:var(--border-strong);position:relative;display:inline-block"><span style="position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:9999px;background:var(--card)"></span></span><span>Off</span></div>
+    <div class="k-field-meta"><span class="k-layers" title="built-in · global · project"><span class="step on"></span><span class="step"></span><span class="step"></span></span><span class="k-layer">from kelpie</span></div></div>
+</div>
+</div>
+</body>
+</html>

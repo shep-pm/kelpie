@@ -1,0 +1,46 @@
+<!-- @dsCard group="Screens" height=480 width=860 subtitle="Files and symbols zoom, with a selection offering Comment and Ask the PM" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>GraphZoom</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+<div style="padding:10px;display:flex;gap:12px">
+ <div style="position:relative;width:440px;height:460px;border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden">
+  <div class="k-canvas"></div>
+  <div class="k-hud" style="left:12px;top:12px"><div class="k-hud-box"><span class="k-crumbs">Areas<svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg><b>Engine</b><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>Files</span></div></div>
+  <div style="position:absolute;left:10px;top:60px;width:420px;height:380px">
+<svg class="k-edges" viewBox="0 0 420 380" width="420" height="380">
+ <defs><marker id="ah2" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z"/></marker></defs>
+ <path d="M110 74 C110 120 200 110 200 142" marker-end="url(#ah2)"/><path d="M300 74 C300 120 220 110 220 142" marker-end="url(#ah2)"/>
+ <path d="M200 172 C200 210 110 210 110 238" marker-end="url(#ah2)"/><path d="M220 172 C220 210 310 210 310 238" marker-end="url(#ah2)"/>
+ <path d="M110 268 C110 300 200 300 200 318" marker-end="url(#ah2)"/>
+</svg>
+<div class="k-node " style="left:50px;top:48px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>lib.rs</span></div><div class="k-node " style="left:240px;top:48px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>commands.rs</span></div>
+<div class="k-node is-selected" style="left:150px;top:146px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>tree.rs</span></div>
+<div class="k-node is-selected" style="left:50px;top:242px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>reaper.rs</span><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" role="img" aria-label="Needs you"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg></div><div class="k-node " style="left:250px;top:242px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>spawn.rs</span></div>
+<div class="k-node " style="left:150px;top:322px"><svg class="k-i-xs kind" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 12.5 8 15l2 2.5" /> <path d="m14 12.5 2 2.5-2 2.5" /> <path d="M14 2v4a2 2 0 0 0 2 2h4" /> <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /></svg><span>signals.rs</span></div>
+<div class="k-toolbar" style="left:96px;top:100px"><span class="count">2 selected</span><span class="k-sep"></span>
+  <button class="k-btn k-btn--sm k-btn--ghost"><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /> <path d="M12 7v6" /> <path d="M9 10h6" /></svg>Comment</button>
+  <button class="k-btn k-btn--sm k-btn--ghost"><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /> <path d="M13 8H7" /> <path d="M17 12H7" /></svg>Ask the PM</button></div>
+</div>
+ </div>
+ <div style="position:relative;width:380px;height:460px;border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden">
+  <div class="k-canvas"></div>
+  <div class="k-hud" style="left:12px;top:12px"><div class="k-hud-box"><span class="k-crumbs">Engine<svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg><b>tree.rs</b><svg class="k-i-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>Symbols</span></div></div>
+  <div style="position:absolute;left:10px;top:60px;width:360px;height:380px">
+<svg class="k-edges" viewBox="0 0 360 380" width="360" height="380">
+ <defs><marker id="ah3" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z"/></marker></defs>
+ <path d="M150 76 C150 110 80 110 80 136" marker-end="url(#ah3)"/><path d="M170 76 C170 110 250 110 250 136" marker-end="url(#ah3)"/>
+ <path d="M80 164 C80 200 160 200 160 228" marker-end="url(#ah3)"/>
+</svg>
+<div class="k-node is-symbol is-lit" style="left:90px;top:50px"><span class="kind">struct</span><span>ProcessTree</span></div>
+<div class="k-node is-symbol " style="left:30px;top:140px"><span class="kind">fn</span><span>spawn()</span></div><div class="k-node is-symbol is-lit" style="left:200px;top:140px"><span class="kind">fn</span><span>reap()</span></div>
+<div class="k-node is-symbol is-dim" style="left:100px;top:232px"><span class="kind">trait</span><span>Shutdown</span></div><div class="k-node is-symbol is-dim" style="left:40px;top:300px"><span class="kind">range</span><span>lines 41–88</span></div>
+</div>
+ </div></div>
+</body>
+</html>

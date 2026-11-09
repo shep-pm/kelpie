@@ -1,0 +1,24 @@
+<!-- @dsCard group="Chat" height=250 subtitle="Side conversations forked from the PM" -->
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<script>document.documentElement.dataset.theme=new URLSearchParams(location.search).get("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")</script>
+<meta charset="utf-8"><title>ThreadList</title>
+<style>html,body{margin:0} body{background:var(--background)}</style>
+</head>
+<body class="k">
+
+<div class="k-pad" style="max-width:400px;background:var(--sidebar)">
+  <div class="k-row" style="justify-content:space-between;margin-bottom:4px"><span class="k-label">Threads</span><button class="k-btn k-btn--icon k-btn--sm k-btn--ghost" aria-label="New thread"><svg class="k-i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /> <path d="M12 5v14" /></svg></button></div>
+  <div class="k-threads">
+    <div class="k-thread is-active"><svg class="k-i-sm branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20" /> <path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg><span class="name">Reaper as its own crate</span><span class="tie">#42</span><svg class="k-glyph" data-s="running" viewBox="0 0 12 12" role="img" aria-label="Running"><circle class="track" cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path class="k-spin" d="M6 1.75a4.25 4.25 0 0 1 4.25 4.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+    <div class="k-thread"><svg class="k-i-sm branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20" /> <path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg><span class="name">Where does CMM run?</span><span class="tie">topic</span><svg class="k-glyph" data-s="needs" viewBox="0 0 12 12" role="img" aria-label="Needs you"><path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" fill="currentColor"/></svg></div>
+    <div class="k-thread"><svg class="k-i-sm branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20" /> <path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg><span class="name">Sandbox allowlist UI</span><span class="tie">#51</span><svg class="k-glyph" data-s="idle" viewBox="0 0 12 12" role="img" aria-label="Idle"><circle cx="6" cy="6" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></div>
+    <div class="k-thread"><svg class="k-i-sm branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 10 20 15 15 20" /> <path d="M4 4v7a4 4 0 0 0 4 4h12" /></svg><span class="name">Rename Unsorted areas</span><span class="tie">#38</span><svg class="k-glyph" data-s="done" viewBox="0 0 12 12" role="img" aria-label="Done"><path d="M2.4 6.3 4.9 8.7 9.6 3.6" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  </div>
+  <div class="k-hr" style="margin:10px 0"></div>
+  <div class="k-outcome"><svg class="k-glyph" data-s="done" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.4 6.3 4.9 8.7 9.6 3.6" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>#38</b> Merged <code>misc</code> into Shell and Graph. 4 files moved.</span></div>
+</div>
+</body>
+</html>
