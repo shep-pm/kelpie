@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -7,7 +8,12 @@ import { defineConfig } from "vitest/config";
 // has to match.
 export default defineConfig({
   clearScreen: false,
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  // `@/` imports resolve through tsconfig.json `paths`, the same alias
+  // components.json gives shadcn.
+  resolve: {
+    tsconfigPaths: true,
+  },
   server: {
     port: 1520,
     strictPort: true,
