@@ -160,7 +160,7 @@ Measured at origin/main:
 **Leave behind:**
 - the dog, flock, upgrade and doctor code
 - the shep channel and lookout plumbing
-- most of `settings` (Rin's two configs)
+- most of `settings` (the maintainer's two configs)
 - GitHub-bot features until a slice asks for them: review_bot, coderabbit, thread_replies
 
 ## Order of work
