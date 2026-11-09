@@ -99,6 +99,10 @@ One round of an agent's work, from a message to its reply.
 The agent program a session runs on, such as Claude Code, Codex, pi or goose. The model is chosen separately.
 _Avoid_: CLI, backend, provider
 
+**Bridge**:
+A program from the ACP registry that lets kelpie reach a harness that does not speak ACP itself, such as Claude Code. Kelpie installs and updates the bridge, never the harness behind it.
+_Avoid_: adapter (kelpie's side), shim, wrapper
+
 **Adapter**:
 What lets kelpie use one outside tool through an interface shared by every tool of its kind: a harness, a forge such as GitHub, an indexer such as CMM. Kelpie is a hub of adapters and favours none.
 _Avoid_: plugin, integration, driver
