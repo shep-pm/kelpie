@@ -14,6 +14,10 @@ _Avoid_: user, owner
 The maintainer's one long-lived conversation for a project, through which work is planned and followed. The chat box is its front end.
 _Avoid_: project manager agent, PM chat (the first tracer bullet, not the PM)
 
+**Thread**:
+A side conversation forked from the PM, tied to a ticket or a topic. Its outcome returns to the PM in one line, and its transcript stays with it.
+_Avoid_: sub-chat, branch, fork (the mechanism, not the thing)
+
 **Worker**:
 An agent session that does one piece of work and then ends.
 _Avoid_: lamb, runner
@@ -29,8 +33,8 @@ One codebase kelpie works on, with its own PM, graph, board and git history. Pro
 _Avoid_: repo (the GitHub side), workspace
 
 **Pillar**:
-One of a project's four tabs: Graph, PM, Board and Git. The graph is the default, and each project reopens on the pillar it was left on.
-_Avoid_: view, page, mode
+One of a project's four parts: the graph, which fills the window, and the PM, Board and Git panels docked beside it. Each project reopens with the layout it was left in.
+_Avoid_: tab, view, page, mode
 
 **Graph**:
 The picture of a project built from its code, which grows as the code changes without anyone asking.
@@ -83,6 +87,10 @@ How a process tree is stopped: ask, wait a grace period, then kill.
 **Session**:
 A conversation with an agent. It outlives the processes that serve it: a quit stops the process, and the next message resumes the session.
 _Avoid_: process, chat
+
+**Sandbox**:
+What confines an agent session's reads, writes and network. Every agent runs in one, the PM included.
+_Avoid_: fence, jail, container
 
 **Turn**:
 One round of an agent's work, from a message to its reply.
