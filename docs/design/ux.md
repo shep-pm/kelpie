@@ -111,7 +111,7 @@ Both get UI in Phase 1. Their own note is `docs/design/settings.md`.
 | Layer | Source | Default |
 |---|---|---|
 | 1. The repo | Its instructions, vendored skills, MCP config | Always |
-| 2. Kelpie global | Instructions, skills and MCP servers edited in kelpie. Instructions can point at a file the maintainer already keeps | On |
+| 2. Kelpie global | Instructions, skills and MCP servers edited in kelpie. Instructions can point at a file the maintainer already keeps | On, once built after Phase 1. It needs a design note of its own first |
 | 3. Kelpie project | The same, per project | Later |
 | 4. A harness's global folder (`~/.claude`, `~/.codex`) | Whatever that harness keeps globally | Off, opt in per project |
 
