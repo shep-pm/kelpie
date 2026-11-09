@@ -33,4 +33,4 @@ The handoff from design to code: the tokens, the rules, and an HTML preview of e
 
 ## Changing it
 
-The design system is kept as a Design System artifact on claude.ai, where the maintainer edits it. A change starts there: change `tokens.json` first, then mirror it into `src/styles/globals.css` and this folder, in one commit. Do not edit the previews to change the design; they show it.
+`tokens.json` in this folder is the source of truth. A change edits it first, then mirrors the values into `src/styles/globals.css`, `tokens.css` and any preview that shows them, in one commit. The previews show the design and never lead it: a change to them follows a change to the tokens or the brand book.
