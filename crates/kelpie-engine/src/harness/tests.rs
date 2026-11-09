@@ -1,6 +1,6 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, Permissions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -10,6 +10,7 @@ use serde_json::json;
 
 use super::HarnessError;
 use super::claude::{self, LOGIN, LOGIN_ENV, pin};
+use super::goose::{self, Provider};
 use crate::login::Store;
 use crate::run::RunId;
 use crate::session::{Choice, Extension, Harness, Session, SessionEvent};
@@ -33,23 +34,34 @@ fn temp(prefix: &str) -> PathBuf {
     dir
 }
 
-/// A folder holding a runnable `claude`, as the person's install would
-fn installed() -> PathBuf {
+/// A folder holding a runnable `cmd`, as the person's install would
+fn installed_with(cmd: &str) -> PathBuf {
     let dir = temp("harness-installed");
-    let claude = dir.join("claude");
-    fs::write(&claude, "#!/bin/sh\necho kelpie harness fixture\n").unwrap();
+    let program = dir.join(cmd);
+    fs::write(&program, "#!/bin/sh\necho kelpie harness fixture\n").unwrap();
     #[cfg(unix)]
     {
+        use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&claude, Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&program, Permissions::from_mode(0o755)).unwrap();
     }
     dir
 }
 
-/// A folder holding a `claude` that cannot be run
-fn not_runnable() -> PathBuf {
+/// A folder holding a runnable `claude`, as the person's install would
+fn installed() -> PathBuf {
+    installed_with("claude")
+}
+
+/// A folder holding a runnable `goose`, as a person's install would
+fn goose_installed() -> PathBuf {
+    installed_with("goose")
+}
+
+/// A folder holding a `cmd` that cannot be run
+fn not_runnable(cmd: &str) -> PathBuf {
     let dir = temp("harness-not-runnable");
-    fs::write(dir.join("claude"), "not a program\n").unwrap();
+    fs::write(dir.join(cmd), "not a program\n").unwrap();
     dir
 }
 
@@ -68,6 +80,19 @@ fn logged_in() -> Store {
 /// Build a harness with `path` as the `PATH` it searches
 fn build(path: &OsStr, logins: &Store) -> Result<Harness, HarnessError> {
     claude::harness_on_path(BRIDGE.into(), Path::new(STATE), logins, path)
+}
+
+/// The provider a test names, with its host when it has one
+fn provider(name: &str, host: Option<&str>) -> Provider {
+    Provider {
+        name: name.to_owned(),
+        host: host.map(str::to_owned),
+    }
+}
+
+/// Build the harness of `cmd` with `path` as the `PATH` it searches
+fn build_on(path: &OsStr, provider: &Provider) -> Result<Harness, HarnessError> {
+    goose::harness_on_path(Path::new(STATE), provider, path)
 }
 
 /// The value `harness` sets `name` to
@@ -125,7 +150,7 @@ fn claude_takes_its_login_from_the_store() {
 #[test]
 fn no_claude_on_path_says_to_install_it() {
     let empty = temp("harness-empty");
-    let broken = not_runnable();
+    let broken = not_runnable("claude");
 
     for path in [path_of([empty.clone()]), path_of([broken.clone()])] {
         let error = build(&path, &logged_in()).unwrap_err();
@@ -169,6 +194,83 @@ fn the_new_session_meta_asks_for_the_raw_messages() {
     );
     assert_eq!(harness.extensions, [Extension::ClaudeSdkMessage]);
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn goose_runs_acp_with_a_config_root_of_its_own() {
+    let dir = goose_installed();
+
+    let harness = build_on(&path_of([dir.clone()]), &provider("ollama", None)).unwrap();
+
+    assert_eq!(harness.program, dir.join("goose"));
+    assert_eq!(harness.args, [OsString::from("acp")]);
+    assert_eq!(
+        env_of(&harness, "GOOSE_PATH_ROOT").unwrap(),
+        Path::new(STATE).join("goose")
+    );
+    assert!(
+        harness.new_session_meta.is_none(),
+        "goose needs no `_meta` of kelpie's"
+    );
+    assert!(
+        harness.extensions.is_empty(),
+        "kelpie reads no goose notification beyond ACP's own"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn goose_gets_its_provider_and_host() {
+    let dir = goose_installed();
+
+    let named = build_on(
+        &path_of([dir.clone()]),
+        &provider("ollama", Some("http://127.0.0.1:11434")),
+    )
+    .unwrap();
+    let its_own = build_on(&path_of([dir.clone()]), &provider("ollama", None)).unwrap();
+
+    assert_eq!(
+        env_of(&named, "GOOSE_PROVIDER").unwrap(),
+        OsString::from("ollama")
+    );
+    assert_eq!(
+        env_of(&named, "OLLAMA_HOST").unwrap(),
+        OsString::from("http://127.0.0.1:11434")
+    );
+    assert_eq!(
+        env_of(&its_own, "GOOSE_PROVIDER").unwrap(),
+        OsString::from("ollama")
+    );
+    assert!(
+        env_of(&its_own, "OLLAMA_HOST").is_none(),
+        "no host: goose keeps its own config"
+    );
+    for harness in [&named, &its_own] {
+        assert!(
+            env_of(harness, "GOOSE_MODEL").is_none(),
+            "the model is a config option, not an environment variable"
+        );
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn no_goose_on_path_says_to_install_it() {
+    let empty = temp("harness-empty");
+    let broken = not_runnable("goose");
+
+    for path in [path_of([empty.clone()]), path_of([broken.clone()])] {
+        let error = build_on(&path, &provider("ollama", None)).unwrap_err();
+        assert!(
+            matches!(error, HarnessError::NotInstalled { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("goose is not installed"));
+        assert!(error.to_string().contains("Install goose"));
+    }
+    fs::remove_dir_all(empty).unwrap();
+    fs::remove_dir_all(broken).unwrap();
 }
 
 #[test]
@@ -246,6 +348,60 @@ fn a_real_claude_answers_and_resumes() {
         "Remember the word kelpie. Reply with that one word.",
     );
     let id = first.session_id().expect("no session id from Claude Code");
+    drop(first);
+
+    let second = Session::new(Arc::clone(&tree), harness, project, Some(id), choice);
+    let recall = ask(
+        &second,
+        "Which word did I ask you to remember? Reply with that one word.",
+    );
+    drop(second);
+
+    tree.stop_all(Duration::from_secs(10)).unwrap();
+    assert!(
+        said(&answer).to_lowercase().contains("kelpie"),
+        "the first answer: {:?}",
+        said(&answer)
+    );
+    assert!(
+        said(&recall).to_lowercase().contains("kelpie"),
+        "the resumed session did not remember: {:?}",
+        said(&recall)
+    );
+    fs::remove_dir_all(data).unwrap();
+}
+
+/// Runs a real goose session by hand.
+///
+/// Needs the person's own goose on `PATH`, and a model it can reach: kelpie
+/// names the provider `ollama` and asks for no model, so goose keeps its own
+/// config. `GOOSE_MODEL` and `OLLAMA_HOST` in the environment that starts the
+/// test reach the session, which inherits it. Run it with Ollama up:
+/// `cargo test -p kelpie-engine --lib a_real_goose_answers_and_resumes -- --ignored`
+#[ignore = "needs the person's own goose on PATH, and a local model it can reach"]
+#[test]
+fn a_real_goose_answers_and_resumes() {
+    use crate::tree::ProcessTree;
+
+    let data = temp("harness-real");
+    let project = data.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let harness = goose::harness(&data.join("pm"), provider("ollama", None)).unwrap();
+    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), data.join("run.json")).unwrap());
+    let choice = Choice::default();
+
+    let first = Session::new(
+        Arc::clone(&tree),
+        harness.clone(),
+        project.clone(),
+        None,
+        choice.clone(),
+    );
+    let answer = ask(
+        &first,
+        "Remember the word kelpie. Reply with that one word.",
+    );
+    let id = first.session_id().expect("no session id from goose");
     drop(first);
 
     let second = Session::new(Arc::clone(&tree), harness, project, Some(id), choice);
