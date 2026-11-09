@@ -14,6 +14,10 @@ _Avoid_: user, owner
 The maintainer's one long-lived conversation for a project, through which work is planned and followed. The chat box is its front end.
 _Avoid_: project manager agent, PM chat (the first tracer bullet, not the PM)
 
+**Thread**:
+A side conversation forked from the PM, tied to a ticket or a topic. Its outcome returns to the PM in one line, and its transcript stays with it.
+_Avoid_: sub-chat, branch, fork (the mechanism, not the thing)
+
 **Worker**:
 An agent session that does one piece of work and then ends.
 _Avoid_: lamb, runner
