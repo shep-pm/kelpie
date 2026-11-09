@@ -35,7 +35,8 @@
 //!         },
 //!     )],
 //! };
-//! let cmd = ensure(&Path::new(".kelpie-data"), &pin)?;
+//! let cmd = ensure(Path::new(".kelpie-data"), &pin)?;
+//! println!("run {}", cmd.display());
 //! # Ok::<(), kelpie_engine::bridge::BridgeError>(())
 //! ```
 
