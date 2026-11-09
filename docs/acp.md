@@ -114,6 +114,20 @@ Gaps where a native adapter would still be needed:
 
 Suggested shape (opinion, not a finding): hide harnesses behind kelpie's own session trait (option B) and implement the Claude and Codex adapters on ACP via the Rust crate (they have the best coverage), keeping a native pi RPC adapter and probably native or ACP goose with the gaps above. That is a hybrid, and it keeps ACP as an adapter detail rather than the interface.
 
+## Checked by hand (2026-11-09)
+
+One Haiku session through `claude-agent-acp` v0.101.1 (darwin-arm64 executable, its sha256 matching the registry's, the bundled `claude` deleted so `CLAUDE_CODE_EXECUTABLE` pointed at the installed Claude Code 2.1.319). A small Python ACP client started the bridge in its own process group, sent `initialize`, `session/new` with `_meta.claudeCode.emitRawSDKMessages` and model `haiku`, and one prompt, from a folder whose `.claude/settings.json` set `outputStyle` to `Explanatory`.
+
+| Check | Result |
+|---|---|
+| Protocol | `protocolVersion` 1, stop reason `end_turn` |
+| `claude` in the bridge's process group | Yes. Its MCP servers launched through npm stayed in the group too. One Python MCP server started by `claude` made a group of its own |
+| SIGTERM to the bridge's group | Every process seen during the turn was gone two seconds later, the one in its own group included, since its parent's exit closed its input |
+| Output style | The raw `system` `init` message said `output_style: Explanatory` |
+| Usage per turn | `PromptResponse.usage`: `cachedWriteTokens` 28157, `cachedReadTokens` 0 |
+| Cache lifetime split | The raw `result` message: `ephemeral_1h_input_tokens` 28157, `ephemeral_5m_input_tokens` 0, so the subscription's one-hour cache applied |
+| Settings the bridge read | User settings too: the person's own MCP servers started, and the bridge warned that `permissionMode` was `bypassPermissions`, from the person's settings |
+
 ## Sources
 
 - Spec: agent-client-protocol@75438f7 docs/protocol/v1/{initialization,prompt-turn,session-setup,session-config-options,tool-calls}.mdx, docs/protocol/v2/{prompt-lifecycle,migration}.mdx, docs/rfds/{session-fork,end-turn-token-usage}.mdx, schema/v1/{meta,schema,schema.unstable}.json, CHANGELOG.md, MAINTAINERS.md, docs/community/governance.mdx
