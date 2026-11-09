@@ -83,6 +83,15 @@ First interactions:
 2. **Note** is the default send. Claude reads it at its next tool boundary. **Stop and tell** interrupts the turn.
 3. A note goes into the ticket's record. When it changes the scope, the PM updates the ticket's text so review checks the new ask. The PM gets one line saying what the maintainer told the worker.
 
+## Sandbox
+
+Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, starting with the PM tracer bullet.
+
+1. The PM reads wide (the project, worktrees, sibling repos, secrets denied) and writes only its own folder and Claude's config folder.
+2. Every other change goes through kelpie's own tools: tickets, links, areas, notes to workers, GitHub. The PM's permissions are its tool list.
+3. When an agent needs a site off its allowlist, kelpie asks the maintainer and widens the sandbox while the session runs.
+4. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
+
 ## Attention
 
 One count of what needs the maintainer, shown wherever it applies: the project in the rail, the panel it lives in, the area on the graph. The PM mentions it in its next reply. An OS notification fires only when work is blocked on the maintainer.
@@ -99,6 +108,8 @@ One count of what needs the maintainer, shown wherever it applies: the project i
 | The chat view | The PM, threads and workers |
 | The stream-json reader (#12) | The PM, threads and workers |
 | The process tree (ADR 0001) | Every session and CMM, all shown in the drawer |
+| crabpot (ADR 0005) | Every agent session |
+| Kelpie's own tools for the PM | The PM, threads, and the graph's and board's actions, which call the same tools |
 | SK's work-item loop, lifted in Phase 3 | The board |
 | GitHub | Stays the git flow. The board links out to it for what kelpie doesn't show |
 
@@ -106,7 +117,7 @@ It would duplicate CMM's own viewer (kelpie never shows the raw graph) and GitHu
 
 The order of work changes: the graph becomes slice 2, ahead of the drawer (`docs/process-and-sk.md`).
 
-Hard to reverse, so it gets an ADR when the graph slice starts: running CMM as a second sidecar beside the reaper.
+Hard to reverse, so recorded as ADRs: every agent runs in crabpot (ADR 0005), and running CMM as a second sidecar beside the reaper (written when the graph slice starts).
 
 ## Later
 
