@@ -461,3 +461,60 @@ fn said(events: &[SessionEvent]) -> String {
         })
         .collect()
 }
+
+#[test]
+fn claude_names_its_model_host_its_install_and_the_mode_that_stops_its_prompts() {
+    let dir = installed();
+    let logins = logged_in();
+
+    let harness = build(&path_of([dir.clone()]), &logins).unwrap();
+
+    assert_eq!(harness.hosts, ["api.anthropic.com"]);
+    assert!(
+        harness.installs.contains(&dir),
+        "the folder claude sits in is read: {:?}",
+        harness.installs
+    );
+    assert_eq!(harness.unprompted.as_deref(), Some("bypassPermissions"));
+}
+
+#[test]
+fn goose_names_the_host_of_its_providers_address() {
+    let dir = goose_installed();
+    let path = path_of([dir.clone()]);
+
+    for (address, host) in [
+        ("http://127.0.0.1:11434", "127.0.0.1"),
+        ("http://localhost:11434/v1", "localhost"),
+        ("https://models.example.com", "models.example.com"),
+        (
+            "http://user:secret@gateway.test:8080/path?q=1",
+            "gateway.test",
+        ),
+        ("http://[::1]:11434", "[::1]"),
+        ("localhost", "localhost"),
+    ] {
+        let harness = build_on(&path, &provider("ollama", Some(address))).unwrap();
+        assert_eq!(harness.hosts, [host], "{address}");
+    }
+}
+
+#[test]
+fn goose_with_no_address_names_no_host_and_still_names_its_install_and_mode() {
+    let dir = goose_installed();
+
+    let harness = build_on(&path_of([dir.clone()]), &provider("ollama", None)).unwrap();
+
+    assert!(harness.hosts.is_empty());
+    assert!(harness.installs.contains(&dir), "{:?}", harness.installs);
+    assert_eq!(harness.unprompted.as_deref(), Some("auto"));
+}
+
+#[test]
+fn an_address_with_no_host_names_none() {
+    let dir = goose_installed();
+
+    let harness = build_on(&path_of([dir]), &provider("ollama", Some("http://:11434"))).unwrap();
+
+    assert!(harness.hosts.is_empty());
+}

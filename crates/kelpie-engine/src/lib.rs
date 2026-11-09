@@ -11,7 +11,8 @@
 //! the Markdown files that say what a session runs as and what it is told.
 //! [`harness`] builds what one harness runs on: its bridge, the session's own
 //! state folder, and the person's own login, which [`login`] keeps in the OS
-//! keychain and never shows. The crate
+//! keychain and never shows. [`sandbox`] puts each session's harness inside
+//! crabpot, which confines what it reads, writes and reaches (ADR 0005). The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -31,7 +32,8 @@
 //! fields and the layers they resolve through; [`bridge`] installs a pinned
 //! bridge once and checks it before it is used; [`agents`] loads the agent files
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
-//! runs on; [`login`] holds those logins.
+//! runs on; [`login`] holds those logins; [`sandbox`] builds the policy a
+//! session runs under and starts its sandbox.
 
 #![doc(test(attr(deny(warnings))))]
 
@@ -40,6 +42,7 @@ pub mod bridge;
 pub mod harness;
 pub mod login;
 pub mod run;
+pub mod sandbox;
 pub mod session;
 pub mod settings;
 pub mod tree;

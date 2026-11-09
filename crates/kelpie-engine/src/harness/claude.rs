@@ -26,7 +26,7 @@ use crate::session::{Extension, Harness};
 
 use crate::login::Store;
 
-use super::{HarnessError, on_path};
+use super::{HarnessError, install_folders, on_path};
 
 /// The registry id of the bridge kelpie installs
 const ID: &str = "claude-acp";
@@ -60,6 +60,13 @@ const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 /// The folder inside a session's state dir that Claude Code keeps its config in
 const CONFIG_FOLDER: &str = "claude";
+
+/// The host the model answers on, which Claude Code's sandbox lets through
+const MODEL_HOST: &str = "api.anthropic.com";
+
+/// The bridge's `mode` that stops Claude Code's own permission prompts, which a
+/// sandboxed session sets
+const UNPROMPTED: &str = "bypassPermissions";
 
 /// The command that makes the login token
 const SETUP: &str = "claude setup-token";
@@ -154,6 +161,9 @@ pub(super) fn harness_on_path(
         harness: NAME.to_owned(),
         setup: SETUP.to_owned(),
     })?;
+    let mut installs = install_folders(&bridge);
+    installs.extend(install_folders(&claude));
+    installs.dedup();
     Ok(Harness {
         program: bridge,
         args: Vec::new(),
@@ -165,5 +175,8 @@ pub(super) fn harness_on_path(
         // The raw SDK messages are the only route to the cache lifetime (ADR 0007)
         new_session_meta: Some(json!({ "claudeCode": { "emitRawSDKMessages": true } })),
         extensions: vec![Extension::ClaudeSdkMessage],
+        hosts: vec![MODEL_HOST.to_owned()],
+        installs,
+        unprompted: Some(UNPROMPTED.to_owned()),
     })
 }

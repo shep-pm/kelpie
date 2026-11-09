@@ -7,8 +7,10 @@
 //! run, and each harness's own slice builds one (ADR 0007).
 //!
 //! - A send during a turn waits for the turn to end, and then runs.
-//! - Until crabpot sandboxes sessions (ADR 0005), every permission request is
-//!   refused, and the step shows as refused.
+//! - Every permission request is refused, and the step shows as refused. A
+//!   session built with [`Session::sandboxed`] runs inside crabpot (ADR 0005),
+//!   so its harness is set to stop asking, and a command the sandbox refuses
+//!   shows as a failed step.
 //! - When the harness exits, the turn in flight ends with a
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
@@ -45,6 +47,7 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
 pub use kelpie_protocol::{SessionEvent, SessionId};
 
+use crate::sandbox::Sandbox;
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
@@ -73,6 +76,14 @@ pub struct Harness {
     pub new_session_meta: Option<serde_json::Value>,
     /// The extension notifications this harness sends that kelpie reads
     pub extensions: Vec<Extension>,
+    /// The hosts its model answers on, which a sandbox lets through
+    pub hosts: Vec<String>,
+    /// Folders outside the project that the harness reads to run, such as the
+    /// one its own install sits in
+    pub installs: Vec<PathBuf>,
+    /// The value of the harness's `mode` option that turns its own permission
+    /// prompts off, which a sandboxed session sets
+    pub unprompted: Option<String>,
 }
 
 impl Harness {
@@ -85,6 +96,9 @@ impl Harness {
             env: Vec::new(),
             new_session_meta: None,
             extensions: Vec::new(),
+            hosts: Vec::new(),
+            installs: Vec::new(),
+            unprompted: None,
         }
     }
 }
@@ -127,6 +141,9 @@ impl fmt::Debug for Harness {
             )
             .field("new_session_meta", &self.new_session_meta.is_some())
             .field("extensions", &self.extensions)
+            .field("hosts", &self.hosts)
+            .field("installs", &self.installs)
+            .field("unprompted", &self.unprompted)
             .finish()
     }
 }
@@ -176,6 +193,7 @@ struct Setup {
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
+    mode: Option<String>,
 }
 
 /// One conversation with a harness
@@ -189,6 +207,8 @@ pub struct Session {
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
+    /// The value of the harness's `mode` option to set, `None` to leave it
+    mode: Option<String>,
     id: Arc<Mutex<Option<SessionId>>>,
     /// The running worker's inbox, `None` before the first send
     worker: Mutex<Option<UnboundedSender<Command>>>,
@@ -216,21 +236,56 @@ impl Session {
         resume: Option<SessionId>,
         choice: Choice,
     ) -> Self {
+        Self::on_tree(tree, harness, None, project, resume, choice)
+    }
+
+    /// A session like [`Session::new`] that runs its harness inside `sandbox`
+    ///
+    /// Every start of the harness is wrapped by the sandbox before the tree
+    /// spawns it (ADR 0001, ADR 0005), and the sandbox lasts as long as the
+    /// session and its worker do. The sandbox is what confines the harness, so
+    /// the session turns the harness's own permission prompts off by setting
+    /// its [`Harness::unprompted`] mode. A request that still arrives is
+    /// refused, and a command the sandbox refuses shows as a failed step.
+    #[must_use]
+    pub fn sandboxed(
+        tree: Arc<ProcessTree>,
+        harness: Harness,
+        sandbox: Sandbox,
+        project: PathBuf,
+        resume: Option<SessionId>,
+        choice: Choice,
+    ) -> Self {
+        Self::on_tree(tree, harness, Some(sandbox), project, resume, choice)
+    }
+
+    fn on_tree(
+        tree: Arc<ProcessTree>,
+        harness: Harness,
+        sandbox: Option<Sandbox>,
+        project: PathBuf,
+        resume: Option<SessionId>,
+        choice: Choice,
+    ) -> Self {
         let meta = harness.new_session_meta.clone();
         let extensions = harness.extensions.clone();
+        let mode = sandbox.as_ref().and(harness.unprompted.clone());
         let launcher = ProcessLauncher {
             tree,
             harness,
+            sandbox,
             project: project.clone(),
         };
-        Self::with_launcher(
+        let mut session = Self::with_launcher(
             Box::new(launcher),
             project,
             resume,
             choice,
             meta,
             extensions,
-        )
+        );
+        session.mode = mode;
+        session
     }
 
     pub(crate) fn with_launcher(
@@ -248,9 +303,17 @@ impl Session {
             meta,
             extensions,
             instructions: None,
+            mode: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
         }
+    }
+
+    /// Set the harness's `mode` option to `mode` once the session opens
+    #[cfg(test)]
+    fn with_mode(mut self, mode: &str) -> Self {
+        self.mode = Some(mode.to_owned());
+        self
     }
 
     /// Give the session instructions, such as its agent's body
@@ -302,6 +365,7 @@ impl Session {
             meta: self.meta.clone(),
             extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
+            mode: self.mode.clone(),
         };
         let launcher = Arc::clone(&self.launcher);
         let id = Arc::clone(&self.id);
@@ -343,6 +407,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct ProcessLauncher {
     tree: Arc<ProcessTree>,
     harness: Harness,
+    /// Wraps the command before the tree spawns it
+    sandbox: Option<Sandbox>,
     project: PathBuf,
 }
 
@@ -352,7 +418,14 @@ impl Launch for ProcessLauncher {
         command
             .args(&self.harness.args)
             .envs(self.harness.env.iter().map(|(name, value)| (name, value)))
-            .current_dir(&self.project)
+            .current_dir(&self.project);
+        // The wrapped command keeps the program, arguments, directory and
+        // environment, and none of the streams
+        let mut command = match &self.sandbox {
+            Some(sandbox) => sandbox.command(&command)?,
+            None => command,
+        };
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

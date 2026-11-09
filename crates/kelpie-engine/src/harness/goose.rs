@@ -15,6 +15,10 @@
 //! goose puts each shell command it runs in a process group of its own, so
 //! stopping a session stops those through the sweep for the run's mark, not
 //! through the harness's group (ADR 0001, ADR 0007).
+//!
+//! A sandboxed session (ADR 0005) lets through the host of the provider's
+//! address, `localhost` included, and sets goose's `auto` mode, which approves
+//! every call.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -22,7 +26,7 @@ use std::path::Path;
 
 use crate::session::Harness;
 
-use super::{HarnessError, on_path};
+use super::{HarnessError, install_folders, on_path};
 
 /// The command kelpie looks for on `PATH`, and runs
 const CMD: &str = "goose";
@@ -38,6 +42,10 @@ const PATH_ROOT_ENV: &str = "GOOSE_PATH_ROOT";
 
 /// The variable that names the provider the session runs on
 const PROVIDER_ENV: &str = "GOOSE_PROVIDER";
+
+/// The goose `mode` that approves every tool call, which a sandboxed session
+/// sets: the sandbox is what confines it
+const UNPROMPTED: &str = "auto";
 
 /// The folder inside a session's state dir that goose keeps its files in
 const CONFIG_FOLDER: &str = "goose";
@@ -91,6 +99,7 @@ pub(super) fn harness_on_path(
     if let Some(host) = &provider.host {
         env.push((host_env(&provider.name), host.clone().into()));
     }
+    let installs = install_folders(&goose);
     Ok(Harness {
         program: goose,
         args: vec![ACP.into()],
@@ -99,7 +108,35 @@ pub(super) fn harness_on_path(
         new_session_meta: None,
         // kelpie reads no goose notification beyond ACP's own
         extensions: Vec::new(),
+        hosts: provider
+            .host
+            .iter()
+            .filter_map(|url| host_of(url))
+            .collect(),
+        installs,
+        unprompted: Some(UNPROMPTED.to_owned()),
     })
+}
+
+/// The host in a provider's address, such as `127.0.0.1` in
+/// `http://127.0.0.1:11434`
+///
+/// The sandbox lets this host through, so the session reaches the model the
+/// person chose and nothing else (ADR 0005). `None` for an address with no host
+/// in it. A provider with no address of its own has no host here, and a sandboxed
+/// session on it reaches only what the project's allowlist names.
+fn host_of(address: &str) -> Option<String> {
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    // An IPv6 literal keeps its brackets, as the sandbox's allowlist spells it
+    let host = match host.strip_prefix('[') {
+        Some(v6) => &host[..=v6.find(']')? + 1],
+        None => host.split(':').next()?,
+    };
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 /// The variable provider `name` reads its host from

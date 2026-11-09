@@ -362,7 +362,7 @@ async fn serve(
     let session_id = SessionId::from(&*session.0);
     *lock(id) = Some(session_id.clone());
     shared.emit(SessionEvent::Started { session_id });
-    apply_choice(cx, &session, &options, &setup.choice, shared).await;
+    apply_choice(cx, &session, &options, &setup.choice, &setup.mode, shared).await;
 
     // Instructions a harness cannot take as a system prompt lead the first
     // message of a session that has no history to hold them yet
@@ -521,15 +521,18 @@ async fn open(
     ))
 }
 
-/// Set the model and effort the person chose, where the harness lists them
+/// Set the model and effort the person chose, and the mode a sandbox asks for,
+/// where the harness lists them
 ///
-/// Anything the harness will not take is a `Failed` event, and the session
-/// keeps its default.
+/// `mode` is the value of the harness's `mode` option that turns its own
+/// permission prompts off, set only for a sandboxed session. Anything the
+/// harness will not take is a `Failed` event, and the session keeps its default.
 async fn apply_choice(
     cx: &ConnectionTo<Agent>,
     session: &agent_client_protocol::v1::schema::SessionId,
     options: &[SessionConfigOption],
     choice: &Choice,
+    mode: &Option<String>,
     shared: &Shared,
 ) {
     let wanted = [
@@ -539,6 +542,7 @@ async fn apply_choice(
             SessionConfigOptionCategory::ThoughtLevel,
             &choice.effort,
         ),
+        ("mode", SessionConfigOptionCategory::Mode, mode),
     ];
     for (what, category, value) in wanted {
         let Some(value) = value else { continue };

@@ -379,6 +379,18 @@ impl FakeAgent {
         self
     }
 
+    /// Offer a `mode` option
+    #[must_use]
+    pub fn offers_modes(mut self, current: &str, values: &[&str]) -> Self {
+        self.script.offers.push(offer(
+            "mode",
+            SessionConfigOptionCategory::Mode,
+            current,
+            values,
+        ));
+        self
+    }
+
     /// Name an extension notification this agent sends that the session should
     /// read, as a harness names its own
     #[must_use]

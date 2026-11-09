@@ -4,6 +4,9 @@
 //! from what that harness asks for (ADR 0007): its bridge from the ACP registry,
 //! the folder the session keeps its state in, and the person's own login, read
 //! from the [`login`](crate::login) store.
+//! Each also says what a sandbox needs to know of it (ADR 0005): the hosts its
+//! model answers on, the folders its install is read from, and the mode that
+//! turns its own permission prompts off.
 //! Nothing here starts a process: [`session`](crate::session) does that through
 //! the process tree (ADR 0001).
 //!
@@ -116,6 +119,24 @@ pub(super) fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
         let found = dir.join(&name);
         is_program(&found).then(|| std::path::absolute(&found).unwrap_or(found))
     })
+}
+
+/// The folders a program is read from: the one it sits in, and the one its link
+/// leads to when it is a link
+///
+/// A sandbox that closes the home folder has to leave these open for the
+/// harness to start.
+pub(super) fn install_folders(program: &Path) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    let real = fs::canonicalize(program).ok();
+    for path in [Some(program), real.as_deref()].into_iter().flatten() {
+        if let Some(folder) = path.parent()
+            && !folders.iter().any(|known| known == folder)
+        {
+            folders.push(folder.to_owned());
+        }
+    }
+    folders
 }
 
 /// Whether `path` is a file this OS can run
