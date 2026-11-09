@@ -160,6 +160,32 @@ fn leftovers_of_a_dead_run_are_stopped_at_launch() {
     assert_gone(&pids);
 }
 
+#[test]
+fn a_record_in_hand_is_swept_and_not_the_file_that_path_holds_now() {
+    let dir = Dir::new();
+    let dead = RunId::new().unwrap();
+    let fresh = RunId::new().unwrap();
+
+    // The run that died: its record is in hand, and its group is still running
+    let old = ProcessTree::new(dead, dir.run_file()).unwrap();
+    let leftover = old.spawn(Command::new("sleep").arg("60")).unwrap().id();
+    let record = RunFile::read(&dir.run_file()).unwrap();
+
+    // The next launch takes the same path and starts a group of its own, which
+    // is what a reaper of the dead run can race with
+    let live = ProcessTree::new(fresh, dir.run_file()).unwrap();
+    let running = live.spawn(Command::new("sleep").arg("60")).unwrap().id();
+
+    sweep_record(&record).unwrap();
+
+    assert_gone(&[leftover]);
+    assert!(
+        sweep::read(running).is_some_and(|reading| !reading.zombie),
+        "the newer launch's group was stopped by a sweep of the run before it"
+    );
+    live.stop_all(GRACE).unwrap();
+}
+
 /// A process with no mark, alone in its group, and a run file that names it
 /// with `started` moved by `skew`
 fn recorded_stranger(dir: &Dir, skew: u64) -> Stranger {

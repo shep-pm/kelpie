@@ -134,6 +134,28 @@ fn a_parent_killed_with_sigkill_leaves_nothing_running() {
 }
 
 #[test]
+fn a_reaper_leaves_a_newer_launchs_group_running() {
+    let dir = Dir::new();
+    let dead = RunId::new().unwrap();
+    let fresh = RunId::new().unwrap();
+
+    // The next launch takes the run file first, so the reaper below can only
+    // ever read a record that names another run
+    let tree = ProcessTree::new(fresh, dir.run_file()).unwrap();
+    let alive = tree.spawn(Command::new("sleep").arg("60")).unwrap().id();
+
+    let mut reaper = start(&dead, &dir.run_file());
+    reaper.stdin = None;
+
+    assert!(assert_exits(&mut reaper).success());
+    assert!(
+        running(alive),
+        "a reaper of the run before this one stopped its group"
+    );
+    tree.stop_all(WAIT).unwrap();
+}
+
+#[test]
 fn the_reaper_exits_when_there_is_nothing_to_stop() {
     let dir = Dir::new();
     let run = RunId::new().unwrap();

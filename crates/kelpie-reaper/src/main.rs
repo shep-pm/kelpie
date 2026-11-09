@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use kelpie_engine::run::RunId;
 use kelpie_engine::tree::run_file::RunFile;
-use kelpie_engine::tree::{sweep_leftovers, sweep_marked};
+use kelpie_engine::tree::{sweep_marked, sweep_record};
 
 fn main() -> ExitCode {
     let args = match Args::parse() {
@@ -56,16 +56,16 @@ fn hold_the_pipe() {
 
 /// Stop what the run left behind
 ///
-/// The run file is the record of its groups. When it names another run, a
-/// newer launch owns it and its own launch sweep stops that tree; when there
-/// is no record to read, the mark is all that is left, and it names this
-/// reaper's run.
+/// The record read here is the one swept, never the path read a second time: a
+/// newer launch may have taken the file over by then, and its tree is not this
+/// reaper's to stop. A record naming another run is that launch's to sweep, at
+/// its own launch. With no record to read, the mark is all that is left, and it
+/// names this reaper's run.
 fn sweep(args: &Args) -> io::Result<()> {
     match RunFile::read(&args.run_file) {
         Ok(file) if file.run == args.run.to_string() => {
-            sweep_leftovers(&args.run_file)?;
+            sweep_record(&file)?;
         }
-        // A newer launch owns the record, and its own launch sweep stops that tree
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             sweep_marked(&args.run);

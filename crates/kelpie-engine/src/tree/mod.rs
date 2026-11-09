@@ -5,7 +5,8 @@
 //! ends every child and then whatever else still carries the mark, which
 //! catches a grandchild that left its group. [`sweep_leftovers`] does the same
 //! for a run that died without stopping, and belongs before the first spawn
-//! of the next one.
+//! of the next one. [`sweep_record`] is that sweep on a record already read,
+//! which is what a reaper holds.
 //!
 //! [`ProcessTree::with_reaper`] starts a reaper first, so a run that dies
 //! without quitting still has something that stops what it started.
@@ -50,7 +51,7 @@ pub mod run_file;
 mod sweep;
 
 pub use reaper::Reaper;
-pub use sweep::{sweep_leftovers, sweep_marked};
+pub use sweep::{sweep_leftovers, sweep_marked, sweep_record};
 
 use run_file::{Group, RunFile};
 

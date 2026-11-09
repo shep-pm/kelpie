@@ -62,6 +62,35 @@ pub fn sweep_marked(run: &RunId) -> SweepReport {
     Sweeper::new(snapshot, GRACE).run_blocking(&ProcessTable::new())
 }
 
+/// Stop what a run recorded, from its record already in hand
+///
+/// The same ladder as [`sweep_leftovers`], on a record read earlier: each
+/// group whose leader still has its recorded start time gets `SIGTERM`, then
+/// [`sweep_marked`] ends whatever still carries that run's mark, and last the
+/// groups get `SIGKILL`, even when their leader has exited.
+///
+/// A caller that read the record once sweeps what it read. Re-reading the path
+/// would sweep whatever the file holds by then, which a newer launch may own.
+///
+/// A group is stopped by signalling its leader's group, so only unix does that
+/// step; the mark sweep runs everywhere.
+///
+/// # Errors
+///
+/// The record holds an id that is not a run id.
+pub fn sweep_record(file: &RunFile) -> io::Result<SweepReport> {
+    let run: RunId = file
+        .run
+        .parse()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    #[cfg(unix)]
+    let termed = term_groups(&file.groups);
+    let report = sweep_marked(&run);
+    #[cfg(unix)]
+    kill_groups(&termed);
+    Ok(report)
+}
+
 /// Stop what a previous run left behind, before anything of this run starts
 ///
 /// Each group in the run file whose leader still has its recorded start time
@@ -84,16 +113,7 @@ pub fn sweep_leftovers(run_file: &Path) -> io::Result<SweepReport> {
         }
         read => read?,
     };
-    let run: RunId = file
-        .run
-        .parse()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    #[cfg(unix)]
-    let termed = term_groups(&file.groups);
-    let report = sweep_marked(&run);
-    #[cfg(unix)]
-    kill_groups(&termed);
-    Ok(report)
+    sweep_record(&file)
 }
 
 /// Pids of every other process marked with `run`
