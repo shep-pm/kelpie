@@ -56,8 +56,8 @@ Embedding shep's daemon as a library doesn't fix this:
 ```
 kelpie (Tauri app: UI + engine in one Rust process)
  ├─ reaper           tiny; holds a pipe from kelpie; on EOF kills everything below
- ├─ PM session       claude, long-lived, stream-json in and out, one per project
- ├─ worker sessions  claude -p / codex, one per work item
+ ├─ PM session       a harness over ACP, long-lived, one per project
+ ├─ worker sessions  a harness over ACP, one per work item
  │   └─ tools, cargo, node, dev servers, MCP servers
  └─ pty sessions     the terminal tab
 ```
@@ -91,12 +91,12 @@ Processes are short-lived. Conversations are not.
 
 | Session | On quit | On the next launch |
 |---|---|---|
-| PM | The process stops. Kelpie keeps the session id per project | The chat history shows at once, read from the transcript. The process starts with `claude --resume <id>` (or `codex exec resume`) only when you send a message, so nothing runs while you just look |
+| PM | The process stops. Kelpie keeps the session id per project | The chat history shows at once, read from kelpie's own session log. The harness resumes the session (ACP's `session/resume`, or `session/load` where that is all it offers) only when you send a message, so nothing runs while you just look (`docs/design/pm-chat.md`, History) |
 | Worker mid-turn | Stopped. The turn is lost | Shown as **paused**, with one click to resume. It resumes from its transcript, which SK already does after a runner crash (ADR 0002) |
 | pty tab | Gone | Reopens in the same folder. Scrollback isn't kept |
 
 1. Workers come back paused, not running. Quitting is the maintainer saying "stop". A launch that quietly restarts five agents would break the rule from the other side.
-2. Both CLIs resume: `claude --resume <id>` works with `--print` and stream-json input, and `codex exec resume` exists. The PM tracer bullet confirms it end to end.
+2. Every Phase 1 harness resumes over ACP: the Claude Code and Codex bridges offer `session/resume`, and goose offers `session/load` (`docs/acp.md`). The PM tracer bullet confirms it end to end.
 
 ## Updates: drain and resume, not handover
 
