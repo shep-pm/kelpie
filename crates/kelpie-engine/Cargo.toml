@@ -22,6 +22,7 @@ agent-client-protocol.workspace = true
 blocking.workspace = true
 futures.workspace = true
 getrandom.workspace = true
+keyring.workspace = true
 kelpie-protocol.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true
