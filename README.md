@@ -29,6 +29,10 @@ open out/module-map.html
 
 The page's headline numbers and prose are still written by hand for c18cdb1b. Only the grid and the panel follow the data.
 
+## End-to-end tests
+
+The e2e tests in `e2e/` run on the e2e host through `shep-kelpie lease e2e`, which runs `scripts/e2e-remote.sh` there: not locally, and not in CI.
+
 ## License
 
 MIT OR Apache-2.0, at your option.
