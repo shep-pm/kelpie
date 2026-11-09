@@ -225,7 +225,7 @@ mod tests {
                 );
                 fs::write(dir.join("projects.json"), list).unwrap();
             }
-            let state = AppState::open(dir.clone(), Store::memory(), opener, picker).unwrap();
+            let state = AppState::open(dir.clone(), Store::memory(), opener, picker, None).unwrap();
             let app = mock_builder()
                 .manage(state)
                 .build(mock_context(noop_assets()))

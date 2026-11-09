@@ -13,7 +13,8 @@
     "typecheck": "tsc -b",
     "lint": "biome check .",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build-reaper": "sh scripts/build-reaper.sh"
   },
   "dependencies": {
     "@fontsource-variable/atkinson-hyperlegible-mono": "^5.3.0",
