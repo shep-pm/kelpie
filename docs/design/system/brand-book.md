@@ -42,7 +42,7 @@ Six states for tickets, workers, threads and processes. Each is a word, a glyph 
 |---|---|---|---|
 | Idle | hollow ring | `status-idle` · `-soft` · `-fg` | Nothing happening |
 | Running | spinning arc | `status-running` · … | An agent or process is working |
-| Needs you | filled diamond | `status-needs` · … · `status-needs-on` | Blocked on the maintainer |
+| Needs you | filled diamond | `status-needs` · … · `status-needs-on` | Blocked on the maintainer, including a paused worker, labelled "Paused" |
 | Blocked | ring with a bar | `status-blocked` · … | Waiting on something else (CI, a dependency) |
 | Done | check | `status-done` · … | Finished |
 | Failed | cross | `status-failed` · … | Crashed or failed a check |

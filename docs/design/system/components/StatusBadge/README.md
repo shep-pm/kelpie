@@ -15,4 +15,5 @@ Shows one of the six states a ticket, worker, thread or process can be in: idle,
 - Every status always carries its glyph: hollow ring (idle), spinning arc (running), filled diamond (needs you), ring with a bar (blocked), check (done), cross (failed). The glyph is what keeps it readable without colour.
 - Use the words exactly: Idle, Running, Needs you, Blocked, Done, Failed.
 - Needs you is the only status that is ever shown solid (see `NeedsYouCount`).
+- A paused worker (its process stopped mid-turn, as after a relaunch) is Needs you with the word "Paused". It resumes only when the maintainer says so, so it counts toward every NeedsYouCount above it.
 - Running's arc stops spinning under reduced motion and shows a still quarter arc.
