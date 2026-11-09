@@ -151,6 +151,38 @@ fn a_wildcard_arm_after_a_harness_arm_is_a_branch() {
 }
 
 #[test]
+fn a_catch_all_arm_with_a_binding_is_a_branch() {
+    let matrix = read_matrix(&matrix_of("\"claude-code\", \"goose\"", ""), &root());
+    let bound = lines("match h {\n    Harness::ClaudeCode => 1,\n    other => fail(other),\n}");
+    let problems = branch_problems(&matrix, "a.rs", &bound);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("a.rs:3 "), "{problems:?}");
+
+    let tagged = lines(
+        "// parity: harness.send\nmatch h {\n    Harness::ClaudeCode => 1,\n    other => fail(other),\n}",
+    );
+    assert_eq!(
+        branch_problems(&matrix, "a.rs", &tagged),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_arm_that_names_a_harness_or_a_guard_is_no_catch_all() {
+    let matrix = read_matrix(&matrix_of("\"claude-code\", \"goose\"", ""), &root());
+    let named = lines("match h {\n    Harness::ClaudeCode => 1,\n    Harness::Goose => 2,\n}");
+    assert_eq!(
+        branch_problems(&matrix, "a.rs", &named),
+        Vec::<String>::new()
+    );
+    let guarded = lines("match h {\n    Harness::ClaudeCode => 1,\n    x if x.ready() => 2,\n}");
+    assert_eq!(
+        branch_problems(&matrix, "a.rs", &guarded),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn a_name_that_only_starts_like_a_harness_is_no_branch() {
     let matrix = read_matrix(&matrix_of("\"claude-code\", \"goose\"", ""), &root());
     let other = lines("if kind == Harness::GooseDesktop {");

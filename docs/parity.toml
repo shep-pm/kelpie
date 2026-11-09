@@ -40,3 +40,8 @@ goose = "yes"
 what = "usage per turn on `PromptResponse.usage`, with the cache read and the cache written"
 claude-code = "yes"
 goose = { cannot = "goose reports no cache counts in a turn's usage", doc = "docs/acp.md", says = "has total, input, output only. No cache counts." }
+
+[harness.pm]
+what = "the app runs the PM on the harness, from its settings"
+claude-code = "yes"
+goose = { gap = 9 }

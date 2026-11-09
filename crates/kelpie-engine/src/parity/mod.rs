@@ -23,7 +23,8 @@ const CELL_FORMS: &str = "\"yes\", { gap = <the open issue that adds it> }, or \
 // How far above a branch its `parity:` comment may sit.
 const TAG_REACH: usize = 3;
 
-// How far above a wildcard `_ =>` arm a harness's arm makes it a branch.
+// How far above a catch-all arm (`_ =>` or `other =>`) a harness's arm
+// makes it a branch.
 const ARM_REACH: usize = 12;
 
 #[derive(Debug, Default)]
@@ -319,6 +320,20 @@ fn names_provider(line: &str, providers: &[String]) -> bool {
     })
 }
 
+// Whether `code` opens a match arm that takes whatever is left: `_ =>` or a
+// bare binding such as `other =>`. A guarded arm does not take it all.
+fn is_catch_all(code: &str) -> bool {
+    let Some((pattern, _)) = code.split_once("=>") else {
+        return false;
+    };
+    let pattern = pattern.trim();
+    pattern == "_"
+        || (pattern.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+            && pattern
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_'))
+}
+
 fn branches(line: &str) -> bool {
     ["==", "!=", "matches!", "if let"]
         .iter()
@@ -332,7 +347,7 @@ fn branch_problems(matrix: &Matrix, file: &str, lines: &[String]) -> Vec<String>
     let mut problems = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let code = line.split("//").next().unwrap_or("");
-        let from = if code.trim_start().starts_with("_ =>") {
+        let from = if is_catch_all(code) {
             let from = i.saturating_sub(ARM_REACH);
             if !lines[from..i]
                 .iter()
