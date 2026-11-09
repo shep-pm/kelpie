@@ -44,6 +44,8 @@ futures = { version = "0.3.32", default-features = false, features = ["std", "as
 blocking = { version = "1.6", default-features = false }
 # The types the engine and the app share
 kelpie-protocol = { path = "crates/kelpie-protocol" }
+# The sessions, the process tree and the bridges, which the app hosts (ADR 0002)
+kelpie-engine = { path = "crates/kelpie-engine" }
 # Own process group per child, stop ladder and the sweep (ADR 0001). `sysinfo`
 # is the process table the sweep reads.
 shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo"] }
@@ -77,6 +79,14 @@ tauri = { version = "2.12.5", default-features = false, features = [
 ] }
 # The config, ACL and asset codegen behind `generate_context!`
 tauri-build = { version = "2.7.4", default-features = false, features = ["config-json"] }
+# Typed commands and their TypeScript bindings (`.claude/skills/tauri`, choice 8).
+# tauri-specta is still a release candidate, so it and the `specta` it requires
+# are pinned exact; `specta-typescript` is the version rc.26 names.
+tauri-specta = { version = "=2.0.0-rc.26", default-features = false, features = ["typescript"] }
+specta = { version = "=2.0.0-rc.26", default-features = false, features = ["std", "derive"] }
+specta-typescript = { version = "0.0.13", default-features = false }
+# The folder picker (`project_pick`). Its default `gtk3` is the Linux backend.
+tauri-plugin-dialog = "2.8.4"
 # The Win32 bindings `src-tauri/src/sys.rs` calls one message box through
 windows = { version = "0.62.2", default-features = false, features = [
   "std",

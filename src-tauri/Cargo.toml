@@ -22,7 +22,16 @@ all = { level = "warn", priority = -1 }
 self_named_module_files = "deny"
 
 [dependencies]
+getrandom.workspace = true
+kelpie-engine.workspace = true
+kelpie-protocol = { workspace = true, features = ["specta"] }
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+specta-typescript.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-specta.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # `MessageBoxW` in `sys.rs`, for a failure a GUI subsystem process cannot print
@@ -34,3 +43,5 @@ tauri-build.workspace = true
 [dev-dependencies]
 # `test` for `tauri::test`'s mock runtime, so the app can be built with no webview
 tauri = { workspace = true, features = ["test"] }
+# `testing` for `session::fake`, the scripted agent the command tests run on
+kelpie-engine = { workspace = true, features = ["testing"] }
