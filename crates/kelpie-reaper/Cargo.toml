@@ -1,0 +1,19 @@
+[package]
+name = "kelpie-reaper"
+description = "Kelpie's reaper: the process that stops the tree when kelpie dies without quitting"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+kelpie-engine = { path = "../kelpie-engine" }
+
+[dev-dependencies]
+# The tests ask the process table whether a pid is still running
+sysinfo = { workspace = true }

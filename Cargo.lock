@@ -1635,6 +1635,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kelpie-reaper"
+version = "0.0.0"
+dependencies = [
+ "kelpie-engine",
+ "sysinfo",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -273,6 +273,50 @@ fn a_group_member_that_ignores_term_is_killed_after_its_leader_is_gone() {
     assert_gone(&pids);
 }
 
+/// A stand-in reaper: it blocks on its standard input and exits when it ends
+///
+/// The reaper binary is another crate's. The engine's half of the deal is what
+/// this tests: it starts the path it is given, holds a pipe to it, and leaves
+/// it unmarked.
+fn stand_in_reaper(dir: &Dir) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = dir.0.join("reaper");
+    fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn the_reaper_is_not_marked_with_the_run() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::with_reaper(&stand_in_reaper(&dir), run, dir.run_file()).unwrap();
+    let reaper = tree.reaper_id().unwrap();
+    let child = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+
+    let file = RunFile::read(&dir.run_file()).unwrap();
+    assert_eq!(
+        file.groups
+            .iter()
+            .map(|group| group.pid)
+            .collect::<Vec<_>>(),
+        [child.id()],
+        "the run file records the marked child, and not the reaper"
+    );
+
+    tree.stop_all(GRACE).unwrap();
+
+    assert_gone(&[child.id()]);
+    assert!(
+        sweep::read(reaper).is_some_and(|reading| !reading.zombie),
+        "the sweep of the run's mark left the unmarked reaper running"
+    );
+
+    drop(tree);
+    assert_gone(&[reaper]);
+}
+
 #[test]
 fn nothing_starts_after_stop_all() {
     let dir = Dir::new();
