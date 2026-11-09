@@ -72,7 +72,7 @@ pub(super) async fn run(
                 // worker, which can take a while to explain
                 commands.close();
                 let mut message = describe(&error);
-                if shared.state().harness_ended
+                if !shared.state().request_failed
                     && let Some(explained) = explain()
                 {
                     message = format!("{message}: {explained}");
@@ -127,8 +127,9 @@ struct State {
     steps: HashMap<String, (String, ToolStatus)>,
     /// Calls kelpie refused, which stay refused when the agent reports them failed
     refused: HashSet<String>,
-    /// The connection to the harness closed, as against a request it refused
-    harness_ended: bool,
+    /// A request failed on a connection that still works, such as an error the
+    /// harness answered with, so the harness's end is not what to explain
+    request_failed: bool,
 }
 
 impl Shared {
@@ -298,9 +299,9 @@ async fn connect(
         .connect_with(transport, async |cx: ConnectionTo<Agent>| {
             let result = serve(&cx, shared, setup, first, turns, commands, id).await;
             if let Err(error) = &result
-                && (cx.is_incoming_closed() || is_gone(error))
+                && !(cx.is_incoming_closed() || is_gone(error))
             {
-                shared.state().harness_ended = true;
+                shared.state().request_failed = true;
             }
             result
         })

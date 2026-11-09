@@ -545,3 +545,72 @@ fn a_failure_that_is_not_the_harness_ending_does_not_blame_it() {
     };
     assert!(!message.contains(EXPLANATION), "{message}");
 }
+
+/// A pipe whose reader has gone: writes fail, and nothing ever arrives
+struct Broken;
+
+impl futures::io::AsyncWrite for Broken {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::task::Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl futures::io::AsyncRead for Broken {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        _: &mut [u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::task::Poll::Pending
+    }
+}
+
+struct DeadOnWrite;
+
+impl Launch for DeadOnWrite {
+    fn launch(&mut self) -> io::Result<Link> {
+        Ok(Link {
+            transport: agent_client_protocol::DynConnectTo::new(
+                agent_client_protocol::ByteStreams::new(Broken, Broken),
+            ),
+            explain: Box::new(|| Some(EXPLANATION.to_owned())),
+        })
+    }
+}
+
+#[test]
+fn a_harness_gone_before_the_first_write_is_explained() {
+    let session = Session::with_launcher(
+        Box::new(DeadOnWrite),
+        PathBuf::from("/project"),
+        None,
+        Choice::default(),
+        None,
+    );
+
+    let (sink, heard) = events();
+    session.send("Hello", sink);
+
+    let SessionEvent::Failed { message } = next(&heard) else {
+        panic!("a broken pipe did not end the send with Failed");
+    };
+    assert!(message.contains(EXPLANATION), "{message}");
+}
