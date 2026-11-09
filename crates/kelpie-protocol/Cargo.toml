@@ -11,8 +11,14 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Option: `specta::Type` on every type, for the app's generated TypeScript
+# bindings. The app crate turns it on; the engine does not.
+specta = ["dep:specta"]
+
 [dependencies]
 serde.workspace = true
+specta = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Only to test the wire form

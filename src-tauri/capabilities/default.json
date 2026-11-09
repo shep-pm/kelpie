@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Kelpie's main window. It has no commands yet, so only the core permissions.",
+  "description": "Kelpie's main window: the core permissions and the folder picker. Its own commands are open to every local window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

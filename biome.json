@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!docs", "!map", "!.claude", "!**/*.md"]
+    "includes": [
+      "**",
+      "!docs",
+      "!map",
+      "!.claude",
+      "!**/*.md",
+      "!src/bindings.ts"
+    ]
   },
   "formatter": {
     "enabled": true,

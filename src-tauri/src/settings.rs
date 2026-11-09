@@ -14,6 +14,7 @@ use tauri::State;
 ///
 /// The text of why the keychain refused it, or that the value was blank.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_set(logins: State<'_, Store>, harness: String, value: String) -> Result<(), String> {
     logins
         .set(&harness, &value)
@@ -26,6 +27,7 @@ pub fn login_set(logins: State<'_, Store>, harness: String, value: String) -> Re
 ///
 /// The text of why the keychain could not be read.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_status(logins: State<'_, Store>, harness: String) -> Result<bool, String> {
     logins.status(&harness).map_err(|error| error.to_string())
 }
@@ -36,6 +38,7 @@ pub fn login_status(logins: State<'_, Store>, harness: String) -> Result<bool, S
 ///
 /// The text of why the keychain refused it.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_clear(logins: State<'_, Store>, harness: String) -> Result<(), String> {
     logins.clear(&harness).map_err(|error| error.to_string())
 }
