@@ -5,7 +5,8 @@
 //! environment. [`tree`] is the one way the engine starts a process, and the
 //! sweep that stops what a run left behind. [`run`] is the id itself: what a
 //! child's environment carries, and what a sweep looks for. [`settings`] reads
-//! and writes the config folder ADR 0008 puts at `~/.config/kelpie`. [`session`]
+//! and writes the config folder ADR 0008 puts at `~/.config/kelpie`. [`bridge`]
+//! installs the ACP registry bridges ADR 0007 runs harnesses through. [`session`]
 //! holds a conversation with a harness over ACP (ADR 0007). The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
@@ -23,10 +24,12 @@
 //!
 //! [`run`] holds the id and its text form; [`tree`] starts and stops the
 //! children; [`session`] streams a harness's events; [`settings`] holds the
-//! fields and the layers they resolve through.
+//! fields and the layers they resolve through; [`bridge`] installs a pinned
+//! bridge once and checks it before it is used.
 
 #![doc(test(attr(deny(warnings))))]
 
+pub mod bridge;
 pub mod run;
 pub mod session;
 pub mod settings;
