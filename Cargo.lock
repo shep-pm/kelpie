@@ -2182,6 +2182,7 @@ name = "kelpie-app"
 version = "0.0.0"
 dependencies = [
  "kelpie-engine",
+ "kelpie-protocol",
  "serde_json",
  "tauri",
  "tauri-build",

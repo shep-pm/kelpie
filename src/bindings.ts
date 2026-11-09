@@ -20,3 +20,24 @@ export function loginStatus(harness: string): Promise<boolean> {
 export function loginClear(harness: string): Promise<void> {
   return invoke("login_clear", { harness });
 }
+
+/** One model or effort a harness lists for itself. */
+export type Choice = {
+  /** The value kelpie sends back to pick this one. */
+  id: string;
+  /** The label the harness gives it. */
+  name: string;
+  /** What the harness says about it, if it says anything. */
+  description: string | null;
+};
+
+/** What a harness says it offers. */
+export type Options = {
+  models: Choice[];
+  efforts: Choice[];
+};
+
+/** What `harness` offers: its own model and effort lists, kept until `refresh`. */
+export function harnessOptions(harness: string, refresh: boolean): Promise<Options> {
+  return invoke("harness_options", { harness, refresh });
+}

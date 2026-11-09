@@ -23,6 +23,8 @@ self_named_module_files = "deny"
 
 [dependencies]
 kelpie-engine.workspace = true
+# The types the commands answer with
+kelpie-protocol.workspace = true
 tauri.workspace = true
 
 [target.'cfg(windows)'.dependencies]
