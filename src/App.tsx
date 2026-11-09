@@ -1,7 +1,5 @@
+import { ChatBox } from "./chat/ChatBox";
+
 export function App() {
-  return (
-    <main>
-      <h1>Kelpie</h1>
-    </main>
-  );
+  return <ChatBox />;
 }
