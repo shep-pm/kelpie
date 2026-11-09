@@ -92,6 +92,9 @@ pub(crate) fn read(dir: &ConfigDir, at: LayerFile<'_>) -> Result<LayerDoc, Setti
         }
     };
     let mut doc = LayerDoc { file, fields };
+    // A field written as null is a field nobody set: it is dropped before any
+    // check asks which layer set it
+    doc.fields.retain(|_, value| !value.is_null());
     holds_only_its_layer(&doc, at.layer())?;
     if let Some((path, reason)) = check(document(), &Value::Object(doc.fields.clone()), "") {
         return Err(SettingsError::FileRefused {
@@ -100,8 +103,6 @@ pub(crate) fn read(dir: &ConfigDir, at: LayerFile<'_>) -> Result<LayerDoc, Setti
             reason,
         });
     }
-    // A field written as null is a field nobody set, and must not hide the layer below
-    doc.fields.retain(|_, value| !value.is_null());
     Ok(doc)
 }
 

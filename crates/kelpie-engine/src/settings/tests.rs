@@ -1,10 +1,18 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Barrier;
 
 use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::run::RunId;
+
+/// How many races one write test runs
+///
+/// A lost update needs both threads to read before either writes, which the OS
+/// is free not to arrange. Each round writes values the last round did not, so
+/// any round that loses one shows up, and the lock means none can.
+const ROUNDS: usize = 50;
 
 /// A config folder of its own for one test, never written over by another
 struct Dir(PathBuf);
@@ -288,6 +296,36 @@ fn a_null_clears_a_field_instead_of_hiding_the_layer_below() {
 }
 
 #[test]
+fn a_null_in_a_file_is_not_counted_as_that_layer_setting_it() {
+    let dir = Dir::new();
+    dir.put(
+        LayerFile::Global,
+        r#"{"read-anywhere": null, "pm-model": null}"#,
+    );
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(settings.read_anywhere.from, Layer::BuiltIn);
+    assert_eq!(
+        settings.pm_model,
+        Layered {
+            value: None,
+            from: Layer::BuiltIn
+        }
+    );
+
+    Settings::reset(&dir.config(), LayerFile::Global, Field::ReadAnywhere).unwrap();
+    Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::Host,
+        &json!("localhost:11434"),
+    )
+    .unwrap();
+    let kept = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(kept.host.value.as_deref(), Some("localhost:11434"));
+}
+
+#[test]
 fn a_field_only_another_layer_holds_is_refused() {
     let dir = Dir::new();
     let error = Settings::set(
@@ -363,9 +401,59 @@ fn a_key_kelpie_has_no_setting_for_is_named() {
 }
 
 #[test]
+fn two_writes_to_one_layer_keep_both_fields() {
+    let dir = Dir::new();
+    let config = dir.config();
+    for round in 0..ROUNDS {
+        let host = format!("host-{round}");
+        let provider = format!("provider-{round}");
+        let barrier = Barrier::new(2);
+        let writes = std::thread::scope(|scope| {
+            let started =
+                [(Field::Host, &host), (Field::Provider, &provider)].map(|(field, value)| {
+                    let config = &config;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        Settings::set(config, LayerFile::Global, field, &json!(value))
+                    })
+                });
+            started
+                .into_iter()
+                .map(|write| write.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            writes.iter().all(Result::is_ok),
+            "round {round} failed a write"
+        );
+        let settings = Settings::load(&config, "web").unwrap();
+        assert_eq!(
+            settings.host.value.as_deref(),
+            Some(host.as_str()),
+            "round {round} lost the host"
+        );
+        assert_eq!(
+            settings.provider.value.as_deref(),
+            Some(provider.as_str()),
+            "round {round} lost the provider"
+        );
+    }
+}
+
+#[test]
 fn a_project_id_cannot_name_a_folder_outside_projects() {
     let dir = Dir::new();
-    for id in ["..", "../..", "web/../secret", ""] {
+    for id in [
+        "..",
+        "../..",
+        "web/../secret",
+        "",
+        "C:",
+        "D:x",
+        "web:secret",
+        "web\x00",
+    ] {
         let error = Settings::load(&dir.config(), id).unwrap_err();
         match error {
             SettingsError::ProjectIdNotUsable { id: got } => assert_eq!(got, id.to_string()),

@@ -26,8 +26,9 @@
 
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,13 @@ const SETTINGS_FILE: &str = "settings.json";
 
 /// The folder a project's own settings live under, inside the config folder
 const PROJECTS_FOLDER: &str = "projects";
+
+/// One settings writer at a time in this process
+///
+/// A layer file is read, changed in memory and written back as one step, so two
+/// writes to the same file cannot each lose the other's field. kelpie has one
+/// run owning its config folder (ADR 0001), so no lock across processes is held.
+static WRITES: Mutex<()> = Mutex::new(());
 
 // ADR 0008: the config folder is `~/.config/kelpie` on Windows too, so the home
 // folder is the one the OS calls home, not a platform-specific config path.
@@ -121,8 +129,16 @@ impl ConfigDir {
 }
 
 /// A project id names one folder under `projects`, and nothing else
+///
+/// `:` is refused beside the separators: on Windows `PathBuf::join` with an id
+/// like `D:x` replaces the whole path it is joined onto.
 fn usable(id: &str) -> bool {
-    !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && id
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// A harness kelpie can run a session on
@@ -365,7 +381,8 @@ impl Settings {
     /// The value is checked against the field's own place in the schema before
     /// anything is written, and the file is replaced by a rename of a temporary
     /// file beside it. A `null` clears the field instead, which is what an empty
-    /// form field means.
+    /// form field means. One write happens at a time in this process, so a write
+    /// never drops a field another write just made.
     ///
     /// # Errors
     ///
@@ -379,6 +396,7 @@ impl Settings {
         value: &Value,
     ) -> Result<(), SettingsError> {
         let file = dir.file(at)?;
+        let _held = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
         let mut doc = schema::read(dir, at)?;
         let rule = schema::field_schema(field, at.layer())?;
         if value.is_null() {
@@ -401,6 +419,7 @@ impl Settings {
     /// As [`Settings::set`], less the value.
     pub fn reset(dir: &ConfigDir, at: LayerFile<'_>, field: Field) -> Result<(), SettingsError> {
         let file = dir.file(at)?;
+        let _held = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
         let mut doc = schema::read(dir, at)?;
         if doc.fields.remove(field.key()).is_none() {
             return Ok(());
@@ -410,6 +429,11 @@ impl Settings {
 }
 
 /// Replace one layer's file with `fields`, creating its folder when it is not there
+///
+/// The text is on disk in the temporary file before the rename points the layer
+/// at it, so a write that dies partway leaves the old file or the whole new one.
+/// The rename itself is not durable on its own: a folder sync is not something
+/// `std` offers on every OS kelpie ships on.
 fn write(file: &Path, fields: &Map<String, Value>) -> Result<(), SettingsError> {
     let failed = |source: io::Error| SettingsError::Write {
         file: file.to_path_buf(),
@@ -425,11 +449,19 @@ fn write(file: &Path, fields: &Map<String, Value>) -> Result<(), SettingsError> 
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(failed)?;
     }
-    // Renaming over the file is the whole change: a write that dies partway
-    // leaves the old file, never a half-written one.
     let temp = file.with_extension("json.tmp");
-    fs::write(&temp, text).map_err(failed)?;
-    fs::rename(&temp, file).map_err(failed)
+    // A write that got this far and then failed leaves no stray file in a folder
+    // the design means to sit in a dotfiles repo or a synced folder.
+    let dropped = |source: io::Error| {
+        let _ = fs::remove_file(&temp);
+        failed(source)
+    };
+    let mut handle = fs::File::create(&temp).map_err(failed)?;
+    handle.write_all(text.as_bytes()).map_err(dropped)?;
+    handle.sync_all().map_err(dropped)?;
+    // Windows refuses to rename a file a handle still has open
+    drop(handle);
+    fs::rename(&temp, file).map_err(dropped)
 }
 
 /// Why kelpie could not read, use or write a setting
