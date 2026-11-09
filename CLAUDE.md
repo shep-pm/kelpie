@@ -27,7 +27,14 @@ Each issue links its note. Workspace, CI and other plumbing with no behaviour of
 
 ## Commands
 
-No code yet. The Phase 0 workspace adds the app and the Rust crates, and their commands go here (`docs/process-and-sk.md`, Order of work).
+The Rust workspace is `crates/*`, with `kelpie-engine` so far. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.90 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`.
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `cargo test --workspace --locked`
+- `cargo doc --workspace --no-deps --locked`, with `RUSTDOCFLAGS=-D warnings`
+
+Iterate with `cargo test --workspace --lib --bins`.
 
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
 - CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
