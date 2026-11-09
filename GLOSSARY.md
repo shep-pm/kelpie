@@ -92,6 +92,14 @@ _Avoid_: process, chat
 What confines an agent session's reads, writes and network. Every agent runs in one, the PM included.
 _Avoid_: fence, jail, container
 
+**Sandbox request**:
+An agent asking the maintainer to let its sandbox reach something it refused. Allowed once, for the project, or denied.
+_Avoid_: permission prompt (the harness's own, which is off)
+
+**Kelpie tool**:
+A tool kelpie itself serves to an agent session, the same on every harness. The PM changes anything outside its own folder through one.
+_Avoid_: MCP tool (the mechanism), command
+
 **Turn**:
 One round of an agent's work, from a message to its reply.
 
