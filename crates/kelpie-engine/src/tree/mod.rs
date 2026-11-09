@@ -348,6 +348,31 @@ impl Child {
             std::thread::sleep(POLL);
         }
     }
+
+    /// Stop this child's tree, and return how it exited
+    ///
+    /// The same ladder as [`ProcessTree::stop_all`] for one child: `SIGTERM` to
+    /// the group, then the kill when `grace` runs out. The child stays in the
+    /// tree, so [`ProcessTree::stop_all`] still counts it, and the run file is
+    /// rewritten without it. A child already known to have exited is not
+    /// signalled again.
+    ///
+    /// # Errors
+    ///
+    /// The child is no longer in the tree, or the OS could not stop its group.
+    pub fn stop(&mut self, grace: Duration) -> io::Result<ExitStatus> {
+        let mut state = self.shared.lock();
+        let Some(entry) = state.children.get_mut(&self.slot) else {
+            return Err(io::Error::other("the child is no longer in the tree"));
+        };
+        if let Some(status) = entry.exited {
+            return Ok(status);
+        }
+        let status = entry.tree.stop(&mut entry.child, Signal::Term, grace)?;
+        entry.exited = Some(status);
+        let _ = self.shared.write(&state);
+        Ok(status)
+    }
 }
 
 impl Drop for Child {

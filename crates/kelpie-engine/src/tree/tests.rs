@@ -126,6 +126,37 @@ fn stop_all_ends_a_child_and_its_grandchild() {
 }
 
 #[test]
+fn one_child_stops_without_stopping_the_tree() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::new(run, dir.run_file()).unwrap();
+    let mut stopped = tree
+        .spawn(&mut sh(r#"sleep 60 & echo "pid $!"; echo ready; sleep 60"#))
+        .unwrap();
+    let (_stdout, mut pids) = ready(stopped.stdout.take().unwrap());
+    pids.push(stopped.id());
+    let other = tree.spawn(&mut sh("sleep 60")).unwrap();
+    assert_eq!(
+        RunFile::read(&dir.run_file()).unwrap().groups.len(),
+        2,
+        "both groups are listed before either is stopped"
+    );
+
+    stopped.stop(GRACE).unwrap();
+
+    assert_gone(&pids);
+    assert!(!stopped.wait().unwrap().success());
+    let groups = RunFile::read(&dir.run_file()).unwrap().groups;
+    assert_eq!(
+        groups.iter().map(|group| group.pid).collect::<Vec<_>>(),
+        [other.id()]
+    );
+    // The tree is open still, so a session can start its next process
+    tree.spawn(&mut sh("true")).unwrap().wait().unwrap();
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
 fn a_grandchild_that_leaves_the_group_is_still_swept_by_its_mark() {
     // `perl`, since `setsid(1)` is absent on macOS
     let script = r#"perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$0" --ignored --exact --nocapture tree::tests::sleep_a_minute & sleep 60"#;
