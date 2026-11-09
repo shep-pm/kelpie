@@ -13,6 +13,17 @@ From `docs/adr/0001-kelpie-owns-its-whole-process-tree.md`:
 - Every child runs in its own process group (a job object on Windows) with `KELPIE_RUN=<run id>` in its environment.
 - When kelpie quits, every process stops. Sessions are what persist: the next launch resumes them, and workers come back paused.
 
+## An unopinionated hub
+
+Kelpie is a hub of adapters: harnesses (Claude Code, Codex, pi, goose), the models behind them, forges such as GitHub, indexers such as CMM. It assumes nothing about which a person uses. SK was built for Claude Code first, so Codex and local models kept falling behind until CI forced parity. Kelpie is adapter-first from its first agent-facing line (`docs/adr/0006-kelpie-is-an-unopinionated-hub.md`).
+
+- An agent-facing feature is built on the adapter interface and reaches every harness in the same change, or names the open issue that brings each one still missing.
+- Wherever people would choose differently (harness, model, effort, output style, sandbox rules, skills, instructions), a setting holds the choice. Kelpie ships defaults, never requirements.
+- A project carries its own agent setup: vendored skills, its own instructions. A harness's global folder (`~/.claude`, `~/.codex`) is read only when the person turns it on.
+- **Push back on opinionated asks.** When anyone, the maintainer included, asks for something that ties kelpie to one harness, model, tool or workflow, say so and offer the unopinionated version before building. This holds for Claude, the PM and every worker. Build the opinionated version only once the maintainer confirms it after hearing the alternative.
+
+This covers what kelpie runs for people. Kelpie's own stack is settled in its ADRs.
+
 ## Design before building
 
 The maintainer asked for this gate and wants it held even when they push to skip it. Say so plainly when a feature is being rushed.
