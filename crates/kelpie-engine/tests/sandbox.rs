@@ -55,7 +55,11 @@ fn main() {
     std::process::exit(i32::from(failed));
 }
 
-const TESTS: [(&str, fn()); 3] = [
+const TESTS: [(&str, fn()); 4] = [
+    (
+        "a_kernel_without_user_namespaces_is_told_from_a_command_that_failed",
+        a_kernel_without_user_namespaces_is_told_from_a_command_that_failed,
+    ),
     (
         "a_write_outside_the_state_dir_is_refused",
         a_write_outside_the_state_dir_is_refused,
@@ -145,9 +149,56 @@ fn sh(sandbox: &Sandbox, script: &str) -> Output {
         .expect("the sandbox runs sh")
 }
 
+/// Set to make a host that cannot run a sandbox fail the tests, not skip them
+const REQUIRE: &str = "KELPIE_REQUIRE_SANDBOX";
+
+/// What bwrap prints first when the kernel gives it no user namespace, as the
+/// runner's does while `kernel.apparmor_restrict_unprivileged_userns` is on
+fn host_refuses_sandboxes(stderr: &str) -> bool {
+    cfg!(target_os = "linux") && stderr.starts_with("bwrap:")
+}
+
+/// A sandbox for `program` that is known to run commands, or `None` when this
+/// host cannot run one at all.
+///
+/// A refusal test that ran in a sandbox which never started would pass, as a
+/// command that did not run leaves no file and exits non-zero. So each test
+/// asks for a sandbox that has run a command first, and a host that cannot is
+/// said so loudly instead of counted as a pass. `KELPIE_REQUIRE_SANDBOX` turns
+/// that into a failure, for a runner that is meant to hold the guarantee.
+fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
+    let sandbox = scratch.sandbox(program);
+    let probe = sh(&sandbox, "true");
+    if probe.status.success() {
+        return Some(sandbox);
+    }
+    let stderr = String::from_utf8_lossy(&probe.stderr);
+    assert!(
+        host_refuses_sandboxes(&stderr) && std::env::var_os(REQUIRE).is_none(),
+        "`true` did not run in the sandbox: {probe:?}"
+    );
+    println!(
+        "SKIPPED {test}: this host cannot run a sandbox ({})",
+        stderr.trim()
+    );
+    None
+}
+
 fn a_write_outside_the_state_dir_is_refused() {
     let scratch = Scratch::new("refused");
-    let sandbox = scratch.sandbox(Path::new("/bin/sh"));
+    let Some(sandbox) = working_sandbox(
+        &scratch,
+        "a_write_outside_the_state_dir_is_refused",
+        Path::new("/bin/sh"),
+    ) else {
+        return;
+    };
+    // The control: a write the policy allows lands, so the refusals below are
+    // the policy's and not a sandbox that ran nothing
+    let allowed = scratch.state().join("control");
+    let control = sh(&sandbox, &format!("echo yes > {}", allowed.display()));
+    assert!(control.status.success(), "{control:?}");
+    assert!(allowed.exists(), "a write to the state folder did not land");
     let outside = scratch.outside().join("nope");
     let project = scratch.project().join("nope");
 
@@ -169,7 +220,13 @@ fn a_write_outside_the_state_dir_is_refused() {
 fn a_sandboxed_command_reads_the_project_and_writes_the_state_dir() {
     let scratch = Scratch::new("allowed");
     fs::write(scratch.project().join("notes.md"), "from the project").unwrap();
-    let sandbox = scratch.sandbox(Path::new("/bin/sh"));
+    let Some(sandbox) = working_sandbox(
+        &scratch,
+        "a_sandboxed_command_reads_the_project_and_writes_the_state_dir",
+        Path::new("/bin/sh"),
+    ) else {
+        return;
+    };
     let written = scratch.state().join("claude").join("out");
     fs::create_dir_all(written.parent().unwrap()).unwrap();
 
@@ -189,7 +246,10 @@ fn a_sandboxed_command_reads_the_project_and_writes_the_state_dir() {
 fn the_sweep_finds_a_sandboxed_process() {
     let scratch = Scratch::new("sweep");
     let exe = std::env::current_exe().unwrap();
-    let sandbox = scratch.sandbox(&exe);
+    let Some(sandbox) = working_sandbox(&scratch, "the_sweep_finds_a_sandboxed_process", &exe)
+    else {
+        return;
+    };
     let ready = scratch.state().join("ready");
     let run = RunId::new().unwrap();
     let tree = ProcessTree::new(run, scratch.root.join("run.json")).unwrap();
@@ -220,4 +280,13 @@ fn the_sweep_finds_a_sandboxed_process() {
         status.code().is_none(),
         "ended by {status:?}, not by a signal"
     );
+}
+
+fn a_kernel_without_user_namespaces_is_told_from_a_command_that_failed() {
+    // The runner's own words, from the log of the run that went red
+    let refused = "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces.";
+
+    assert_eq!(host_refuses_sandboxes(refused), cfg!(target_os = "linux"));
+    assert!(!host_refuses_sandboxes("sh: true: not found"));
+    assert!(!host_refuses_sandboxes(""));
 }
