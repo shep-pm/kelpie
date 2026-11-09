@@ -1,8 +1,11 @@
 //! Engine: the part of kelpie that starts, watches and stops every process, and holds the sessions
 //!
-//! Every process a run starts goes through here, each child marked with the
-//! run's id in its environment (ADR 0001). It has no Tauri dependency, so the
-//! app crate hosts it and the IPC stays outside the engine (ADR 0002).
+//! ADR 0001 is the rule this crate is built to hold: every process a run
+//! starts goes through the engine, each child marked with the run's id in its
+//! environment. Nothing here starts a process yet. What is here is the id
+//! itself: what a child's environment will carry, and what a sweep looks for.
+//! The crate has no Tauri dependency, so the app crate hosts it and the IPC
+//! stays outside the engine (ADR 0002).
 //!
 //! # Quick start
 //!
@@ -15,7 +18,7 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 //!
-//! [`run`] holds the id every child carries.
+//! [`run`] holds the id and its text form.
 
 #![doc(test(attr(deny(warnings))))]
 
