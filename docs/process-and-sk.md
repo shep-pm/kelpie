@@ -168,7 +168,7 @@ Measured at origin/main:
 |---|---|---|
 | 0, now | Workspace: app and `kelpie-engine` (#5). `kelpie-protocol` and shep-tree wait for Phase 1, where they are first used | Builds kelpie as a shep dog, unchanged |
 | 1, tracer (#9) | **PM chat:** one claude session in the tree, streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
-| 2 | Process panel, terminal tab (pty), worker sessions, adapters lifted | Builds it. SK's board view is optional and read-only |
+| 2 | The graph (`docs/design/ux.md`), then the drawer (process panel, terminal tab), worker sessions, adapters lifted | Builds it. SK's board view is optional and read-only |
 | 3 | Work-item loop, review and leases lifted. Kelpie builds kelpie | Archived |
 
 Why the PM goes first:
