@@ -95,6 +95,14 @@ _Avoid_: fence, jail, container
 **Turn**:
 One round of an agent's work, from a message to its reply.
 
+**Harness**:
+The agent program a session runs on, such as Claude Code, Codex, pi or goose. The model is chosen separately.
+_Avoid_: CLI, backend, provider
+
+**Adapter**:
+What lets kelpie use one outside tool through an interface shared by every tool of its kind: a harness, a forge such as GitHub, an indexer such as CMM. Kelpie is a hub of adapters and favours none.
+_Avoid_: plugin, integration, driver
+
 **Paused**:
 The state of a worker whose process stopped mid-turn. It resumes only when the maintainer says so, never on its own.
 _Avoid_: stopped, suspended
