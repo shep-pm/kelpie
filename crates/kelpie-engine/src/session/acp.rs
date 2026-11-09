@@ -16,7 +16,8 @@ use agent_client_protocol::v1::schema::{
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionCategory, SessionConfigSelectOptions, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, StopReason as AcpStopReason, TextContent, ToolCallStatus,
+    SetSessionConfigOptionRequest, StopReason as AcpStopReason, SystemPrompt, TextContent,
+    ToolCallStatus,
 };
 use agent_client_protocol::{
     Agent, Client, Error, is_connection_terminated, is_incoming_transport_closed,
@@ -322,12 +323,20 @@ async fn serve(
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
-    let (session, options) = open(cx, &init, setup, shared).await?;
+    let (session, options, fresh) = open(cx, &init, setup, shared).await?;
     let session_id = SessionId::from(&*session.0);
     *lock(id) = Some(session_id.clone());
     shared.emit(SessionEvent::Started { session_id });
     apply_choice(cx, &session, &options, &setup.choice, shared).await;
 
+    // Instructions a harness cannot take as a system prompt lead the first
+    // message of a session that has no history to hold them yet
+    let first = match &setup.instructions {
+        Some(instructions) if fresh && !offers_system_prompt(&init) => {
+            format!("{instructions}\n\n{first}")
+        }
+        _ => first,
+    };
     turns.push_back((first, None));
     loop {
         let (text, sink) = match turns.pop_front() {
@@ -389,10 +398,29 @@ async fn idle(cx: &ConnectionTo<Agent>, commands: &mut Inbox) -> Result<Option<C
     }
 }
 
+/// Whether the harness takes instructions as `systemPrompt`
+fn offers_system_prompt(init: &InitializeResponse) -> bool {
+    init.agent_capabilities
+        .session_capabilities
+        .system_prompt
+        .is_some()
+}
+
+/// The instructions as a `systemPrompt` in `append` mode, for a harness that offers one
+fn system_prompt(init: &InitializeResponse, setup: &Setup) -> Option<SystemPrompt> {
+    let instructions = setup.instructions.as_ref()?;
+    offers_system_prompt(init).then(|| {
+        SystemPrompt::new(vec![ContentBlock::Text(TextContent::new(
+            instructions.clone(),
+        ))])
+    })
+}
+
 /// Resume the session, or start one
 ///
 /// A resume that fails starts a new session and says so first. A harness that
 /// replays a loaded session has its history dropped: kelpie keeps its own.
+/// The last of the three returned is whether the session is a new one.
 async fn open(
     cx: &ConnectionTo<Agent>,
     init: &InitializeResponse,
@@ -402,20 +430,23 @@ async fn open(
     (
         agent_client_protocol::v1::schema::SessionId,
         Vec<SessionConfigOption>,
+        bool,
     ),
     Error,
 > {
     if let Some(wanted) = &setup.resume {
         let capabilities = &init.agent_capabilities;
         let resumed = if capabilities.session_capabilities.resume.is_some() {
-            let request = ResumeSessionRequest::new(wanted.to_string(), setup.project.clone());
+            let request = ResumeSessionRequest::new(wanted.to_string(), setup.project.clone())
+                .system_prompt(system_prompt(init, setup));
             cx.send_request(request)
                 .block_task()
                 .await
                 .map(|response| response.config_options)
         } else if capabilities.load_session {
             shared.set_replaying(true);
-            let request = LoadSessionRequest::new(wanted.to_string(), setup.project.clone());
+            let request = LoadSessionRequest::new(wanted.to_string(), setup.project.clone())
+                .system_prompt(system_prompt(init, setup));
             let loaded = cx.send_request(request).block_task().await;
             shared.set_replaying(false);
             loaded.map(|response| response.config_options)
@@ -423,14 +454,21 @@ async fn open(
             Err(Error::internal_error().data("the harness cannot resume a session"))
         };
         match resumed {
-            Ok(options) => return Ok((wanted.to_string().into(), options.unwrap_or_default())),
+            Ok(options) => {
+                return Ok((
+                    wanted.to_string().into(),
+                    options.unwrap_or_default(),
+                    false,
+                ));
+            }
             Err(error) if is_gone(&error) => return Err(error),
             Err(error) => shared.emit(failed(format!(
                 "could not resume session {wanted}, so this is a new one: {error}"
             ))),
         }
     }
-    let mut request = NewSessionRequest::new(setup.project.clone());
+    let mut request =
+        NewSessionRequest::new(setup.project.clone()).system_prompt(system_prompt(init, setup));
     match &setup.meta {
         None => {}
         Some(serde_json::Value::Object(meta)) => request = request.meta(meta.clone()),
@@ -444,6 +482,7 @@ async fn open(
     Ok((
         response.session_id,
         response.config_options.unwrap_or_default(),
+        true,
     ))
 }
 

@@ -40,9 +40,10 @@ use agent_client_protocol::v1::schema::{
     NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
     ReadTextFileRequest, RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse,
     SessionCapabilities, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOption, SessionNotification, SessionResumeCapabilities, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, Usage,
+    SessionConfigSelectOption, SessionNotification, SessionResumeCapabilities,
+    SessionSystemPromptCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, Usage,
 };
 use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error};
 use futures::channel::oneshot;
@@ -208,6 +209,7 @@ impl Offer {
 struct Script {
     can_resume: bool,
     can_load: bool,
+    can_take_system_prompt: bool,
     known: Vec<String>,
     history: Vec<String>,
     offers: Vec<Offer>,
@@ -249,6 +251,13 @@ impl FakeAgent {
     #[must_use]
     pub fn can_load(mut self) -> Self {
         self.script.can_load = true;
+        self
+    }
+
+    /// Advertise `sessionCapabilities.systemPrompt`
+    #[must_use]
+    pub fn accepts_system_prompt(mut self) -> Self {
+        self.script.can_take_system_prompt = true;
         self
     }
 
@@ -419,13 +428,16 @@ impl FakeAgent {
             .on_receive_request(
                 async move |request: InitializeRequest, responder, _cx| {
                     init.record("initialize", &request);
-                    let mut capabilities =
-                        AgentCapabilities::new().load_session(init.script.can_load);
+                    let mut offered = SessionCapabilities::new();
                     if init.script.can_resume {
-                        capabilities = capabilities.session_capabilities(
-                            SessionCapabilities::new().resume(SessionResumeCapabilities::new()),
-                        );
+                        offered = offered.resume(SessionResumeCapabilities::new());
                     }
+                    if init.script.can_take_system_prompt {
+                        offered = offered.system_prompt(SessionSystemPromptCapabilities::new());
+                    }
+                    let capabilities = AgentCapabilities::new()
+                        .load_session(init.script.can_load)
+                        .session_capabilities(offered);
                     responder.respond(
                         InitializeResponse::new(ProtocolVersion::V1)
                             .agent_capabilities(capabilities),
