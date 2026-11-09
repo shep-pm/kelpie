@@ -51,7 +51,7 @@ Six states for tickets, workers, threads and processes. Each is a word, a glyph 
 - `status-*-soft` is a badge fill or an area tint; `status-*-fg` is text on that fill and on the plain grounds (4.5:1, both themes).
 - **Needs you is the kelpie's tan,** the only warm hue in the app and the only status ever drawn solid (the count badge, `status-needs` with `status-needs-on`). Never use it for decoration, highlights or links, or it stops meaning "you".
 - Done is a blue-leaning teal, not a green, so done and failed differ by more than red against green.
-- On the graph, the same tokens become overlays: a worker's branch tints the areas it touches with `status-running-soft` and a 4px `status-running` band; a waiting item puts a `status-needs` pip on its area; blocked can hatch.
+- On the graph, the same tokens become overlays: a worker's branch tints the areas it touches with `status-running-soft` and a 4px `status-running` band; a waiting item puts a `status-needs` pip on its area; a blocked one hatches its area in `status-blocked`.
 
 ## Graph
 

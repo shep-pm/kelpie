@@ -1,6 +1,6 @@
 # NeedsYouCount
 
-The count of things waiting on the maintainer: sandbox requests, questions from the PM, tickets in Review, failed workers.
+The count of what is blocked on the maintainer, such as an open sandbox request. The PM mentions it in its next reply (`docs/design/ux.md`, Attention). Each feature that adds a kind of wait says in its own design note whether it counts.
 
 **The consumer provides** `count` (a number). At 0 render nothing: an empty badge is noise. Above 99 show `99+`.
 

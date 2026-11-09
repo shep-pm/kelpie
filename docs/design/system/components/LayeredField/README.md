@@ -4,6 +4,8 @@ A settings row that shows where its value comes from (kelpie's built-in default,
 
 **Used by** the settings page and the agent editor; an agent file's `extends` is one more layer in the same component.
 
+**Built on** `@rjsf/shadcn`'s field template. If showing the layer and its reset fights rjsf's templates, this one widget is kelpie's own (`docs/design/settings.md`, One schema).
+
 **The consumer provides**
 - `label`, `help` (one line), and the control (shadcn `Select`, `Input`, `Switch`).
 - `layers`: the ordered list of layers, e.g. `["kelpie", "global", "project"]`, or for an agent `["kelpie:pm", "global", "this agent"]`.
@@ -18,4 +20,5 @@ A settings row that shows where its value comes from (kelpie's built-in default,
 **Rules**
 - The chip says "from", never "inherited" or "override".
 - Changing the control moves the source to the top layer immediately; reset moves it back.
+- A secret, such as a harness login, shows *set* or *not set*, never its value.
 - No setting is file-only: every field renders from the same schema the JSON file uses.

@@ -8,5 +8,5 @@ The one prompt an agent can raise: asking to read, write or reach something outs
 
 **Rules**
 - `status-needs-soft` fill and the needs-you glyph; it counts toward every NeedsYouCount above it until answered.
-- Once answered, it collapses to one muted line saying what was decided, with the way to undo it ("Undo in settings").
+- Once answered, it collapses to one muted line saying what was decided. After **Allow for this project** the line adds "Undo in settings", since that choice is saved to the project's network allowlist (`docs/design/settings.md`).
 - Never stack more than one open request per session: later ones queue behind it with "+2 more".

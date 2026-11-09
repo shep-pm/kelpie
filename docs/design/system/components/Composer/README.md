@@ -8,7 +8,7 @@ The message box at the bottom of the PM, a thread or a worker.
 
 **While a turn runs**
 - A running line above the box: glyph, "Working", elapsed time and step count, in `status-running-fg`.
-- **Note** (default, Enter): queued and read at the agent's next step. The note shows in the history marked "note".
+- **Note** (default, Enter): read at the agent's next tool boundary, or at the end of its turn on a harness that cannot take one mid-turn, and the chat says which. The note shows in the history marked "note".
 - **Stop and tell** (destructive outline, Cmd+Enter): interrupts the turn, then sends the message.
 
 **Rules**

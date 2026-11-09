@@ -10,6 +10,6 @@ The project's PM: one long-lived conversation, with its threads on top.
 5. The `Composer`, pinned to the bottom, with Note and Stop and tell while a turn runs.
 
 **Reading rules**
-- The PM's own reply style is short: lists, tables and before/after comparisons over paragraphs. The panel backs it up by folding everything else.
-- User messages are `secondary` bubbles on the right; the PM's replies are unboxed on the left, so the replies (the thing being read) get the full width.
-- The same view serves threads and workers; only the header and placeholder change.
+- Kelpie's default reply style is short: lists, tables and before/after comparisons over paragraphs. A project can pick another (`docs/design/settings.md`); the panel folds long output either way.
+- The maintainer's messages are `secondary` bubbles on the right; the PM's replies are unboxed on the left, so the replies (the thing being read) get the full width.
+- The same view serves threads and workers. Their header and placeholder change, and a worker's view adds its diff so far and its processes (`docs/design/ux.md`, Workers).
