@@ -16,7 +16,7 @@ use kelpie_engine::session::options;
 use kelpie_protocol::Options;
 use tauri::State;
 
-use crate::Host;
+use crate::state::AppState;
 
 /// The folder under the data folder a harness is asked in
 const ASKS_FOLDER: &str = "asks";
@@ -27,6 +27,7 @@ const ASKS_FOLDER: &str = "asks";
 ///
 /// The text of why the keychain refused it, or that the value was blank.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_set(logins: State<'_, Store>, harness: String, value: String) -> Result<(), String> {
     logins
         .set(&harness, &value)
@@ -39,6 +40,7 @@ pub fn login_set(logins: State<'_, Store>, harness: String, value: String) -> Re
 ///
 /// The text of why the keychain could not be read.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_status(logins: State<'_, Store>, harness: String) -> Result<bool, String> {
     logins.status(&harness).map_err(|error| error.to_string())
 }
@@ -49,6 +51,7 @@ pub fn login_status(logins: State<'_, Store>, harness: String) -> Result<bool, S
 ///
 /// The text of why the keychain refused it.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn login_clear(logins: State<'_, Store>, harness: String) -> Result<(), String> {
     logins.clear(&harness).map_err(|error| error.to_string())
 }
@@ -66,10 +69,11 @@ pub fn login_clear(logins: State<'_, Store>, harness: String) -> Result<(), Stri
 /// yet, its bridge could not be installed, it has no login, it could not be
 /// started, or it did not answer.
 #[tauri::command(async)]
+#[specta::specta]
 pub fn harness_options(
     harness: String,
     refresh: bool,
-    host: State<'_, Host>,
+    state: State<'_, AppState>,
     logins: State<'_, Store>,
 ) -> Result<Options, String> {
     // Only Claude Code has a harness slice in kelpie (#12)
@@ -77,18 +81,19 @@ pub fn harness_options(
         return Err(format!("kelpie has no {harness} harness to ask"));
     }
     // A kept answer answers without installing a bridge or starting a harness
-    if !refresh && let Some(kept) = options::kept(&host.data, &harness) {
+    if !refresh && let Some(kept) = options::kept(state.data_dir(), &harness) {
         return Ok(kept);
     }
-    let bridge = bridge::ensure(&host.data, claude::pin()).map_err(|error| error.to_string())?;
-    let asked = host.data.join(ASKS_FOLDER).join(&harness);
+    let data = state.data_dir();
+    let bridge = bridge::ensure(data, claude::pin()).map_err(|error| error.to_string())?;
+    let asked = data.join(ASKS_FOLDER).join(&harness);
     fs::create_dir_all(&asked).map_err(|error| error.to_string())?;
     let harness = claude::harness(bridge, &asked, &logins).map_err(|error| error.to_string())?;
     options::offerings(
-        &host.tree,
+        &state.tree(),
         &harness,
         claude::LOGIN,
-        &host.data,
+        data,
         &asked,
         refresh,
     )
@@ -101,6 +106,8 @@ mod tests {
 
     use kelpie_engine::login::Store;
     use kelpie_engine::run::RunId;
+
+    use crate::state::AppState;
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
     use tauri::webview::InvokeRequest;
@@ -189,9 +196,15 @@ mod tests {
     #[test]
     fn a_harness_kelpie_cannot_ask_is_refused_before_anything_starts() {
         let dir = std::env::temp_dir().join(format!("kelpie-settings-{}", RunId::new().unwrap()));
-        let host = crate::Host::start(&dir).unwrap();
+        let state = AppState::open(
+            dir.clone(),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+        )
+        .unwrap();
         let app = crate::builder_with(mock_builder(), Store::memory())
-            .manage(host)
+            .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
@@ -230,9 +243,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-settings-{}", RunId::new().unwrap()));
         fs::create_dir_all(dir.join("options")).unwrap();
         fs::write(dir.join("options").join("claude.json"), KEPT).unwrap();
-        let host = crate::Host::start(&dir).unwrap();
+        let state = AppState::open(
+            dir.clone(),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+        )
+        .unwrap();
         let app = crate::builder_with(mock_builder(), Store::memory())
-            .manage(host)
+            .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())

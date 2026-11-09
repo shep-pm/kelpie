@@ -5,6 +5,9 @@
 //! not the engine, not Tauri, not ACP (ADR 0007). Everything here is wire
 //! format, serialized into kelpie's session log and across the app's IPC.
 //!
+//! The `specta` feature derives `specta::Type` on every type, which the app
+//! turns into TypeScript. The engine leaves it off.
+//!
 //! What a harness offers ([`Options`]) is listed by the harness itself, which is
 //! how kelpie names no model outside the default (ADR 0006).
 //!
@@ -34,6 +37,7 @@ use serde::{Deserialize, Serialize};
 /// Kelpie keeps it to resume the session after the harness's process stopped.
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(transparent)]
 pub struct SessionId(String);
 
@@ -66,6 +70,7 @@ impl fmt::Display for SessionId {
 /// One thing a session did, in the order it happened
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive] // new kinds of event arrive with new harness features
 pub enum SessionEvent {
@@ -114,6 +119,7 @@ pub enum SessionEvent {
 /// How far a tool call got
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // harnesses report more states over time
 pub enum ToolStatus {
@@ -132,6 +138,7 @@ pub enum ToolStatus {
 /// Why a turn ended
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // the spec adds stop reasons over time
 pub enum StopReason {
@@ -150,6 +157,7 @@ pub enum StopReason {
 /// The tokens one turn used
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Usage {
     /// Tokens sent to the model
     pub input: u64,
@@ -166,6 +174,7 @@ pub struct Usage {
 /// How long a prompt cache entry lives
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive] // providers offer more lifetimes over time
 pub enum CacheLifetime {
@@ -181,6 +190,7 @@ pub enum CacheLifetime {
 /// its own (ADR 0006). A harness that offers no effort leaves `efforts` empty.
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Options {
     /// The models the harness lists, in the order it lists them
     pub models: Vec<Choice>,
@@ -191,6 +201,7 @@ pub struct Options {
 /// One model or effort a harness lists
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Choice {
     /// The value kelpie sends back to the harness to pick this one
     pub id: String,

@@ -639,6 +639,64 @@ fn a_harness_that_exits_is_explained_from_its_status_and_stderr() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Not a test: a process the tests start, because it has an environment the
+/// sweep may read where a system binary's is hidden
+#[cfg(unix)]
+#[test]
+#[ignore = "a helper process that other tests start"]
+fn sleep_a_minute() {
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// A harness that puts a command in a process group of its own, as goose's
+/// shell tool does (ADR 0007), is stopped along with everything else carrying
+/// the run's mark (ADR 0001). The child is not in the tree at all: only the
+/// mark reaches it.
+#[cfg(unix)]
+#[test]
+fn stopping_a_session_stops_a_child_in_another_group() {
+    use crate::run::RunId;
+    use crate::tree::ProcessTree;
+
+    let dir = std::env::temp_dir().join(format!("kelpie-session-group-{}", RunId::new().unwrap()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = RunId::new().unwrap();
+    let tree = Arc::new(ProcessTree::new(run, dir.join("run.json")).unwrap());
+    let agent = FakeAgent::new().turn(
+        Turn::new()
+            .command_in_a_group(
+                &run,
+                std::env::current_exe().unwrap(),
+                ["--ignored", "--nocapture", "session::tests::sleep_a_minute"],
+            )
+            .text("ran a command"),
+    );
+    let session = agent.session(dir.clone(), None, Choice::default());
+
+    say(&session, "Run a command in the background");
+
+    let pids = agent.spawned();
+    assert_eq!(pids.len(), 1, "the turn started no child: {pids:?}");
+    let child = pids[0];
+
+    let report = tree.stop_all(WAIT).unwrap();
+
+    assert!(
+        report.termed.contains(&child),
+        "the sweep for the run's mark left pid {child} out: {report:?}"
+    );
+    let exits = agent.wait_spawned();
+    assert_eq!(exits.len(), 1);
+    let status = exits[0]
+        .as_ref()
+        .unwrap_or_else(|error| panic!("pid {child} could not be waited for: {error}"));
+    assert!(
+        status.code().is_none(),
+        "pid {child} ended by {status:?}, not by a signal"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn a_send_queued_behind_a_turn_that_dies_is_answered() {
     let agent = FakeAgent::new().turn(Turn::new().text("a").exit());

@@ -2,8 +2,7 @@
 //!
 //! The crate is thin on purpose (ADR 0002): supervision and sessions live in
 //! `kelpie-engine`, and nothing here spawns a process, registers a shell plugin
-//! or carries a sidecar (ADR 0001). [`run`] hosts the engine's process tree for
-//! the run, and commands reach that tree to start anything.
+//! or carries a sidecar (ADR 0001).
 //!
 //! # Quick start
 //!
@@ -16,63 +15,52 @@
 
 #![doc(test(attr(deny(warnings))))]
 
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::Path;
 
 use kelpie_engine::login::Store;
-use kelpie_engine::run::RunId;
-use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
-use tauri::Manager as _;
 
+use tauri::{Manager as _, RunEvent, Runtime};
+use tauri_plugin_dialog::DialogExt as _;
+use tauri_specta::collect_commands;
+
+pub mod pm;
 pub mod settings;
+pub mod state;
 
-/// The file in the data folder that lists this run's process groups
-const RUN_FILE: &str = "run.json";
+use state::AppState;
 
-/// How long the children are given to stop before the tree kills them
-const STOP_GRACE: Duration = Duration::from_secs(10);
+/// Where the bindings are written, from the app crate's folder
+const BINDINGS: &str = "../src/bindings.ts";
 
-/// The engine the window hosts: this run's process tree, and the data folder its
-/// bridges, session state and harness answers live in
-///
-/// Commands take it as state. A test builds one of its own with [`Host::start`].
-#[derive(Debug)]
-pub struct Host {
-    /// The tree every process of this run starts through (ADR 0001)
-    pub tree: Arc<ProcessTree>,
-    /// The folder this run's data lives in (ADR 0008)
-    pub data: PathBuf,
+/// The commands the webview may call, typed for the bindings
+fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
+    tauri_specta::Builder::<R>::new()
+        .commands(collect_commands![
+            pm::project_get,
+            pm::project_pick,
+            pm::pm_send,
+            pm::pm_cancel,
+            settings::login_set,
+            settings::login_status,
+            settings::login_clear,
+            settings::harness_options,
+        ])
+        // Token counts are far below 2^53, which a JS number holds exactly
+        .dangerously_cast_bigints_to_number()
+        // One type per Rust type: the events only ever go out, and `Usage` is written in full
+        .disable_serde_phases()
 }
 
-impl Host {
-    /// Make `data` and start this run's tree in it
-    ///
-    /// Whatever a run that died without quitting left behind goes first, before
-    /// this run can start anything.
-    ///
-    /// # Errors
-    ///
-    /// The data folder could not be made, or the sweep or the run file failed.
-    pub fn start(data: &Path) -> io::Result<Self> {
-        fs::create_dir_all(data)?;
-        let run_file = data.join(RUN_FILE);
-        sweep_leftovers(&run_file)?;
-        let tree = ProcessTree::new(RunId::new()?, run_file)?;
-        Ok(Self {
-            tree: Arc::new(tree),
-            data: data.to_path_buf(),
-        })
-    }
-
-    /// Stop every process this run started
-    ///
-    /// Returns whether any process could not be stopped.
-    pub fn stop(&self) -> io::Result<()> {
-        self.tree.stop_all(STOP_GRACE).map(|_| ())
-    }
+/// Write `src/bindings.ts`: the commands and the types they carry, in TypeScript
+///
+/// `pnpm tauri dev` does it on every start of a debug build, and the checked-in
+/// file is the one it wrote.
+///
+/// # Errors
+///
+/// The file cannot be written.
+pub fn export_bindings(path: impl AsRef<Path>) -> Result<(), specta_typescript::Error> {
+    commands::<tauri::Wry>().export(specta_typescript::Typescript::default(), path)
 }
 
 /// Wire kelpie's app onto a builder, whatever runtime it carries.
@@ -80,51 +68,74 @@ impl Host {
 /// It takes the builder rather than returning one so a test can wire
 /// `tauri::test::mock_builder()` and build it on a mock context, while [`run`]
 /// wires the real `tauri::Wry` runtime.
-pub fn builder<R: tauri::Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
+///
+/// On setup the app opens its state in the app data folder, sweeping what the
+/// previous run left running before anything starts (ADR 0001). Logins are kept
+/// in the OS keychain.
+pub fn builder<R: Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
     builder_with(app, Store::keychain())
 }
 
 /// [`builder`], keeping logins in `logins` instead of the OS keychain
 ///
 /// A test passes `Store::memory()`, so it never touches the person's keychain.
-/// The process tree is not wired here: [`run`] manages it once the data folder
-/// is known, and a test that needs one manages its own.
-pub fn builder_with<R: tauri::Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri::Builder<R> {
-    app.manage(logins).invoke_handler(tauri::generate_handler![
-        settings::login_set,
-        settings::login_status,
-        settings::login_clear,
-        settings::harness_options,
-    ])
+pub fn builder_with<R: Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri::Builder<R> {
+    app.manage(logins.clone())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(commands::<R>().invoke_handler())
+        .setup(move |app| {
+            let data_dir = app.path().app_data_dir()?;
+            let handle = app.handle().clone();
+            let picker = Box::new(move || {
+                handle
+                    .dialog()
+                    .file()
+                    .blocking_pick_folder()
+                    .map(|folder| folder.into_path().map_err(|error| error.to_string()))
+                    .transpose()
+            });
+            app.manage(AppState::open(
+                data_dir,
+                logins,
+                Box::new(pm::open),
+                picker,
+            )?);
+            Ok(())
+        })
+}
+
+/// Stop every process of this run, when the app is asked to quit
+fn on_run_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &RunEvent) {
+    if let RunEvent::ExitRequested { .. } = event
+        && let Some(state) = app.try_state::<AppState>()
+        && let Err(error) = state.stop_all()
+    {
+        eprintln!("kelpie: could not stop every process: {error}");
+    }
 }
 
 /// Build kelpie's window and run its event loop.
 ///
 /// A running app never returns: Tauri ends the process when its loop ends.
+/// A debug build writes `src/bindings.ts` first.
 ///
 /// # Errors
 ///
 /// The app could not be built: `tauri.conf.json` did not load, or the webview
 /// runtime could not start.
 pub fn run() -> Result<(), tauri::Error> {
-    let app = builder::<tauri::Wry>(tauri::Builder::default())
-        .setup(|app| {
-            let data = app.path().app_data_dir()?;
-            app.manage(Host::start(&data)?);
-            Ok(())
-        })
-        .build(tauri::generate_context!())?;
-    app.run(|app, event| {
-        if let tauri::RunEvent::Exit = event {
-            let _ = app.state::<Host>().stop();
-        }
-    });
+    #[cfg(debug_assertions)]
+    if let Err(error) = export_bindings(Path::new(env!("CARGO_MANIFEST_DIR")).join(BINDINGS)) {
+        eprintln!("kelpie: could not write {BINDINGS}: {error}");
+    }
+    let app = builder::<tauri::Wry>(tauri::Builder::default()).build(tauri::generate_context!())?;
+    app.run(|app, event| on_run_event(app, &event));
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::builder;
+    use super::{BINDINGS, builder, export_bindings};
     use tauri::Manager as _;
     use tauri::test::{mock_builder, mock_context, noop_assets};
 
@@ -136,6 +147,23 @@ mod tests {
         assert!(
             app.webview_windows().is_empty(),
             "the builder creates no window of its own"
+        );
+    }
+
+    #[test]
+    fn the_checked_in_bindings_are_the_ones_the_commands_generate() {
+        let checked_in = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(BINDINGS);
+        let fresh = std::env::temp_dir().join(format!(
+            "kelpie-bindings-{}.ts",
+            kelpie_engine::run::RunId::new().unwrap()
+        ));
+        export_bindings(&fresh).unwrap();
+        let generated = std::fs::read_to_string(&fresh).unwrap();
+        let _ = std::fs::remove_file(&fresh);
+        let held = std::fs::read_to_string(&checked_in).unwrap_or_default();
+        assert!(
+            held == generated,
+            "src/bindings.ts is out of date: run `pnpm tauri dev`, which writes it, and commit it"
         );
     }
 }

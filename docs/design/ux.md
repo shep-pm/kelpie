@@ -76,7 +76,7 @@ First interactions:
 1. One PM per project, one living conversation. Standing decisions sit in a file that survives compaction. It defaults to Opus 5.5 at high effort, since its decisions are the last place to save effort, and a project can pick any harness and model.
 2. **Threads**, like Discord threads in a channel. A thread is a fork of the PM session, tied to a ticket or a topic. Its transcript stays with it, and only its outcome returns to the PM, in one line. One level deep.
 3. **Token cost is the open worry.** A fork shares the PM's prefix, and the prompt cache lasts an hour on a subscription. The PoC measures it with `usage.cache_creation`. If forks cost too much, a thread starts from a short brief instead, with no change to the UX.
-4. **Output style:** kelpie ships a reply style modelled on Claude Code's Concise, adding lists, tables and before and after comparisons. Each adapter renders it in its harness's form (an output style on Claude Code, instructions elsewhere). The PM, threads and workers all use it, and a project can override it.
+4. **Output style:** kelpie ships a reply style modelled on Claude Code's Concise, adding lists, tables and before and after comparisons. It is part of the agent's instructions, the same on every harness (ADR 0006). The PM, threads and workers all use it, and a project can override it.
 5. **Readability:** tool calls fold into one-line steps, and a long reply folds after a screenful. Later, a decision or a plan renders as a small graph instead of text.
 6. **When resume fails** (the harness has lost the session): kelpie starts a new one seeded with the standing-decisions file and a short summary of the last exchanges, keeps the old transcript above a divider, and says it happened.
 7. **Quitting mid-turn** loses the turn. On relaunch the last message shows as interrupted, with a Retry button that sends it again.
@@ -111,7 +111,7 @@ Both get UI in Phase 1. Their own note is `docs/design/settings.md`.
 | Layer | Source | Default |
 |---|---|---|
 | 1. The repo | Its instructions, vendored skills, MCP config | Always |
-| 2. Kelpie global | Instructions, skills and MCP servers edited in kelpie. Instructions can point at a file the maintainer already keeps | On |
+| 2. Kelpie global | Instructions, skills and MCP servers edited in kelpie. Instructions can point at a file the maintainer already keeps | On, once built after Phase 1. It needs a design note of its own first |
 | 3. Kelpie project | The same, per project | Later |
 | 4. A harness's global folder (`~/.claude`, `~/.codex`) | Whatever that harness keeps globally | Off, opt in per project |
 
