@@ -152,6 +152,7 @@ Measured at origin/main:
 |---|---|---|
 | `protocol` | 1.2k | Easy. Becomes kelpie's own |
 | claude adapter: resume argv, the no-session error | part of the 22k | Easy. SK runs claude with `--output-format json`, so kelpie's stream-json reader is new code (#12) |
+| pi adapter: argv, its event stream, resume | part of the 22k | Medium. The second harness behind the interface, in Phase 1 (ADR 0006) |
 | work_item, board, lease | ~8k | Medium |
 | PM and ruling | ~11k | Hard. Tangled with the runner |
 | fence, srt, confine | ~6k | Medium. Lift with its tests, in Phase 1, since the PM runs in crabpot too (ADR 0005) |
@@ -167,7 +168,7 @@ Measured at origin/main:
 | Phase | Kelpie | SK |
 |---|---|---|
 | 0, now | Workspace: app and `kelpie-engine` (#5). `kelpie-protocol` and shep-tree wait for Phase 1, where they are first used | Builds kelpie as a shep dog, unchanged |
-| 1, tracer (#9) | **PM chat:** one claude session in the tree, sandboxed with crabpot (ADR 0005), streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
+| 1, tracer (#9) | **PM chat:** one session in the tree behind the harness interface, Claude Code first and pi on a local model before the phase ends, so the interface is not shaped around one harness (ADR 0006). It is sandboxed with crabpot (ADR 0005), streamed over a Tauri Channel into the chat box. Quit kills the process, and a relaunch resumes the conversation. Runs on macOS and Linux | Builds it |
 | 2 | The graph (`docs/design/ux.md`), then the drawer (process panel, terminal tab), worker sessions, adapters lifted | Builds it. SK's board view is optional and read-only |
 | 3 | Work-item loop, review and leases lifted. Kelpie builds kelpie | Archived |
 

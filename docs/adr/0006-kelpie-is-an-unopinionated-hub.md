@@ -21,6 +21,7 @@ SK was built around Claude Code. Codex and local models came later, and features
 ## Consequences
 
 - The PM tracer's stream reader (#12) is the Claude Code adapter behind a harness interface, not code that belongs to the PM.
+- A second harness, pi on a local model, joins the PM in Phase 1, so the interface is proven by two harnesses before anything else builds on it.
 - Parity is held from the first adapter rather than restored later. An issue touching one adapter says which harnesses it reaches, and a CI check is designed alongside the adapter interface.
 - Settings and the agent editor store harness, model and effort per agent. No model is named in kelpie outside a default.
 - Kelpie's own stack is out of scope. Tauri, React, crabpot and shep's crates are kelpie's choices, recorded in their own ADRs.
