@@ -36,6 +36,22 @@ It lets everything the agent runs look up any macOS service: the pasteboard, acc
 4. Most of the frontend needs no window. Playwright on the Vite page with Tauri's IPC mocked runs in any sandbox and in CI.
 5. Each sandbox backend gets this test before kelpie claims an agent can see the app: crabpot's on every platform (ADR 0005), and `srt`'s while SK builds kelpie.
 
+## Ways to drive the app
+
+Tauri has no headless mode, and wry has no screenshot API yet ([wry#1358](https://github.com/tauri-apps/wry/issues/1358)). What exists, checked on Nov 9, 2026:
+
+| Route | Platforms | Cost | Catch |
+|---|---|---|---|
+| [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/), Tauri's own | Linux (WebKitWebDriver), Windows (msedgedriver) | Free | No macOS: "macOS has no WKWebView driver tool". Linux CI runs it under [Xvfb](https://v2.tauri.app/develop/tests/webdriver/ci/) |
+| [`tauri-plugin-webdriver`](https://github.com/Choochmeque/tauri-plugin-webdriver), community, MIT | macOS, Windows, Linux, mobile | Free | Puts a WebDriver server inside the app, so debug builds only: its README says never ship it. Young, at 0.2.4 |
+| CrabNebula's `@crabnebula/tauri-driver` (MIT) and `tauri-plugin-automation` (Apache-2.0 OR MIT) | macOS, Windows, Linux | Unclear on macOS | Their [WebDriver docs](https://docs.crabnebula.dev/plugins/tauri-e2e-tests/) (Oct 2025) say macOS needs a subscription and a `CN_API_KEY`. Their [billing docs](https://docs.crabnebula.dev/cloud/org-management/billing/) say Cloud is free for everyone since June 19, 2026, and never mention WebDriver |
+| [Playwright over CDP](https://playwright.dev/docs/webview2) | Windows (WebView2) | Free | WebKitGTK and WKWebView have no CDP |
+| Playwright on the Vite page with [`mockIPC`](https://v2.tauri.app/develop/tests/mocking/) | Any browser, any sandbox, CI | Free | Fakes `invoke` only: no Rust, no real window |
+
+While SK builds kelpie, its e2e lease is the way in: it copies the worktree to an ssh host, runs `scripts/e2e-remote.sh` there and copies the results back (SK's `docs/guide/leases-and-e2e.md`). On a Linux host that script can run the app under Xvfb with `tauri-driver`, so an agent tests the real app without leaving its sandbox. macOS stays a check at review.
+
+Not tested yet: Xvfb inside the worker's own sandbox on Linux, where `srt` uses bubblewrap rather than seatbelt. If it runs there, a Linux worker could open the app with nothing opened up.
+
 ## How to run it again
 
 1. `pnpm tauri build --no-bundle`, outside any sandbox.
