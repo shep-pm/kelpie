@@ -2,7 +2,9 @@
 
 The app as a whole, settled with the maintainer on 2026-11-09. Every feature's design note places itself here, and its synergy section points back at this file. It builds on `docs/gui-idea.md` and `docs/goals.md`. Terms are in `GLOSSARY.md`.
 
-**Status:** draft, awaiting the maintainer's confirmation.
+**Status:** confirmed by the maintainer on 2026-11-09.
+
+Kelpie is an unopinionated hub (ADR 0006): every agent-facing part below works on any harness behind an adapter, and Claude Code is only the first one built.
 
 ## Use case
 
@@ -71,11 +73,13 @@ First interactions:
 
 ## The PM and threads
 
-1. One PM per project, one living conversation. Standing decisions sit in a file that survives compaction.
+1. One PM per project, one living conversation. Standing decisions sit in a file that survives compaction. It defaults to Opus 5.5 at high effort, since its decisions are the last place to save effort, and a project can pick any harness and model.
 2. **Threads**, like Discord threads in a channel. A thread is a fork of the PM session, tied to a ticket or a topic. Its transcript stays with it, and only its outcome returns to the PM, in one line. One level deep.
 3. **Token cost is the open worry.** A fork shares the PM's prefix, and the prompt cache lasts an hour on a subscription. The PoC measures it with `usage.cache_creation`. If forks cost too much, a thread starts from a short brief instead, with no change to the UX.
-4. **Output style:** kelpie ships a custom style, built on Claude Code's Concise and adding lists, tables and before and after comparisons. The PM, threads and workers all use it, and a project can override it.
+4. **Output style:** kelpie ships a reply style modelled on Claude Code's Concise, adding lists, tables and before and after comparisons. Each adapter renders it in its harness's form (an output style on Claude Code, instructions elsewhere). The PM, threads and workers all use it, and a project can override it.
 5. **Readability:** tool calls fold into one-line steps, and a long reply folds after a screenful. Later, a decision or a plan renders as a small graph instead of text.
+6. **When resume fails** (the harness has lost the session): kelpie starts a new one seeded with the standing-decisions file and a short summary of the last exchanges, keeps the old transcript above a divider, and says it happened.
+7. **Quitting mid-turn** loses the turn. On relaunch the last message shows as interrupted, with a Retry button that sends it again.
 
 ## Workers
 
@@ -89,8 +93,29 @@ Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, st
 
 1. The PM reads wide (the project, worktrees, sibling repos, secrets denied) and writes only its own folder and Claude's config folder.
 2. Every other change goes through kelpie's own tools: tickets, links, areas, notes to workers, GitHub. The PM's permissions are its tool list.
-3. When an agent needs a site off its allowlist, kelpie asks the maintainer and widens the sandbox while the session runs.
-4. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
+3. When the sandbox refuses something, the agent asks through a kelpie tool and a prompt appears in its panel: *"PM wants to reach docs.rs: Allow once · Allow for this project · Deny"*. The sandbox widens while the session runs. "Allow for this project" is saved to the project's settings, where it can be undone.
+4. A per-project setting, **Read anywhere by default**, lifts the read limit (secrets still denied). It is off by default.
+5. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
+
+## Settings and agents
+
+Both get UI in Phase 1. Their own note is `docs/design/settings.md`.
+
+1. **No setting is file-only.** A setting gets UI in the slice that introduces it. Each form is generated from one schema, so form, validation and docs agree.
+2. **Stored as JSON** with a `$schema`, in kelpie's own data folder, not the repo, since allowlists and models are personal and a repo can be public.
+3. **Layers:** built-in, then global, then project. Each field shows which layer its value comes from, with a reset to that layer. Agent files use the same component, and `extends` is one more layer.
+4. **Agent editor:** global agents in Phase 1, per project later. SK's agent format comes over whole with its tests: its frontmatter, `extends` with `kelpie:<name>` built-ins, `_`-prefixed files ignored. A frontmatter form, an MDX body (chelone's components), and a preview of the agent with its `extends` chain resolved.
+
+**An agent's environment** is layered the same way, and kelpie renders it into each harness's format (CLAUDE.md or AGENTS.md, skill folders, MCP config):
+
+| Layer | Source | Default |
+|---|---|---|
+| 1. The repo | Its instructions, vendored skills, MCP config | Always |
+| 2. Kelpie global | Instructions, skills and MCP servers edited in kelpie. Instructions can point at a file the maintainer already keeps | On |
+| 3. Kelpie project | The same, per project | Later |
+| 4. A harness's global folder (`~/.claude`, `~/.codex`) | Whatever that harness keeps globally | Off, opt in per project |
+
+Kelpie's config is one folder, so it can sit in a synced folder or a dotfiles repo. A skill dependency manager that fills layers 1 and 3 comes later (`docs/skills-managers.md`).
 
 ## Attention
 
@@ -109,6 +134,8 @@ One count of what needs the maintainer, shown wherever it applies: the project i
 | The stream-json reader (#12) | The PM, threads and workers |
 | The process tree (ADR 0001) | Every session and CMM, all shown in the drawer |
 | crabpot (ADR 0005) | Every agent session |
+| The harness interface (ADR 0006) | The PM, threads and workers, on Claude Code and pi from Phase 1 |
+| The layers component | Settings, agent files and the agent environment |
 | Kelpie's own tools for the PM | The PM, threads, and the graph's and board's actions, which call the same tools |
 | SK's work-item loop, lifted in Phase 3 | The board |
 | GitHub | Stays the git flow. The board links out to it for what kelpie doesn't show |
@@ -117,7 +144,7 @@ It would duplicate CMM's own viewer (kelpie never shows the raw graph) and GitHu
 
 The order of work changes: the graph becomes slice 2, ahead of the drawer (`docs/process-and-sk.md`).
 
-Hard to reverse, so recorded as ADRs: every agent runs in crabpot (ADR 0005), and running CMM as a second sidecar beside the reaper (written when the graph slice starts).
+Hard to reverse, so recorded as ADRs: every agent runs in crabpot (ADR 0005), kelpie is an unopinionated hub (ADR 0006), and running CMM as a second sidecar beside the reaper (written when the graph slice starts).
 
 ## Later
 
@@ -129,3 +156,6 @@ Hard to reverse, so recorded as ADRs: every agent runs in crabpot (ADR 0005), an
 6. Repos the maintainer doesn't own, with a fork-based flow.
 7. Decisions and plans drawn as small graphs in the chat.
 8. Kelpie's own indexer in place of CMM.
+9. Per-project agents and a kelpie project layer.
+10. A skill dependency manager that vendors and locks skills, MCP servers and instructions for every harness.
+11. Settings synced across machines.
