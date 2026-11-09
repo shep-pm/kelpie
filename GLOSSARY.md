@@ -88,6 +88,10 @@ How a process tree is stopped: ask, wait a grace period, then kill.
 A conversation with an agent. It outlives the processes that serve it: a quit stops the process, and the next message resumes the session.
 _Avoid_: process, chat
 
+**Sandbox**:
+What confines an agent session's reads, writes and network. Every agent runs in one, the PM included.
+_Avoid_: fence, jail, container
+
 **Turn**:
 One round of an agent's work, from a message to its reply.
 
