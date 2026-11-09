@@ -10,7 +10,8 @@
 //! holds a conversation with a harness over ACP (ADR 0007), and [`agents`] reads
 //! the Markdown files that say what a session runs as and what it is told.
 //! [`harness`] builds what one harness runs on: its bridge, the session's own
-//! state folder, and the person's own login. The crate
+//! state folder, and the person's own login, which [`login`] keeps in the OS
+//! keychain and never shows. The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -30,13 +31,14 @@
 //! fields and the layers they resolve through; [`bridge`] installs a pinned
 //! bridge once and checks it before it is used; [`agents`] loads the agent files
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
-//! runs on.
+//! runs on; [`login`] holds those logins.
 
 #![doc(test(attr(deny(warnings))))]
 
 pub mod agents;
 pub mod bridge;
 pub mod harness;
+pub mod login;
 pub mod run;
 pub mod session;
 pub mod settings;

@@ -15,13 +15,28 @@
 
 #![doc(test(attr(deny(warnings))))]
 
+use kelpie_engine::login::Store;
+
+pub mod settings;
+
 /// Wire kelpie's app onto a builder, whatever runtime it carries.
 ///
 /// It takes the builder rather than returning one so a test can wire
 /// `tauri::test::mock_builder()` and build it on a mock context, while [`run`]
 /// wires the real `tauri::Wry` runtime.
 pub fn builder<R: tauri::Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
-    app
+    builder_with(app, Store::keychain())
+}
+
+/// [`builder`], keeping logins in `logins` instead of the OS keychain
+///
+/// A test passes `Store::memory()`, so it never touches the person's keychain.
+pub fn builder_with<R: tauri::Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri::Builder<R> {
+    app.manage(logins).invoke_handler(tauri::generate_handler![
+        settings::login_set,
+        settings::login_status,
+        settings::login_clear,
+    ])
 }
 
 /// Build kelpie's window and run its event loop.
