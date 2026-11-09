@@ -464,6 +464,36 @@ fn a_project_id_cannot_name_a_folder_outside_projects() {
 }
 
 #[test]
+fn a_layer_file_lists_its_keys_in_sorted_order_whatever_was_set_first() {
+    let dir = Dir::new();
+    for (field, value) in [
+        (Field::ReadAnywhere, json!(true)),
+        (Field::NetworkAllowlist, json!(["docs.rs"])),
+        (Field::HarnessGlobalFolder, json!(false)),
+    ] {
+        Settings::set(&dir.config(), LayerFile::Project("web"), field, &value).unwrap();
+    }
+
+    let text = dir.text(LayerFile::Project("web"));
+
+    let keys: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("  \""))
+        .filter_map(|line| line.split('"').next())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "$schema",
+            "harness-global-folder",
+            "network-allowlist",
+            "read-anywhere"
+        ],
+        "{text}"
+    );
+}
+
+#[test]
 fn the_checked_in_schema_matches_the_types() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
