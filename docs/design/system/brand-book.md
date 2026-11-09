@@ -84,7 +84,7 @@ Six states for tickets, workers, threads and processes. Each is a word, a glyph 
 
 ## Type
 
-Atkinson Hyperlegible Next for the interface and Atkinson Hyperlegible Mono for paths, symbols, branches, diffs and numbers in columns. Both are designed for legibility, which is the point of this app; both are variable (200–800).
+Atkinson Hyperlegible Next for the interface and Atkinson Hyperlegible Mono for paths, symbols, branches, diffs and numbers in columns. Both are designed for legibility, which is the point of this app; both are variable (200 to 800).
 
 - `ui` (13/20) is the default for controls, rows and menus; shadcn's `text-sm` lands on it.
 - `prose` (14/22) for chat replies and anything read as sentences.
@@ -135,7 +135,7 @@ Lucide, shadcn's default set, through `lucide-react`: 16px in panels and toolbar
 Two marks, in `assets/logos/`:
 
 - **App icon** (`kelpie-app-icon.png`): the kelpie's face on a `brand-teal` rounded square. The dock, the window, the installer, the About dialog. Use it whole; never crop the face out of the square or recolour the ground.
-- **Mascot** (`kelpie-mascot.png`): the kelpie sitting, in a `brand-teal` bandana with a sheep. Onboarding, empty states and loading only, at 96–160px, centred above a `display` or `title` line. Never in chrome, beside a status, or in an error.
+- **Mascot** (`kelpie-mascot.png`): the kelpie sitting, in a `brand-teal` bandana with a sheep. Onboarding, empty states and loading only, at 96 to 160px, centred above a `display` or `title` line. Never in chrome, beside a status, or in an error.
 
 Both are full-colour illustrations with `brand-outline` ink; they sit on `background`, `card` or `brand-cream`, never on a status fill. In text the name is plain type, lower case: "kelpie". The sheep stays on the bandana: no sheep in labels.
 

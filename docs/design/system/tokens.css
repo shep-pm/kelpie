@@ -1,4 +1,4 @@
-/* kelpie — generated from tokens.json for the previews in this folder. The app's own theme is src/styles/globals.css. */
+/* kelpie: generated from tokens.json for the previews in this folder. The app's own theme is src/styles/globals.css. */
 :root, [data-theme="light"] {
   --background: oklch(0.985 0.003 80);
   --foreground: oklch(0.235 0.012 60);
