@@ -1,15 +1,15 @@
 # Every agent runs in crabpot
 
-Decided on 2026-11-09 in the UX grilling (`docs/design/ux.md`, Sandbox).
+Decided on 2026-11-09 in the UX grilling (`docs/design/ux.md`, Sandbox). Amended the same day so its rules name no harness (ADR 0006).
 
 Every agent session kelpie starts runs inside a crabpot sandbox (shep-pm/crabpot): the PM, its threads and every worker. crabpot is a Rust library, so the engine wraps each agent's command with `Sandbox::start` and `Sandbox::command`, and the process tree spawns the result as it spawns anything else (ADR 0001). Starting with the PM tracer bullet, not later.
 
 The PM reads wide and writes narrow:
 
 - **Reads:** the project, its worktrees and sibling repos, with secrets denied.
-- **Writes:** its own folder and Claude's config folder only.
+- **Writes:** its own folder and its harness's config folder only.
 - **Changes everything else through kelpie's own tools:** tickets, links, areas, notes to workers, GitHub. The PM never holds a GitHub token, and its permissions are its tool list.
-- **Network:** Anthropic plus an allowlist. crabpot's `--control-fd` widens it while the session runs, once the maintainer approves a domain.
+- **Network:** its harness's model host plus an allowlist: Anthropic for Claude Code, or the host of a local model, `localhost` included, for goose. The host comes from the session's harness and model settings, not from kelpie's code. crabpot's `--control-fd` widens it while the session runs, once the maintainer approves a domain.
 
 Workers get the same shape, with write access to their own worktree.
 
