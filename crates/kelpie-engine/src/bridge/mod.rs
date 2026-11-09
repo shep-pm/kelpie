@@ -63,6 +63,9 @@ const ARCHIVE_NAME: &str = "archive";
 /// The suffix of the file beside an installed bridge that records its sha256
 const RECORD_SUFFIX: &str = ".sha256";
 
+/// The suffix of the file that serialises installs of one version
+const LOCK_SUFFIX: &str = ".lock";
+
 /// The prefix of the folder an in-progress install is unpacked into
 const TEMP_PREFIX: &str = ".install-";
 
@@ -244,6 +247,16 @@ fn is_installed(target: &Path) -> bool {
 fn install(dir: &Path, download: &Download) -> Result<(), BridgeError> {
     let format = ArchiveFormat::from_url(&download.url)?;
     fs::create_dir_all(dir).map_err(|error| could_not_write(dir, error))?;
+
+    // One install per version at a time: the sweep below removes every staging
+    // folder it finds, which is only safe when no other install is running. A
+    // second call waits here, then finds the bridge installed and downloads
+    // nothing. The OS drops the lock when its holder exits, so a run that died
+    // never blocks the next one.
+    let _guard = lock_install(dir)?;
+    if is_installed(&dir.join(&download.cmd)) {
+        return Ok(());
+    }
     clear_stale(dir)?;
     let token = token().map_err(|error| could_not_write(dir, error))?;
     let temp = dir.join(format!("{TEMP_PREFIX}{token}"));
@@ -252,6 +265,24 @@ fn install(dir: &Path, download: &Download) -> Result<(), BridgeError> {
     let outcome = stage(&temp, download, format).and_then(|()| land(dir, &temp, download));
     let _ = fs::remove_dir_all(&temp);
     outcome
+}
+
+/// Take the exclusive lock that serialises installs of one version, waiting for it
+///
+/// The lock file sits beside the version's folder, not in it, so the folder
+/// holds only the command and its record. The lock is released when the
+/// returned file is dropped.
+fn lock_install(dir: &Path) -> Result<File, BridgeError> {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    let path = dir.with_file_name(format!(".{name}{LOCK_SUFFIX}"));
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|error| could_not_write(&path, error))?;
+    file.lock().map_err(|error| could_not_write(&path, error))?;
+    Ok(file)
 }
 
 /// Fetch the archive into `temp` and unpack only its command out of it
@@ -291,7 +322,9 @@ fn land(dir: &Path, temp: &Path, download: &Download) -> Result<(), BridgeError>
     Ok(())
 }
 
-/// Remove what an install that died mid-way left behind, none of which is in use
+/// Remove what an install that died mid-way left behind
+///
+/// Only called holding the install lock, so none of it is in use.
 fn clear_stale(dir: &Path) -> Result<(), BridgeError> {
     let entries = fs::read_dir(dir).map_err(|error| could_not_read(dir, error))?;
     for entry in entries {

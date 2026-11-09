@@ -36,10 +36,5 @@ flate2.workspace = true
 tar.workspace = true
 zip.workspace = true
 
-# The tests answer their own downloads instead of opening a socket, which the
-# sandbox kelpie workers run in refuses. See `src/bridge/tests.rs`.
-[dev-dependencies]
-ureq = { workspace = true, features = ["_test"] }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true

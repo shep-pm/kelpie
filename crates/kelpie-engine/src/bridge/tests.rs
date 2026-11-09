@@ -1,7 +1,11 @@
 use std::fs;
+use std::io::Read as _;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-
-use ureq::unversioned::transport::set_handler;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use super::*;
 use crate::run::RunId;
@@ -25,50 +29,104 @@ const PLATFORMS: [Platform; 5] = [
     Platform::WindowsX64,
 ];
 
-/// One fixture, served at a fixed url
-struct Fixture {
-    /// Its file under `tests/fixtures`
-    name: &'static str,
+/// The two fixtures the server answers with
+const TAR: &str = "bridge.tar.gz";
+const ZIP: &str = "bridge.zip";
 
-    /// The url kelpie fetches it from
-    url: &'static str,
-
-    /// The text the server answers a url containing it with
-    pattern: &'static str,
+/// A local HTTP server that answers `GET /<name>` with the fixture of that name
+///
+/// It listens on a port the OS picks, so tests that run side by side never
+/// share one, and it counts what it served. Anything else it answers 404.
+struct Server {
+    addr: SocketAddr,
+    hits: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
-const TAR: Fixture = Fixture {
-    name: "bridge.tar.gz",
-    url: "http://127.0.0.1:8099/bridge.tar.gz",
-    pattern: "/bridge.tar.gz",
-};
-
-const ZIP: Fixture = Fixture {
-    name: "bridge.zip",
-    url: "http://127.0.0.1:8099/bridge.zip",
-    pattern: "/bridge.zip",
-};
-
-impl Fixture {
-    /// Answer every request for this fixture with the fixture's own bytes
-    ///
-    /// ureq's **_test** transport answers a request inside the process instead of
-    /// opening a socket, which the sandbox kelpie workers run in refuses. The
-    /// request and the response are still HTTP/1.1, written and parsed by ureq.
-    fn serve(&self) -> &Fixture {
-        let body = fs::read(fixture_path(self.name)).unwrap();
-        let length = body.len().to_string();
-        set_handler(
-            self.pattern,
-            200,
-            &[
-                ("content-type", "application/octet-stream"),
-                ("content-length", length.as_str()),
-            ],
-            &body,
-        );
-        self
+impl Server {
+    /// Start a server that waits `delay` before it answers each request
+    fn start(delay: Duration) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (hits, stop) = (hits.clone(), stop.clone());
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(stream) = stream else { continue };
+                    let hits = hits.clone();
+                    thread::spawn(move || answer(stream, delay, &hits));
+                }
+            })
+        };
+        Self {
+            addr,
+            hits,
+            stop,
+            thread: Some(thread),
+        }
     }
+
+    /// The url `name` is served at
+    fn url(&self, name: &str) -> String {
+        format!("http://{}/{name}", self.addr)
+    }
+
+    /// How many fixtures it has sent
+    fn served(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wake the accept loop so it sees the flag
+        let _ = TcpStream::connect(self.addr);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Read one request from `stream` and answer it
+fn answer(mut stream: TcpStream, delay: Duration, hits: &AtomicUsize) {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => request.extend_from_slice(&chunk[..read]),
+        }
+    }
+    let request = String::from_utf8_lossy(&request);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split(' ').nth(1))
+        .unwrap_or("/");
+    thread::sleep(delay);
+    let name = path.trim_start_matches('/');
+    let reply = match name {
+        TAR | ZIP => {
+            hits.fetch_add(1, Ordering::SeqCst);
+            let body = fs::read(fixture_path(name)).unwrap();
+            let mut reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            reply.extend_from_slice(&body);
+            reply
+        }
+        _ => b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec(),
+    };
+    let _ = stream.write_all(&reply);
 }
 
 /// A data dir of its own for one test, never written over by another
@@ -104,18 +162,27 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The archive one test serves, with the sha256 the fixture really has
-fn download(fixture: &Fixture) -> Download {
+/// The archive `name` the server serves, with the sha256 the fixture really has
+fn download(server: &Server, name: &str) -> Download {
     Download {
-        url: fixture.url.to_string(),
-        sha256: hash_file(&fixture_path(fixture.name)).unwrap(),
+        url: server.url(name),
+        sha256: hash_file(&fixture_path(name)).unwrap(),
         cmd: CMD.to_string(),
     }
 }
 
-/// The one platform this test runs on, with `fixture` as its archive
-fn platforms_for(fixture: &Fixture) -> [(Platform, Download); 1] {
-    [(this_platform(), download(fixture))]
+/// A download for a test that never fetches it, so it needs no server
+fn unfetched(name: &str) -> Download {
+    Download {
+        url: format!("http://127.0.0.1:1/{name}"),
+        sha256: hash_file(&fixture_path(name)).unwrap(),
+        cmd: CMD.to_string(),
+    }
+}
+
+/// The one platform this test runs on, with the fixture `name` as its archive
+fn platforms_for(server: &Server, name: &str) -> [(Platform, Download); 1] {
+    [(this_platform(), download(server, name))]
 }
 
 /// The platform these tests run on
@@ -145,12 +212,14 @@ fn entries(dir: &Path) -> Vec<String> {
 #[test]
 fn a_bridge_installs_once_and_is_reused() {
     let dir = Dir::new();
-    let platforms = platforms_for(TAR.serve());
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
 
     let first = ensure(dir.data(), &pin(&platforms)).unwrap();
     let second = ensure(dir.data(), &pin(&platforms)).unwrap();
 
     assert_eq!(first, second);
+    assert_eq!(server.served(), 1, "the second call fetched again");
     assert_eq!(first, dir.version().join(CMD));
     assert_eq!(fs::read_to_string(&first).unwrap(), COMMAND_TEXT);
     assert_eq!(
@@ -160,10 +229,11 @@ fn a_bridge_installs_once_and_is_reused() {
 
     // A pin whose archive would now hash wrong still reuses what is installed,
     // which is the same call answering without fetching anything
-    let mut changed = download(&TAR);
+    let mut changed = download(&server, TAR);
     changed.sha256 = "0".repeat(64);
     let reused = ensure(dir.data(), &pin(&[(this_platform(), changed)])).unwrap();
     assert_eq!(reused, first);
+    assert_eq!(server.served(), 1);
 
     #[cfg(unix)]
     {
@@ -176,7 +246,8 @@ fn a_bridge_installs_once_and_is_reused() {
 #[test]
 fn a_zip_archive_installs_too() {
     let dir = Dir::new();
-    let platforms = platforms_for(ZIP.serve());
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, ZIP);
 
     let installed = ensure(dir.data(), &pin(&platforms)).unwrap();
 
@@ -187,8 +258,8 @@ fn a_zip_archive_installs_too() {
 #[test]
 fn a_checksum_mismatch_installs_nothing() {
     let dir = Dir::new();
-    TAR.serve();
-    let mut archive = download(&TAR);
+    let server = Server::start(Duration::ZERO);
+    let mut archive = download(&server, TAR);
     archive.sha256 = "0".repeat(64);
 
     let error = ensure(dir.data(), &pin(&[(this_platform(), archive)])).unwrap_err();
@@ -200,7 +271,7 @@ fn a_checksum_mismatch_installs_nothing() {
     let text = error.to_string();
     assert!(text.contains(&"0".repeat(64)), "no expected sum in {text}");
     assert!(
-        text.contains(&hash_file(&fixture_path(TAR.name)).unwrap()),
+        text.contains(&hash_file(&fixture_path(TAR)).unwrap()),
         "no actual sum in {text}"
     );
     assert_eq!(
@@ -213,7 +284,8 @@ fn a_checksum_mismatch_installs_nothing() {
 #[test]
 fn only_the_command_is_unpacked() {
     let dir = Dir::new();
-    let platforms = platforms_for(TAR.serve());
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
 
     let installed = ensure(dir.data(), &pin(&platforms)).unwrap();
 
@@ -235,7 +307,8 @@ fn an_interrupted_install_is_not_used() {
     fs::create_dir_all(version.join(".install-stale")).unwrap();
     fs::write(version.join(".install-stale").join(CMD), "half an archive").unwrap();
 
-    let platforms = platforms_for(TAR.serve());
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
     let installed = ensure(dir.data(), &pin(&platforms)).unwrap();
 
     assert_eq!(installed, version.join(CMD));
@@ -248,6 +321,31 @@ fn an_interrupted_install_is_not_used() {
 }
 
 #[test]
+fn installs_that_overlap_fetch_once_and_both_succeed() {
+    let dir = Dir::new();
+    // Slow enough that the second call starts while the first is downloading
+    let server = Server::start(Duration::from_millis(300));
+    let platforms = platforms_for(&server, TAR);
+
+    let results = thread::scope(|scope| {
+        let first = scope.spawn(|| ensure(dir.data(), &pin(&platforms)));
+        thread::sleep(Duration::from_millis(100));
+        let second = scope.spawn(|| ensure(dir.data(), &pin(&platforms)));
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+
+    for result in results {
+        let installed = result.unwrap();
+        assert_eq!(fs::read_to_string(installed).unwrap(), COMMAND_TEXT);
+    }
+    assert_eq!(server.served(), 1, "the overlapping call fetched again");
+    assert_eq!(
+        entries(&dir.version()),
+        [CMD.to_string(), format!("{CMD}.sha256")]
+    );
+}
+
+#[test]
 fn a_platform_with_no_download_says_so() {
     let dir = Dir::new();
     let other = PLATFORMS
@@ -255,7 +353,7 @@ fn a_platform_with_no_download_says_so() {
         .find(|platform| *platform != this_platform())
         .unwrap();
 
-    let error = ensure(dir.data(), &pin(&[(other, download(&TAR))])).unwrap_err();
+    let error = ensure(dir.data(), &pin(&[(other, unfetched(TAR))])).unwrap_err();
 
     assert!(matches!(error, BridgeError::NoDownload { .. }), "{error}");
     assert!(
@@ -268,8 +366,8 @@ fn a_platform_with_no_download_says_so() {
 #[test]
 fn an_archive_format_kelpie_does_not_unpack_says_so() {
     let dir = Dir::new();
-    let mut archive = download(&TAR);
-    archive.url = "http://127.0.0.1:8099/bridge.tar.xz".into();
+    let mut archive = unfetched(TAR);
+    archive.url = "http://127.0.0.1:1/bridge.tar.xz".into();
     archive.sha256 = "0".repeat(64);
 
     let error = ensure(dir.data(), &pin(&[(this_platform(), archive)])).unwrap_err();
@@ -284,8 +382,8 @@ fn an_archive_format_kelpie_does_not_unpack_says_so() {
 #[test]
 fn an_archive_without_the_command_says_so() {
     let dir = Dir::new();
-    TAR.serve();
-    let mut archive = download(&TAR);
+    let server = Server::start(Duration::ZERO);
+    let mut archive = download(&server, TAR);
     archive.cmd = "not-in-the-archive".into();
 
     let error = ensure(dir.data(), &pin(&[(this_platform(), archive)])).unwrap_err();
@@ -301,7 +399,7 @@ fn an_archive_without_the_command_says_so() {
 #[test]
 fn a_pin_that_names_a_path_outside_the_bridges_folder_is_refused() {
     let dir = Dir::new();
-    let mut archive = download(&TAR);
+    let mut archive = unfetched(TAR);
     archive.cmd = "../escape".into();
 
     let error = ensure(dir.data(), &pin(&[(this_platform(), archive)])).unwrap_err();
