@@ -100,7 +100,7 @@ Kelpie needs these from a UI:
    - Both compile and run, so the reviewer has to catch them.
    - No LLM eval includes Solid, and it has no MCP server.
 5. **One person carries it.** ryansolid has 1,482 commits; the next contributor has 33.
-6. **Rin's own tooling is React's:** the react-doctor, zustand, TanStack and shadcn skills.
+6. **The maintainer's own tooling is React's:** the react-doctor, zustand, TanStack and shadcn skills.
 
 **What would change this:** all of the following being true at once. None of them is today.
 1. Solid 2.0 is stable.

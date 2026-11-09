@@ -1,6 +1,6 @@
 # GUI notes from the shep-kelpie sessions, Oct 26 to Nov 8
 
-Everything said about the app while working on shep-kelpie, pulled from one long session. Rin's words are quoted. The rest is what was proposed or decided, with where it landed.
+Everything said about the app while working on shep-kelpie, pulled from one long session. The maintainer's words are quoted. The rest is what was proposed or decided, with where it landed.
 
 ## Why the app
 
@@ -12,7 +12,7 @@ Everything said about the app while working on shep-kelpie, pulled from one long
 
 ## The two configs
 
-Rin, Nov 5: "in my ideal world, the only kelpie configs are:
+The maintainer, Nov 5: "in my ideal world, the only kelpie configs are:
 
 1. The agent files
 2. How many decisions the PM rules on vs how many are decided by code
@@ -34,7 +34,7 @@ That's all."
 
 ## The rule for every design from Nov 4 on
 
-Rin, Nov 4: "start thinking about things in terms of 'will this translate' or 'does it make sense to manage this way in a GUI' ya know?"
+The maintainer, Nov 4: "start thinking about things in terms of 'will this translate' or 'does it make sense to manage this way in a GUI' ya know?"
 
 1. No setting is "restart only" without saying so. A key that still needs a restart shows as "waiting for restart" in `status` and doctor, so the app shows a badge instead of a doc note.
 2. Prefer a fact the app can show over a value the user types.
@@ -52,8 +52,8 @@ Rin, Nov 4: "start thinking about things in terms of 'will this translate' or 'd
 | Package managers in the sandbox | Detection always on, `worker.package_registries` goes (#1703 to #1708) | One toggle plus a read-only "Detected: pnpm → these caches, these hosts" panel, with overrides underneath. #1708 stops at `doctor` until the app |
 | Upgrade | Dog first, a canary, then every runner in parallel | One progress row per project |
 | Runner boot | Socket opens before the boot forge calls, `start` reports "starting" | A runner shows "starting" right away |
-| Codex and Claude usage windows | Rin asked that the PM know every agent's locks and windows ("Has it burned its 5 hour window? Its weekly window?"). The dog's agent board reads them (ADR 0018) | Not discussed for the app. A natural fit: per-agent meters with session and week used, and when each resets |
-| Rulings | The PM decides what the map lets it, and only big design calls reach the maintainer | Rulings come to Rin in the app, answered in place, not through a CLI or a relay session |
+| Codex and Claude usage windows | The maintainer asked that the PM know every agent's locks and windows ("Has it burned its 5 hour window? Its weekly window?"). The dog's agent board reads them (ADR 0018) | Not discussed for the app. A natural fit: per-agent meters with session and week used, and when each resets |
+| Rulings | The PM decides what the map lets it, and only big design calls reach the maintainer | Rulings come to the maintainer in the app, answered in place, not through a CLI or a relay session |
 
 ## Live views
 
@@ -63,7 +63,7 @@ Rin, Nov 4: "start thinking about things in terms of 'will this translate' or 'd
 
 ## Parked for the stack talks
 
-Rin, Nov 5: "I don't really know what the 'stack' is going to look like once we move to Tauri and where shep fits in on that exactly. We're going to have quite a few discussions about it at some point, but I just don't really want to have them now."
+The maintainer, Nov 5: "I don't really know what the 'stack' is going to look like once we move to Tauri and where shep fits in on that exactly. We're going to have quite a few discussions about it at some point, but I just don't really want to have them now."
 
 1. Tauri is the working assumption. Nothing in shep-kelpie assumes it, and drafts since Nov 5 are stack-neutral.
 2. Where shep fits. A check on Nov 5 found no sign kelpie made shep's core job worse:
