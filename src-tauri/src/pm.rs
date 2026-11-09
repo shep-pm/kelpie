@@ -60,6 +60,7 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         state_dir,
         logins,
     } = *opening;
+    // parity: harness.pm
     let harness = match PM_DEFAULT.harness {
         Harness::ClaudeCode => {
             fs::create_dir_all(state_dir)
