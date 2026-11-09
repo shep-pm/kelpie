@@ -1,0 +1,184 @@
+//! The layers a setting's value can come from, and how one is resolved
+//!
+//! Built-in, then global, then project: the nearest layer that sets a field
+//! wins, and [`Layered`] carries which one that was, so a form can show it and
+//! offer a reset to the layer below. Which layers may set a field at all is
+//! [`Field::layers`], and a field none of them sets falls back to
+//! [`BUILT_IN`].
+
+use std::fmt;
+use std::path::PathBuf;
+
+use serde_json::{Map, Value};
+
+use super::{BUILT_IN, Field, Resolved, SettingsError};
+
+/// One level a setting's value can come from
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    /// kelpie's own default, in code rather than a file
+    BuiltIn,
+
+    /// `settings.json`, the value for every project
+    Global,
+
+    /// `projects/<id>/settings.json`, the value for one project
+    Project,
+}
+
+impl Layer {
+    /// What to call the layer where a person reads it
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "kelpie",
+            Self::Global => "global",
+            Self::Project => "project",
+        }
+    }
+}
+
+impl fmt::Display for Layer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A value and the layer kelpie took it from
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layered<T> {
+    /// The value
+    pub value: T,
+
+    /// The layer that set it
+    pub from: Layer,
+}
+
+/// Which layer file a write goes to
+///
+/// The built-in layer is in code, so it is never a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerFile<'a> {
+    /// `settings.json`
+    Global,
+
+    /// `projects/<id>/settings.json`
+    Project(&'a str),
+}
+
+impl LayerFile<'_> {
+    /// The layer this file holds
+    #[must_use]
+    pub fn layer(self) -> Layer {
+        match self {
+            Self::Global => Layer::Global,
+            Self::Project(_) => Layer::Project,
+        }
+    }
+}
+
+impl Field {
+    /// The layers that may set this field
+    ///
+    /// The PM's harness, model and effort are a project's setting only: their
+    /// global value is the global `pm` agent's own keys, so one value is never
+    /// kept in two files.
+    #[must_use]
+    pub fn layers(self) -> &'static [Layer] {
+        const PROJECT: &[Layer] = &[Layer::Project];
+        const GLOBAL_AND_PROJECT: &[Layer] = &[Layer::Global, Layer::Project];
+        match self {
+            Self::PmHarness | Self::PmModel | Self::PmEffort => PROJECT,
+            Self::Provider | Self::Host | Self::ReplyStyle => GLOBAL_AND_PROJECT,
+            Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
+        }
+    }
+}
+
+/// One layer's file, read and checked against the schema
+pub(crate) struct LayerDoc {
+    /// The file it came from, for naming it in an error
+    pub(crate) file: PathBuf,
+
+    /// The fields it sets, keyed as the schema keys them
+    pub(crate) fields: Map<String, Value>,
+}
+
+/// Resolve every field from the two layer files
+///
+/// # Errors
+///
+/// [`SettingsError::FileRefused`] when a file's value does not fit the type the
+/// schema was written from.
+pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved, SettingsError> {
+    Ok(Resolved {
+        pm_harness: Field::PmHarness.resolve(global, project, BUILT_IN.pm_harness)?,
+        pm_model: Field::PmModel.resolve(global, project, BUILT_IN.pm_model.map(str::to_string))?,
+        pm_effort: Field::PmEffort.resolve(
+            global,
+            project,
+            BUILT_IN.pm_effort.map(str::to_string),
+        )?,
+        provider: Field::Provider.resolve(
+            global,
+            project,
+            BUILT_IN.provider.map(str::to_string),
+        )?,
+        host: Field::Host.resolve(global, project, BUILT_IN.host.map(str::to_string))?,
+        reply_style: Field::ReplyStyle.resolve(global, project, BUILT_IN.reply_style)?,
+        network_allowlist: Field::NetworkAllowlist.resolve(
+            global,
+            project,
+            BUILT_IN
+                .network_allowlist
+                .iter()
+                .map(|domain| (*domain).to_string())
+                .collect(),
+        )?,
+        read_anywhere: Field::ReadAnywhere.resolve(global, project, BUILT_IN.read_anywhere)?,
+        harness_global_folder: Field::HarnessGlobalFolder.resolve(
+            global,
+            project,
+            BUILT_IN.harness_global_folder,
+        )?,
+    })
+}
+
+impl Field {
+    /// The value at the nearest layer that sets this field
+    ///
+    /// A layer's file was checked against the schema before it got here, so a
+    /// field only another layer may set is never in it.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError::FileRefused`] naming the file and the field when the
+    /// value does not fit the type the schema was written from.
+    fn resolve<T>(
+        self,
+        global: &LayerDoc,
+        project: &LayerDoc,
+        built_in: T,
+    ) -> Result<Layered<T>, SettingsError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        for (layer, doc) in [(Layer::Project, project), (Layer::Global, global)] {
+            let Some(value) = doc.fields.get(self.key()) else {
+                continue;
+            };
+            let value = serde_json::from_value(value.clone()).map_err(|error| {
+                SettingsError::FileRefused {
+                    file: doc.file.clone(),
+                    path: format!("/{}", self.key()),
+                    reason: error.to_string(),
+                }
+            })?;
+            return Ok(Layered { value, from: layer });
+        }
+        Ok(Layered {
+            value: built_in,
+            from: Layer::BuiltIn,
+        })
+    }
+}

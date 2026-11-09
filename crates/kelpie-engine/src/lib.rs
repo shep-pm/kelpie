@@ -4,9 +4,10 @@
 //! starts goes through the engine, each child marked with the run's id in its
 //! environment. [`tree`] is the one way the engine starts a process, and the
 //! sweep that stops what a run left behind. [`run`] is the id itself: what a
-//! child's environment carries, and what a sweep looks for. The crate has no
-//! Tauri dependency, so the app crate hosts it and the IPC stays outside the
-//! engine (ADR 0002).
+//! child's environment carries, and what a sweep looks for. [`settings`] reads
+//! and writes the config folder ADR 0008 puts at `~/.config/kelpie`. The crate
+//! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
+//! the engine (ADR 0002).
 //!
 //! # Quick start
 //!
@@ -19,9 +20,11 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 //!
-//! [`run`] holds the id and its text form; [`tree`] starts and stops the children.
+//! [`run`] holds the id and its text form; [`tree`] starts and stops the
+//! children; [`settings`] holds the fields and the layers they resolve through.
 
 #![doc(test(attr(deny(warnings))))]
 
 pub mod run;
+pub mod settings;
 pub mod tree;

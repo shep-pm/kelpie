@@ -24,6 +24,10 @@ getrandom = { version = "0.4", default-features = false, features = ["std"] }
 # The run file's JSON, written and read by the engine
 serde = { version = "1.0", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
+# The settings schema, written from the Rust types (docs/design/settings.md).
+# `derive` is the `JsonSchema` derive; `std` is off because no schema type here
+# is a std one.
+schemars = { version = "1.2.3", default-features = false, features = ["derive"] }
 # Own process group per child, stop ladder and the sweep (ADR 0001). `sysinfo`
 # is the process table the sweep reads.
 shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo"] }

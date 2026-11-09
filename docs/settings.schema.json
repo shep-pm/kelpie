@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "Harness": {
+      "description": "A harness kelpie can run a session on",
+      "oneOf": [
+        {
+          "const": "claude-code",
+          "description": "Claude Code",
+          "type": "string"
+        },
+        {
+          "const": "goose",
+          "description": "goose",
+          "type": "string"
+        }
+      ]
+    },
+    "ReplyStyle": {
+      "description": "How kelpie asks a harness to phrase its replies",
+      "oneOf": [
+        {
+          "const": "concise-plus",
+          "description": "Kelpie's own style: short prose with lists, tables and before and after comparisons",
+          "type": "string"
+        },
+        {
+          "const": "harness-default",
+          "description": "Whatever the harness does when kelpie says nothing about its output",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The settings of one layer file, holding only the fields that file sets\n\n`settings.json` is the global layer's file and `projects/<id>/settings.json`\none project's. These types are what the schema is written from, so a file\nkelpie reads can hold nothing they do not describe.",
+  "properties": {
+    "$schema": {
+      "default": null,
+      "description": "The schema this file is written against",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "harness-global-folder": {
+      "default": null,
+      "description": "Whether a harness may read the global config folder it keeps for itself",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "host": {
+      "default": null,
+      "description": "The host a provider runs on",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "network-allowlist": {
+      "default": null,
+      "description": "Domains a sandbox request may reach, one saved with *Allow for this project*",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "pm-effort": {
+      "default": null,
+      "description": "How much effort the PM puts in, named as the harness names it. Empty leaves the effort to the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pm-harness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Harness"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which harness the PM's next message runs on. Where it is empty, the `pm` agent's own harness decides."
+    },
+    "pm-model": {
+      "default": null,
+      "description": "Which model the PM runs on, named as the harness names it. Empty leaves the model to the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider": {
+      "default": null,
+      "description": "Where a harness's model runs, for a harness that reaches a model through a server",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "read-anywhere": {
+      "default": null,
+      "description": "Whether an agent may read anywhere by default, instead of only what its work touches",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "reply-style": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReplyStyle"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How kelpie asks a harness to phrase its replies"
+    }
+  },
+  "title": "Settings",
+  "type": "object"
+}
