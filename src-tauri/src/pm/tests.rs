@@ -357,10 +357,11 @@ fn with_nothing_set_the_sandbox_has_no_extra_domain_and_reads_the_project_alone(
 
     assert!(plan.network_allowlist.is_empty());
     assert_eq!(plan.reads, Reads::Project);
+    assert!(!plan.harness_global_folder);
 }
 
 #[test]
-fn the_projects_allowlist_and_read_anywhere_settings_reach_the_plan() {
+fn the_projects_sandbox_settings_reach_the_plan() {
     let chat = Chat::on(&FakeAgent::new());
     let project = chat.state().project_id(None).unwrap();
     let set = |key: &str, value: serde_json::Value| {
@@ -379,11 +380,13 @@ fn the_projects_allowlist_and_read_anywhere_settings_reach_the_plan() {
         serde_json::json!(["docs.rs", "crates.io"]),
     );
     set("read-anywhere", serde_json::json!(true));
+    set("harness-global-folder", serde_json::json!(true));
 
     let plan = plan(chat.state().config(), &project).unwrap();
 
     assert_eq!(plan.network_allowlist, ["docs.rs", "crates.io"]);
     assert_eq!(plan.reads, Reads::Anywhere);
+    assert!(plan.harness_global_folder);
 }
 
 #[test]

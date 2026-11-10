@@ -7,9 +7,10 @@
 //! harness's command into one that runs inside it. The process tree
 //! spawns the wrapped command as it spawns anything else, so the run's mark
 //! reaches it and the sweep finds it (ADR 0001). A project whose folder is the
-//! home folder or a folder above it, by name or through a link, is refused at
-//! [`Sandbox::start`], since such a folder holds the logins and secrets the
-//! policy denies.
+//! home folder or a folder above it, or is at or inside a login or a secret
+//! folder, by name or through a link, is refused at [`Sandbox::start`] and at
+//! [`Sandbox::start_worker`], since such a folder holds the logins and secrets
+//! the policy denies.
 //!
 //! crabpot's proxy lives in kelpie until the [`Sandbox`] drops, so it stops with
 //! the session, and with kelpie. On Linux and Windows crabpot runs the host's
@@ -85,6 +86,16 @@ pub enum SandboxError {
         folder: PathBuf,
     },
 
+    /// The project folder is at or inside a folder the sandbox denies its reads,
+    /// a harness's login folder or a folder of secrets, by name or through a link
+    ProjectInDenied {
+        /// The project's folder, which sits inside the denied one, as it was given
+        folder: PathBuf,
+
+        /// The denied folder it is at or inside, as the policy really names it
+        denied: PathBuf,
+    },
+
     /// The settings crabpot was asked for were refused
     Policy(ConfigError),
 
@@ -109,6 +120,13 @@ impl fmt::Display for SandboxError {
                     "the project folder {folder} is the home folder or a folder above it, so a sandbox there would read the logins and secrets under it along with the project: move the project into a folder of its own"
                 )
             }
+            Self::ProjectInDenied { folder, denied } => {
+                let (folder, denied) = (folder.display(), denied.display());
+                write!(
+                    f,
+                    "the project folder {folder} is at or inside the denied folder {denied}, which holds a harness's login or a secret the sandbox denies: move the project out of {denied}"
+                )
+            }
             Self::Policy(error) => write!(f, "the sandbox's settings were refused: {error}"),
             Self::StateDir(error) => {
                 write!(f, "the session's state folder could not be made: {error}")
@@ -122,7 +140,7 @@ impl fmt::Display for SandboxError {
 impl core::error::Error for SandboxError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::ProjectAtHome { .. } => None,
+            Self::ProjectAtHome { .. } | Self::ProjectInDenied { .. } => None,
             Self::Policy(error) => Some(error),
             Self::StateDir(error) => Some(error),
             Self::Start(error) => Some(error),
@@ -156,15 +174,17 @@ impl Sandbox {
     /// and nowhere else. See [`policy`] for what the session may reach, and
     /// [`Reads`] for how far it reads.
     ///
-    /// A project whose folder is the home folder or a folder above it is refused
-    /// before anything is made or started, whether it reaches the home folder by
-    /// name or through a link: such a folder holds the logins and secrets the
-    /// sandbox denies, so a sandbox over it would read them with the project.
+    /// A project whose folder is the home folder or a folder above it, or is at
+    /// or inside a login or a secret folder, is refused before anything is made
+    /// or started, whether it reaches it by name or through a link: such a folder
+    /// holds the logins and secrets the sandbox denies, so a sandbox over it
+    /// would read them with the project.
     ///
     /// # Errors
     ///
-    /// [`SandboxError`]: the project folder holds the home folder, the settings
-    /// are refused, `state_dir` cannot be made, or crabpot cannot start.
+    /// [`SandboxError`]: the project folder holds the home folder or sits inside
+    /// a denied one, the settings are refused, `state_dir` cannot be made, or
+    /// crabpot cannot start.
     pub fn start(
         harness: &Harness,
         project: &Project<'_>,
@@ -185,9 +205,7 @@ impl Sandbox {
         state_dir: &Path,
         door: Option<&Door>,
     ) -> Result<Self, SandboxError> {
-        if let Some(folder) = policy::holds_home(project) {
-            return Err(SandboxError::ProjectAtHome { folder });
-        }
+        refused_project(project)?;
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
@@ -219,17 +237,21 @@ impl Sandbox {
     ///
     /// Makes the worker's state folder when it is missing, since the sandbox may
     /// write there, in its worktree and in its clone's git dir, and nowhere else.
-    /// See [`worker::policy`] for what the worker may reach.
+    /// See [`worker::policy`] for what the worker may reach. The project folder is
+    /// refused as it is at [`Sandbox::start`], before the settings are built or
+    /// the state folder made.
     ///
     /// # Errors
     ///
-    /// [`SandboxError`]: the settings are refused, the state folder cannot be made,
+    /// [`SandboxError`]: the project folder holds the home folder or sits inside
+    /// a denied one, the settings are refused, the state folder cannot be made,
     /// or crabpot cannot start.
     pub fn start_worker(
         harness: &Harness,
         project: &Project<'_>,
         worker: &Worker<'_>,
     ) -> Result<Self, SandboxError> {
+        refused_project(project)?;
         let config = worker::policy(harness, project, worker).map_err(SandboxError::Policy)?;
         fs::create_dir_all(worker.state_dir).map_err(SandboxError::StateDir)?;
         Self::from_config(config)
@@ -247,6 +269,22 @@ impl Sandbox {
     pub fn command(&self, command: &Command) -> Result<Command, SandboxError> {
         self.inner.command(command).map_err(SandboxError::Wrap)
     }
+}
+
+/// Refuse a project whose own folder would bring a denied folder into the
+/// sandbox's reads, whichever policy the session runs under
+///
+/// The home folder or a folder above it holds every login and secret, and a
+/// folder at or inside one of them is that folder to its own sandbox, since the
+/// folder beside it is opened back for the project.
+fn refused_project(project: &Project<'_>) -> Result<(), SandboxError> {
+    if let Some(folder) = policy::holds_home(project) {
+        return Err(SandboxError::ProjectAtHome { folder });
+    }
+    if let Some((folder, denied)) = policy::in_denied(project) {
+        return Err(SandboxError::ProjectInDenied { folder, denied });
+    }
+    Ok(())
 }
 
 /// The hosts a running sandbox lets through, which can grow while it runs

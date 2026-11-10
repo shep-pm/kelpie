@@ -491,6 +491,7 @@ const CASES: &[(&str, fn())] = &[
     ("nest", a_nested_claude_folder),
     ("read", the_pm_reads),
     ("net", a_host_and_a_socket),
+    ("mask", super::a_denied_folder_under_an_allowed_one),
     #[cfg(target_os = "linux")]
     ("sock", a_listed_socket),
 ];
@@ -527,8 +528,9 @@ impl Drop for OwnHome {
 /// Runs the case `tag` in a copy of this binary whose home folder is one of its
 /// own, and fails when it does
 ///
-/// `tag` is short: a Unix socket's path has about a hundred bytes.
-fn in_own_home(tag: &str) {
+/// `tag` is short: a Unix socket's path has about a hundred bytes. A case that
+/// needs a home of its own is in `CASES`, whichever file its own test is in.
+pub(super) fn in_own_home(tag: &str) {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("esc-{tag}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&folder);

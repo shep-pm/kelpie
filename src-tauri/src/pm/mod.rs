@@ -17,8 +17,10 @@
 //! beside it, writes its state folder alone, and reaches its model's host
 //! (ADR 0005), plus the domains the project's `network-allowlist` names. The
 //! `read-anywhere` setting opens its reads to the whole disk, keeping every
-//! harness's login, every secret and every other session's state closed. It
+//! harness's login, every secret and every other session's state closed, and it
 //! lands at the session's next start, since a running sandbox is never widened.
+//! `harness-global-folder` links the entries the session's harness reads from
+//! the person's own global config folder into the session's config folder.
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -94,6 +96,9 @@ pub struct PmPlan {
 
     /// How far the PM reads (`read-anywhere`)
     pub reads: Reads,
+
+    /// Whether the harness reads the person's own global folder (`harness-global-folder`)
+    pub harness_global_folder: bool,
 }
 
 /// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
@@ -179,6 +184,7 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         host: settings.host.value,
         network_allowlist: settings.network_allowlist.value,
         reads: Reads::from_setting(settings.read_anywhere.value),
+        harness_global_folder: settings.harness_global_folder.value,
     })
 }
 
@@ -278,7 +284,11 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         project.path.clone(),
     );
     let sessions_root = sessions_root.to_path_buf();
-    let (network_allowlist, reads) = (pm.network_allowlist.clone(), pm.reads);
+    let (network_allowlist, reads, harness_global_folder) = (
+        pm.network_allowlist.clone(),
+        pm.reads,
+        pm.harness_global_folder,
+    );
     let (logins, tree) = (logins.clone(), Arc::clone(tree));
     // Each closure holds its own copy of the folder, since a closure owns what it captures
     let (current_dir, start_dir, failed_dir) = (
@@ -305,8 +315,8 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         start: Box::new(move |version| {
             let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
-            let harness =
-                claude::harness(cmd, &state_dir, &logins).map_err(|error| error.to_string())?;
+            let harness = claude::harness(cmd, &state_dir, &logins, harness_global_folder)
+                .map_err(|error| error.to_string())?;
             let sandbox = Sandbox::start_with_door(
                 &harness,
                 &sandbox::Project {

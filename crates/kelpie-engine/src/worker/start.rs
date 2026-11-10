@@ -9,9 +9,9 @@
 //! against the worktree. The ticket's text is the turn's prompt.
 //!
 //! The turn's events go to the caller's sink, and `start` reads them for the
-//! record on the way: the session id is kept when the harness gives it, and the
-//! worker is done and holds no slot when its turn ends, whatever the caller does
-//! with the events.
+//! record on the way: the session id is kept when the harness gives it, and when
+//! the turn ends its branch passes the fence, which settles the record as done
+//! or as waiting on the maintainer, whatever the caller does with the events.
 //!
 //! The session is built by the caller's `open`, as the PM's is
 //! ([`crate::session`]). Kelpie ships no harness (ADR 0006), and only the app
@@ -43,7 +43,10 @@ use crate::tree::ProcessTree;
 use crate::worker_folder;
 use crate::worktree::{self, Remote, clone};
 
-use super::{Record, Records, Seat, Status, login};
+use super::{
+    Record, Records, Seat, Status, login,
+    turn_end::{self, Ending},
+};
 
 /// The folder under the data folder that holds each project's state
 const PROJECTS_FOLDER: &str = "projects";
@@ -395,7 +398,8 @@ impl core::error::Error for StartError {
 ///
 /// `events` hears every [`SessionEvent`] of the turn, after `start` has read it
 /// for the record: the session id is kept as soon as the harness gives it, and
-/// the worker is done and holds no slot once its turn ends.
+/// once the turn ends its branch passes the fence ([`turn_end`]), which settles
+/// the record and holds no slot.
 ///
 /// A slot held here is given back when the worker never began. The design's
 /// order puts the slot first (`docs/design/workers.md`, Starting one), and the
@@ -693,9 +697,12 @@ fn give_slot_back(project: &Project<'_>, ticket: &str, before: Option<&Record>) 
 /// The caller's sink, with the record read from every event that changes it
 ///
 /// Each change is kept before the event goes on, so a caller that hears a turn
-/// end finds the worker done and holding no slot. A `Failed` that the session
-/// goes on after is followed by that turn's `TurnEnded`, which settles the
-/// record as done.
+/// end finds the worker settled and holding no slot. A `Failed` that the session
+/// goes on after is followed by that turn's `TurnEnded`, which settles the record.
+///
+/// A turn's end goes through [`turn_end`] first: the branch is checked with the
+/// fence, and what it found settles the record, done for a clean branch and
+/// waiting on the maintainer for a held one.
 fn kept(
     project: &Project<'_>,
     ticket: &str,
@@ -703,7 +710,16 @@ fn kept(
 ) -> impl FnMut(SessionEvent) + Send + 'static {
     let kept = Arc::clone(project.records);
     let ticket = ticket.to_owned();
+    let tree = Arc::clone(project.tree);
+    let repo = project.folder.to_path_buf();
+    let worktree = project.paths.worktree(&ticket);
+    let base = project.base.to_owned();
     move |event: SessionEvent| {
+        // The fence runs git, so it answers before the records lock is held
+        let ending = match &event {
+            SessionEvent::TurnEnded { .. } => Some(turn_end::check(&tree, &repo, &worktree, &base)),
+            _ => None,
+        };
         let mut records = lock(&kept);
         match &event {
             SessionEvent::Started { session_id } => {
@@ -711,13 +727,6 @@ fn kept(
                     &ticket,
                     records.set_session(&ticket, session_id),
                     "its session id",
-                );
-            }
-            SessionEvent::TurnEnded { .. } => {
-                lost(
-                    &ticket,
-                    records.set_status(&ticket, Status::Ended),
-                    "its end",
                 );
             }
             SessionEvent::Failed { .. } => {
@@ -729,8 +738,31 @@ fn kept(
             }
             _ => {}
         }
+        if let Some(ending) = &ending {
+            lost(
+                &ticket,
+                records.set_status(&ticket, ending.status()),
+                "its end",
+            );
+        }
         drop(records);
+        if let Some(ending) = &ending {
+            waits(&ticket, ending);
+        }
         events(event);
+    }
+}
+
+/// Name what a held branch holds its ticket for
+///
+/// The names reach kelpie's log until the app shows a held ticket on its card and
+/// in the attention count (`docs/design/ux.md`, Attention).
+fn waits(ticket: &str, ending: &Ending) {
+    if let Ending::Held(held) = ending {
+        eprintln!(
+            "kelpie: ticket {ticket} waits on the maintainer: {}",
+            held.line()
+        );
     }
 }
 

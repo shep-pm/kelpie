@@ -179,6 +179,7 @@ fn probe_harness(pin: &Pin<'_>, command: PathBuf) -> Result<Harness, String> {
         // The probe runs no sandbox and no model, so it names no host, folder or mode
         hosts: Vec::new(),
         installs: Vec::new(),
+        global_reads: Vec::new(),
         unprompted: None,
         prompting: None,
         read_call: ReadCall::standard(),
