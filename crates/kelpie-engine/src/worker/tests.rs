@@ -25,7 +25,7 @@ use crate::worktree::tests::{Dir, git, process_tree, write_in};
 const WAIT: Duration = Duration::from_secs(20);
 
 /// A sink, and the events it was given
-fn events() -> (
+pub(super) fn events() -> (
     impl FnMut(SessionEvent) + Send + 'static,
     Receiver<SessionEvent>,
 ) {
@@ -39,7 +39,7 @@ fn events() -> (
 }
 
 /// Every event up to and including the one that ends the turn
-fn until_turn_ends(heard: &Receiver<SessionEvent>) -> Vec<SessionEvent> {
+pub(super) fn until_turn_ends(heard: &Receiver<SessionEvent>) -> Vec<SessionEvent> {
     let mut seen = Vec::new();
     loop {
         let event = heard
@@ -59,12 +59,12 @@ fn until_started(heard: &Receiver<SessionEvent>) -> SessionEvent {
 }
 
 /// The records on disk, which is what the next launch reads
-fn kept(rig: &Rig) -> Vec<Record> {
+pub(super) fn kept(rig: &Rig) -> Vec<Record> {
     Records::load(rig.paths.records()).unwrap().list().to_vec()
 }
 
 /// What a worker runs on when no agent file or project setting says otherwise
-fn binding() -> Binding {
+pub(super) fn binding() -> Binding {
     binding_on("Do the ticket.")
 }
 
@@ -91,7 +91,7 @@ fn binding_on(body: &str) -> Binding {
 }
 
 /// The ticket a test starts
-fn ticket(id: &str, text: &str) -> Ticket {
+pub(super) fn ticket(id: &str, text: &str) -> Ticket {
     Ticket {
         id: id.to_owned(),
         text: text.to_owned(),
@@ -99,7 +99,7 @@ fn ticket(id: &str, text: &str) -> Ticket {
 }
 
 /// A project with an origin holding `main`, a checkout of it, and its records file
-struct Rig {
+pub(super) struct Rig {
     _dir: Dir,
     root: PathBuf,
     tree: Arc<ProcessTree>,
@@ -109,7 +109,7 @@ struct Rig {
 }
 
 impl Rig {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let dir = Dir::new(name);
         let root = dir.path().canonicalize().unwrap();
         git(
@@ -134,7 +134,7 @@ impl Rig {
     }
 
     /// The project a test starts in, with `open` as its opener and `slots` as its cap
-    fn project<'a>(
+    pub(super) fn project<'a>(
         &'a self,
         binding: &'a Binding,
         open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
@@ -146,6 +146,7 @@ impl Rig {
             base: "main",
             tree: &self.tree,
             slots,
+            turn_timeout: Duration::from_secs(60 * 60),
             records: &self.records,
             binding,
             network_allowlist: &[],
@@ -157,7 +158,7 @@ impl Rig {
 }
 
 /// The opener a test uses: `agent` is the harness, and no sandbox is started
-fn on(agent: &FakeAgent, opening: &Opening<'_>) -> Session {
+pub(super) fn on(agent: &FakeAgent, opening: &Opening<'_>) -> Session {
     agent.session(
         opening.worktree.to_path_buf(),
         opening.resume.clone(),
