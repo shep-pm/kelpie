@@ -10,6 +10,12 @@
 //! `{ "id", "path", "pm_session", "pm_ran" }`, so the rail can add projects later without
 //! a migration. Phase 1 has one: the folder the maintainer picks once. Each
 //! project keeps its harness state in `<data_dir>/projects/<id>/pm/`.
+//!
+//! Each project's workers are kept in `<data_dir>/projects/<id>/workers.json`
+//! ([`kelpie_engine::worker`]). A run that ended with a worker mid-turn is read
+//! at the start of the next one, and every worker still holding a slot is marked
+//! Paused: kelpie never restarts a worker on its own
+//! (`docs/design/workers.md`, Quitting).
 
 use std::fs;
 use std::io;
@@ -28,6 +34,7 @@ use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use kelpie_engine::tools::Tools;
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
+use kelpie_engine::worker::{Paths, Records};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -217,6 +224,25 @@ fn write(file: &Path, list: &[Project]) -> io::Result<()> {
     fs::rename(&partial, file)
 }
 
+/// Mark each worker that was mid-turn when the last run ended as Paused
+///
+/// A launch never restarts a worker: `Paused` holds no slot and resumes only when
+/// the maintainer says so (`GLOSSARY.md`, Paused), so each project's records
+/// (`kelpie_engine::worker::Records`) are read at the start of the run and every
+/// worker still holding a slot is marked Paused and gives it back. Its session id
+/// is kept, so the maintainer can resume it.
+///
+/// # Errors
+///
+/// A project's records file cannot be read or written.
+fn pause_mid_turn_workers(data_dir: &Path, projects: &[Project]) -> io::Result<()> {
+    for project in projects {
+        let file = Paths::new(data_dir, &project.id).records();
+        Records::load(file)?.pause_mid_turn()?;
+    }
+    Ok(())
+}
+
 /// Asks the maintainer for a folder: the path they picked, `None` when they closed the dialog
 ///
 /// The app's is the dialog plugin's folder picker, which blocks until the
@@ -350,6 +376,7 @@ impl AppState {
         };
         let tree = Arc::new(tree);
         let projects = Projects::load(data_dir.join(PROJECTS_FILE))?;
+        pause_mid_turn_workers(&data_dir, projects.list())?;
         // A door that will not open costs the sessions kelpie's tools, not the app
         let tools = Tools::start(&data_dir)
             .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
