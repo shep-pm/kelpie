@@ -170,6 +170,64 @@ fn a_worker_with_no_app_on_its_repo_is_told_it_cannot_push() {
     );
 }
 
+// A machine whose `PATH` holds no `gh` has no credential helper for a worker's
+// git at all. kelpie says so before the turn rather than leaving the push to fail
+// inside it: nothing is minted, no `gh` folder is written, and the worker runs on
+// the same terms as one whose repo no App covers.
+#[test]
+fn a_worker_on_a_machine_with_no_gh_is_told_it_cannot_push() {
+    let mut rig = Rig::new("no gh");
+    rig.on_github("shep-pm/koji");
+    rig.gh = None;
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    // Installed on this very repo, and still no way to push with the token
+    github.registered(home.path(), "shep-pm/koji");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> {
+        seen.lock().unwrap().push(opening.env.clone());
+        Ok(on(&agent, opening))
+    };
+    let (sink, heard) = events();
+
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running { state_dir, .. } = started else {
+        panic!("{started:?}");
+    };
+    until_turn_ends(&heard);
+
+    assert!(
+        github.asked().is_empty(),
+        "no token was minted for a worker that could not push with it"
+    );
+    assert!(
+        !login::config_dir(&state_dir).exists(),
+        "no `gh` folder is written for a helper that is not there"
+    );
+    let env = &envs(&seen)[0];
+    assert_eq!(
+        in_env(env, "GIT_CONFIG_PARAMETERS").as_deref(),
+        Some(login::NO_HELPER),
+        "git is pointed at no helper, so nothing the maintainer logged into is asked: {env:?}"
+    );
+    assert_eq!(
+        in_env(env, "GH_CONFIG_DIR").as_deref(),
+        Some(login::config_dir(&state_dir).to_string_lossy().as_ref()),
+        "a `gh` the worker does run still reads nowhere but its own: {env:?}"
+    );
+    let prompt = prompt(&agent);
+    assert!(prompt.contains("no credential for this repo"), "{prompt:?}");
+}
+
 // A repo kelpie cannot name on GitHub gets no token, whatever Apps it has: the
 // token is for one repo, and this is not it.
 #[test]

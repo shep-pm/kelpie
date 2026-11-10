@@ -77,7 +77,7 @@ As in SK, for a worker on the App's token (`HAND_OVER`, `core/profile/mod.rs:44`
 
 1. Kelpie's GitHub App mints an installation token for the one repo, with `Grant::Worker` (`adapters/github/api.rs`): contents written, and workflows where the installation holds it. No pull request, comment, review, approval or merge.
 2. It is minted fresh before each turn (`github/tokens.rs:132`), so no refresh timer runs, and a turn's ceiling sits inside the token's hour.
-3. The token goes into a `gh` config folder of the worker's own (`core/profile/login.rs`), which git's credential helper answers from. No variable carries it: Codex drops variables named like tokens, and a variable shows in every process's environment. The maintainer's own logins stay denied.
+3. The token goes into a `gh` config folder of the worker's own (`core/profile/login.rs`), which git's credential helper answers from. No variable carries it: Codex drops variables named like tokens, and a variable shows in every process's environment. The maintainer's own logins stay denied. That helper is a program on the machine, so a `PATH` with no `gh` is read as the same case as no App on the repo: nothing is minted, nothing is written, and the worker's instructions say it cannot push.
 4. The worker writes the pull request's title, a conventional commit subject, and its body to a hand-over file. When a turn ends with the branch pushed, kelpie opens the draft pull request through the forge adapter and sets its title and body from the file.
 5. Kelpie signs the App's JWT with the system's `openssl` and calls GitHub through curl, both spawned through the process tree. It pushes only to a fork, from outside the sandbox (`push_commits`), since a repo-scoped token cannot reach one.
 

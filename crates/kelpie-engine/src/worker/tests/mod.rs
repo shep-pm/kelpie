@@ -5,6 +5,8 @@
 //! through git and runs a real session over ACP with no model behind it.
 
 use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -112,6 +114,10 @@ struct Rig {
     // The Apps kelpie mints this project's workers' tokens from, `None` where it
     // keeps none at all
     tokens: Option<AppTokens>,
+    // The `gh` a worker's git answers github.com with. Every rig has a stub of one
+    // in a `bin` folder of its own, so a start here always sees a machine that can
+    // push; the test about a machine that cannot takes it away.
+    gh: Option<PathBuf>,
 }
 
 impl Rig {
@@ -129,6 +135,11 @@ impl Rig {
         let paths = Paths::new(root.join("data"), "p1");
         let records = Arc::new(Mutex::new(Records::load(paths.records()).unwrap()));
         let tree = Arc::new(process_tree(&root));
+        let gh = root.join("bin/gh");
+        std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
+        std::fs::write(&gh, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             _dir: dir,
             root,
@@ -137,6 +148,7 @@ impl Rig {
             paths,
             records,
             tokens: None,
+            gh: Some(gh),
         }
     }
 
@@ -179,6 +191,7 @@ impl Rig {
             reads: Reads::Project,
             tools: None,
             tokens: self.tokens.as_ref(),
+            gh: self.gh.as_deref(),
             open,
         }
     }

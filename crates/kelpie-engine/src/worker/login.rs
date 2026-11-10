@@ -6,7 +6,8 @@
 //! any whose name holds `KEY`, `SECRET` or `TOKEN` from the commands it runs,
 //! and a variable shows in every process's environment. Git's own helpers are
 //! emptied, which drops the keychain's, and github.com's is `gh`'s, so nothing
-//! the maintainer set up is asked.
+//! the maintainer set up is asked. That helper is a program on the machine, and
+//! [`helper_on_path`] is how kelpie finds out before a turn that it is not there.
 
 use std::path::{Path, PathBuf};
 
@@ -20,6 +21,27 @@ const USER: &str = "x-access-token";
 
 // Its name in the state folder
 const CONFIG_DIR: &str = "gh";
+
+/// The program git runs to answer github.com, which [`GIT_CONFIG`] names
+pub(crate) const HELPER: &str = "gh";
+
+/// The `gh` a worker's git answers github.com with, from this process's `PATH`
+///
+/// The worker's harness carries this process's `PATH` to the git it runs, so this
+/// is the `PATH` its credential helper is looked up on. `None` is where a worker
+/// has no way to push with the token kelpie mints, which a worker's start says
+/// before the turn rather than leaving the push to fail inside it.
+#[must_use]
+pub fn helper_on_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    helper_on(&path)
+}
+
+/// [`helper_on_path`], searching `path` instead of this process's `PATH`
+#[must_use]
+pub fn helper_on(path: &std::ffi::OsStr) -> Option<PathBuf> {
+    crate::harness::on_path(HELPER, path)
+}
 
 /// The folder `gh` reads its config from, in the worker's state folder
 #[must_use]
@@ -95,6 +117,42 @@ mod tests {
 
     fn token(text: &str) -> InstallationToken {
         InstallationToken::new(text.to_owned())
+    }
+
+    // The helper is a program on the machine, and a machine with no `gh` has no way
+    // for a worker's git to answer github.com at all. Read off a `PATH` of the
+    // test's own, so it says the same whatever the machine running the tests has.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_holds_a_helper_only_where_one_can_be_run() {
+        let (bin, empty) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let gh = bin.path().join(HELPER);
+        fs::write(&gh, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let found = helper_on(bin.path().as_os_str());
+        assert_eq!(found.as_deref(), Some(gh.as_path()), "{found:?}");
+
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            helper_on(bin.path().as_os_str()).is_none(),
+            "a file no one may run is no helper"
+        );
+
+        assert!(
+            helper_on(empty.path().as_os_str()).is_none(),
+            "no `{HELPER}` on that PATH"
+        );
+    }
+
+    // The helper `GIT_CONFIG` names as text and the one `helper_on` looks for are
+    // the same program, or kelpie would check for a helper git never runs.
+    #[test]
+    fn git_names_the_helper_kelpie_looks_for() {
+        assert!(
+            GIT_CONFIG.contains(&format!("!{HELPER} auth git-credential")),
+            "{GIT_CONFIG}"
+        );
     }
 
     #[cfg(unix)]

@@ -24,8 +24,8 @@
 //! it into a `gh` folder of the worker's own ([`login`],
 //! `docs/design/workers.md`, Pushing and the pull request). No variable carries
 //! the token: the environment names the folder and points git's credential
-//! helper at it. Where kelpie has no App for the repo, the worker is told it
-//! cannot push.
+//! helper at it. Where kelpie has no App for the repo, or the machine has no `gh`
+//! for git to answer github.com with, the worker is told it cannot push.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -215,6 +215,11 @@ pub struct Project<'a> {
     /// `None` where kelpie keeps no Apps at all, which is the same as having no
     /// App for the repo: the worker runs with no credential and is told so.
     pub tokens: Option<&'a AppTokens>,
+
+    /// The `gh` a worker's git answers github.com with, as [`login::helper_on_path`]
+    /// finds it. `None` where the machine's `PATH` holds none, which is the same
+    /// outcome: the worker runs with no credential and is told so.
+    pub gh: Option<&'a Path>,
 
     /// Build the worker's session on the harness the binding names, inside the
     /// sandbox [`Opening::sandbox`] starts. The text of an error is for the
@@ -548,12 +553,14 @@ struct Credential {
 /// environment is the token: it names the folder and git's helper
 /// ([`login`], `docs/design/workers.md`, Pushing and the pull request).
 ///
-/// A repo kelpie's App does not cover, and a repo that is not GitHub at all,
-/// leave the worker with no credential. It is told so in its instructions, and
-/// git is pointed at no helper at all, so nothing the maintainer logged into is
-/// asked. A token kelpie would not hand a worker, or a GitHub that cannot be
-/// reached, fails the start instead: the maintainer sees why, and the worker
-/// never runs as them.
+/// A repo kelpie's App does not cover, a repo that is not GitHub at all, and a
+/// machine whose `PATH` holds no `gh` for git to answer github.com with each leave
+/// the worker with no credential. It is told so in its instructions, and git is
+/// pointed at no helper at all, so nothing the maintainer logged into is asked.
+/// Nothing is minted, and no `gh` folder is written, where the worker could not
+/// have pushed with it. A token kelpie would not hand a worker, or a GitHub that
+/// cannot be reached, fails the start instead: the maintainer sees why, and the
+/// worker never runs as them.
 ///
 /// # Errors
 ///
@@ -566,8 +573,12 @@ fn credential(
 ) -> Result<Credential, StartError> {
     let build = project.paths.build_dir(ticket);
     let mut env = vec![("CARGO_TARGET_DIR".to_owned(), text(&build))];
-    let worker = match (project.tokens, origin(project.tree, project.folder)) {
-        (Some(tokens), Some(repo)) => match tokens.worker(&repo) {
+    let worker = match (
+        project.tokens,
+        project.gh,
+        origin(project.tree, project.folder),
+    ) {
+        (Some(tokens), Some(_), Some(repo)) => match tokens.worker(&repo) {
             Ok(worker) => Some(worker),
             // No App for the owner, or one the repo does not cover: the worker
             // has no credential, and says so.
@@ -581,6 +592,13 @@ fn credential(
             }
             Err(error) => return Err(StartError::Token(error)),
         },
+        (Some(_), None, Some(_)) => {
+            eprintln!(
+                "kelpie: ticket {ticket} cannot push: no `{}` on the PATH its git runs on",
+                login::HELPER
+            );
+            None
+        }
         _ => None,
     };
     env.extend(login::env(state_dir));
