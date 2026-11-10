@@ -172,30 +172,76 @@ mod tests {
         assert_eq!(kept, "their login\n");
     }
 
-    // Measured with git and `gh` themselves: a helper the maintainer set up, the
-    // keychain's among them, is not asked, and github.com is answered with the
-    // token from the folder the worker's `gh` reads, from nothing in a variable.
+    /// The `gh` of the test's own, standing in for the one CI's container installs
+    /// no copy of
+    ///
+    /// It answers from the folder `GH_CONFIG_DIR` names, as `gh` does, and logs what
+    /// it was asked, the folder it read, and whether the token it handed git was
+    /// sitting in a variable of the caller's.
+    fn gh_fixture(bin: &Path, log: &Path) {
+        let script = format!(
+            "#!/bin/sh\n\
+             hosts=\"$GH_CONFIG_DIR/hosts.yml\"\n\
+             token=$(sed -n 's/^[[:space:]]*oauth_token: //p' \"$hosts\" | head -n 1)\n\
+             user=$(sed -n 's/^[[:space:]]*user: //p' \"$hosts\" | head -n 1)\n\
+             in_env=no\n\
+             env | grep -qF \"$token\" && in_env=yes\n\
+             printf 'gh %s config=%s in_env=%s\\n' \"$*\" \"$GH_CONFIG_DIR\" \"$in_env\" >> '{}'\n\
+             printf 'username=%s\\npassword=%s\\n' \"$user\" \"$token\"\n",
+            log.display()
+        );
+        write_helper(&bin.join("gh"), &script);
+    }
+
+    /// A credential helper of the maintainer's, of the shape `osxkeychain` and
+    /// `manager` are: git finds `git-credential-their` on `PATH` by its name
+    ///
+    /// It logs that it was asked at all, which is what says whether git asked it.
+    fn their_helper(bin: &Path, log: &Path) {
+        let script = format!(
+            "#!/bin/sh\n\
+             printf 'their %s\\n' \"$*\" >> '{}'\n\
+             printf 'username=%s\\npassword=%s\\n' maintainer their-login\n",
+            log.display()
+        );
+        write_helper(&bin.join("git-credential-their"), &script);
+    }
+
+    fn write_helper(path: &Path, text: &str) {
+        fs::write(path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// git's credential chain, measured with git itself and a `gh` of the test's own
+    ///
+    /// What is proven is kelpie's own half: the variables it sets, the file it
+    /// writes, and that git asks that one helper and none of the maintainer's. That
+    /// `gh` reads the folder `GH_CONFIG_DIR` names is `gh`'s own doing, and the
+    /// ignored test below measures that with the maintainer's real `gh`.
     #[test]
     fn git_pushes_with_the_token_and_asks_none_of_the_helpers_the_maintainer_set_up() {
-        let (dir, state, home) = (
+        let (dir, state, home, bin) = (
             Dir::new("login-git"),
+            tempfile::tempdir().unwrap(),
             tempfile::tempdir().unwrap(),
             tempfile::tempdir().unwrap(),
         );
         let tree = process_tree(dir.path());
         write(state.path(), &token("ghs_scoped")).unwrap();
+        let log = home.path().join("asked");
+        gh_fixture(bin.path(), &log);
+        their_helper(bin.path(), &log);
+
         let global = home.path().join("gitconfig");
-        fs::write(
-            &global,
-            "[credential]\n\thelper = !f() { echo username=maintainer; echo password=their-login; }; f\n",
-        )
-        .unwrap();
+        fs::write(&global, "[credential]\n\thelper = their\n").unwrap();
+
         let mut git = Command::new("git");
         git.args(["credential", "fill"])
             .env("GIT_CONFIG_GLOBAL", &global)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .envs(env(state.path()))
-            .env("GIT_CONFIG_PARAMETERS", GIT_CONFIG);
+            .env("GIT_CONFIG_PARAMETERS", GIT_CONFIG)
+            .env("PATH", on_path(bin.path()));
 
         let out = tree
             .output_with_input(&mut git, b"protocol=https\nhost=github.com\n\n")
@@ -208,5 +254,66 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(!answer.contains("their-login"), "{answer}");
+        assert_eq!(
+            fs::read_to_string(&log).unwrap_or_default(),
+            format!(
+                "gh auth git-credential get config={} in_env=no\n",
+                config_dir(state.path()).display()
+            ),
+            "every helper git asked, in the order it asked them"
+        );
+    }
+
+    /// `bin` first on `PATH`, so git finds the test's helpers before any real ones
+    fn on_path(bin: &Path) -> String {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        format!("{}:{}", bin.display(), path.to_string_lossy())
+    }
+
+    // The same chain with the maintainer's own `gh`, which CI's container installs
+    // no copy of. Run it by hand where `gh` is installed:
+    // `cargo test -p kelpie-engine --lib -- --ignored`
+    #[ignore = "needs the maintainer's own `gh` on PATH, which CI does not install"]
+    #[test]
+    fn the_maintainers_own_gh_answers_from_the_folder_of_the_workers() {
+        let (dir, state, home, bin) = (
+            Dir::new("login-gh"),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let tree = process_tree(dir.path());
+        write(state.path(), &token("ghs_scoped")).unwrap();
+        let log = home.path().join("asked");
+        their_helper(bin.path(), &log);
+
+        let global = home.path().join("gitconfig");
+        fs::write(&global, "[credential]\n\thelper = their\n").unwrap();
+
+        let mut git = Command::new("git");
+        git.args(["credential", "fill"])
+            .env("GIT_CONFIG_GLOBAL", &global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(env(state.path()))
+            .env("GIT_CONFIG_PARAMETERS", GIT_CONFIG)
+            .env("PATH", on_path(bin.path()));
+
+        let out = tree
+            .output_with_input(&mut git, b"protocol=https\nhost=github.com\n\n")
+            .unwrap();
+        let answer = String::from_utf8_lossy(&out.stdout);
+
+        // No `{answer}` here: where this fails, the answer is the maintainer's own
+        // token, which no log should carry (IR-41).
+        assert!(
+            answer.contains("password=ghs_scoped\n"),
+            "the maintainer's `gh` answered from somewhere other than the worker's folder"
+        );
+        assert!(!answer.contains("their-login"), "{answer}");
+        assert_eq!(
+            fs::read_to_string(&log).unwrap_or_default(),
+            "",
+            "git asked a helper of the maintainer's"
+        );
     }
 }
