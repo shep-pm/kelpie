@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 use kelpie_engine::run::RunId;
 use kelpie_engine::sandbox::{Project, Reads, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
-use kelpie_engine::tools::{self, DOOR_VAR, Door, SessionKey, SessionTools, TOKEN_VAR, Tools};
+use kelpie_engine::tools::{
+    self, DOOR_VAR, Door, Reach, SessionKey, SessionTools, TOKEN_VAR, Tools,
+};
 use kelpie_engine::tree::{ProcessTree, sweep_marked};
 use serde_json::{Value, json};
 
@@ -178,6 +180,10 @@ const TESTS: &[(&str, fn())] = &[
         the_relay_reaches_kelpie_from_inside_the_sandbox,
     ),
     ("the_door_opens_nothing_else", the_door_opens_nothing_else),
+    (
+        "an_allowed_host_is_reached_by_a_running_sandbox",
+        an_allowed_host_is_reached_by_a_running_sandbox,
+    ),
     (
         "escapes::harness_files_are_refused_in_any_case_and_spelling",
         escapes::harness_files_are_refused_in_any_case_and_spelling,
@@ -707,7 +713,13 @@ fn the_relay_reaches_kelpie_from_inside_the_sandbox() {
     assert_eq!(heard[0]["id"], 1, "{}", heard[0]);
     assert!(heard[0]["result"]["capabilities"]["tools"].is_object());
     assert_eq!(heard[1]["id"], 2);
-    assert_eq!(heard[1]["result"]["tools"], json!([]), "{}", heard[1]);
+    let listed: Vec<&Value> = heard[1]["result"]["tools"]
+        .as_array()
+        .expect("a list of tools")
+        .iter()
+        .map(|tool| &tool["name"])
+        .collect();
+    assert_eq!(listed, ["request_network"], "{}", heard[1]);
     assert_eq!(
         connected,
         [session.key()],
@@ -767,4 +779,45 @@ fn the_door_opens_nothing_else() {
             "{what} ({address}) was let through: {refused:?}"
         );
     }
+}
+
+/// `curl`'s answer to a CONNECT through the sandbox's proxy to `https://{host}/`
+fn connect_code(sandbox: &Sandbox, host: &str) -> String {
+    let out = sh(
+        sandbox,
+        &format!("curl -sS -m 20 -o /dev/null -w '%{{http_connect}}' https://{host}/"),
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A host the proxy refused is, once `request_network` is allowed, no longer
+/// refused by the same sandbox, still running
+fn an_allowed_host_is_reached_by_a_running_sandbox() {
+    let scratch = Scratch::new("widen");
+    let exe = std::env::current_exe().unwrap();
+    let Some(sandbox) = working_sandbox(
+        &scratch,
+        "an_allowed_host_is_reached_by_a_running_sandbox",
+        &exe,
+        Reads::Project,
+    ) else {
+        return;
+    };
+    assert_eq!(
+        connect_code(&sandbox, "example.com"),
+        "403",
+        "the proxy did not refuse the host before the answer"
+    );
+    let network = sandbox.network();
+
+    assert!(network.allow("example.com"), "the sandbox took the host");
+
+    // Let through: a 200 with a network, and no 403 without one
+    let code = connect_code(&sandbox, "example.com");
+    assert_ne!(code, "403", "the host was still refused after the answer");
+    assert_eq!(
+        connect_code(&sandbox, "example.org"),
+        "403",
+        "only the host asked for was let through"
+    );
 }

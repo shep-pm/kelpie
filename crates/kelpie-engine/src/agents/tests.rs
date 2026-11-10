@@ -92,6 +92,19 @@ fn kelpies_own_pm_is_a_pm_with_a_body_and_no_binding() {
 }
 
 #[test]
+fn the_pm_asks_with_request_network() {
+    let body = shipped_body();
+
+    let line = body
+        .lines()
+        .find(|line| line.contains("request_network"))
+        .unwrap_or_else(|| panic!("the PM is never told to ask: {body}"));
+
+    assert!(line.contains("sandbox refuses a host"), "{line}");
+    assert!(line.contains("why"), "{line}");
+}
+
+#[test]
 fn a_missing_folder_holds_no_files() {
     let dir = Dir::new();
 
