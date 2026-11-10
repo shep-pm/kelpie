@@ -32,11 +32,14 @@
 use serde::{Deserialize, Serialize};
 
 pub mod ceiling;
+mod credential;
+mod instructions;
 pub mod login;
 pub mod record;
 pub mod slots;
 pub mod start;
 pub mod turn_end;
+mod turn_events;
 
 pub use record::{Record, Records};
 pub use slots::{Seat, seat};
