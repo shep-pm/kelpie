@@ -211,7 +211,13 @@ fn lift_heredocs(line: &str) -> (String, Vec<Body>) {
                 ')' if top == Some('(') => {
                     stack.pop();
                 }
-                '<' if chars.get(i + 1) == Some(&'<') && chars.get(i + 2) != Some(&'<') => {
+                // A here-string's `<<<` is no heredoc, and its string is a word.
+                '<' if chars[i..].starts_with(&['<', '<', '<']) => {
+                    out.push_str("<<<");
+                    i += 3;
+                    continue;
+                }
+                '<' if chars.get(i + 1) == Some(&'<') => {
                     if let Some((delimiter, strip, quoted, end)) = delimiter(&chars, i + 2) {
                         out.push_str(&format!("<<{MARK}{}{MARK}", bodies.len() + pending.len()));
                         pending.push((delimiter, strip, !quoted));
@@ -803,5 +809,20 @@ mod tests {
         let at = |c: &[&str]| all.iter().position(|x| *x == w(c)).unwrap();
         assert!(at(&["cd", "sub"]) < at(&["git", "push"]), "{all:?}");
         assert!(at(&["git", "push"]) < at(&["git", "pull"]), "{all:?}");
+    }
+
+    #[test]
+    fn a_here_string_is_a_word_of_its_command_not_a_heredoc() {
+        for line in [
+            "sh <<< 'git push origin HEAD'",
+            "sh <<< \"git push origin HEAD\"",
+            "sh <<<x",
+        ] {
+            let found = commands(line).unwrap();
+            assert_eq!(found.len(), 1, "{line}");
+            assert!(found[0].heredocs.is_empty(), "{line}");
+            assert_eq!(found[0].words.first().map(String::as_str), Some("sh"));
+        }
+        assert_eq!(words_of("sh <<< 'a b'"), [w(&["sh", "<<<", "a b"])]);
     }
 }
