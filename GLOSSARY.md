@@ -103,6 +103,14 @@ _Avoid_: MCP tool (the mechanism), command
 **Turn**:
 One round of an agent's work, from a message to its reply.
 
+**Seed**:
+What a new session starts from when the old one cannot carry on: the standing-decisions file, then the newest exchanges of kelpie's own log, up to 10 or 8,000 characters. No model writes it.
+_Avoid_: summary, handoff, brief (a thread's starting text)
+
+**Divider**:
+A line in the history where a new session began, such as a switch of harness or a resume the harness refused. The history above it stays.
+_Avoid_: separator, marker
+
 **Harness**:
 The agent program a session runs on, such as Claude Code, Codex, pi or goose. The model is chosen separately.
 _Avoid_: CLI, backend, provider

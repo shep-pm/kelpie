@@ -20,6 +20,11 @@ export type TurnState =
 
 export type Turn = {
   id: number;
+  /**
+   * What kelpie wrote above this message because it started a new session: a
+   * switch of harness, or a resume the harness refused. Oldest first.
+   */
+  dividers: string[];
   user: string;
   reply: string;
   steps: Step[];
@@ -91,9 +96,10 @@ function apply(turn: Turn, event: SessionEvent): Turn {
 
 let nextId = 1;
 
-function begin(user: string): Turn {
+function begin(user: string, dividers: string[] = []): Turn {
   return {
     id: nextId++,
+    dividers,
     user,
     reply: "",
     steps: [],
@@ -106,18 +112,36 @@ function begin(user: string): Turn {
  * Fold a log into turns: a user entry starts one, the events after it fill it
  * in. A turn the log never ends was cut off, so it is `interrupted`, and a turn
  * the maintainer retried shows once, as the retry.
+ *
+ * A divider belongs to the turn whose message started the new session. A
+ * switch of harness is logged just before that message, so a divider followed
+ * by a user entry waits for it. A refused resume is logged inside the turn.
  */
 export function fold(entries: LogEntry[]): Turn[] {
   const turns: Turn[] = [];
-  for (const entry of entries) {
+  let waiting: string[] = [];
+  entries.forEach((entry, at) => {
     const last = turns.at(-1);
-    if (entry.entry === "user") {
-      if (last?.state === "running" && last.user === entry.text) turns.pop();
-      turns.push(begin(entry.text));
+    if (entry.entry === "divider") {
+      if (last && entries[at + 1]?.entry !== "user") {
+        turns[turns.length - 1] = {
+          ...last,
+          dividers: [...last.dividers, entry.text],
+        };
+      } else {
+        waiting = [...waiting, entry.text];
+      }
+    } else if (entry.entry === "user") {
+      let dividers = waiting;
+      if (last?.state === "running" && last.user === entry.text) {
+        dividers = [...(turns.pop()?.dividers ?? []), ...waiting];
+      }
+      waiting = [];
+      turns.push(begin(entry.text, dividers));
     } else if (last) {
       turns[turns.length - 1] = apply(last, entry);
     }
-  }
+  });
   return turns.map((turn) =>
     turn.state === "running" ? { ...turn, state: "interrupted" } : turn,
   );
@@ -129,7 +153,9 @@ export const useChat = create<Chat>()((set, get) => {
   /** Show `turn` as the last turn, and stream what `call` sends into it. */
   async function run(
     turn: Turn,
-    call: (channel: Channel<SessionEvent>) => Promise<void>,
+    call: (
+      channel: Channel<SessionEvent>,
+    ) => Promise<string | null | undefined>,
   ) {
     const { id } = turn;
     set((s) => ({ turns: [...s.turns, turn] }));
@@ -138,7 +164,16 @@ export const useChat = create<Chat>()((set, get) => {
     channel.onmessage = (event) =>
       set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
     try {
-      await call(channel);
+      // A send that switched the harness answers with the divider it logged
+      const divider = await call(channel);
+      if (divider) {
+        set((s) => ({
+          turns: patch(s.turns, id, (t) => ({
+            ...t,
+            dividers: [...t.dividers, divider],
+          })),
+        }));
+      }
     } catch (error) {
       set((s) => ({
         turns: patch(s.turns, id, (t) => ({
@@ -182,7 +217,9 @@ export const useChat = create<Chat>()((set, get) => {
       const last = get().turns.at(-1);
       if (last?.state !== "interrupted") return;
       set((s) => ({ turns: s.turns.slice(0, -1) }));
-      await run(begin(last.user), (channel) => commands.pmRetry(channel));
+      await run(begin(last.user, last.dividers), (channel) =>
+        commands.pmRetry(channel),
+      );
     },
 
     async cancel() {
