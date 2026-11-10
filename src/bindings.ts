@@ -67,6 +67,21 @@ export const commands = {
 	 */
 	pmRetry: (onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<string | null>("pm_retry", { onEvent }),
 	/**
+	 *  Answer the sandbox request `id`, and say what went wrong when the answer did not land
+	 * 
+	 *  `Once` and `Project` let the host through the PM's running sandbox, and the
+	 *  agent hears so in the turn it is still waiting in. `Project` is kept to the
+	 *  project's `network-allowlist` too, where the settings page can remove it, and
+	 *  the PM's next session start builds it into the sandbox. `Deny` changes
+	 *  nothing. A request the turn's end or a cancel already answered is over, and
+	 *  this says so (`docs/design/kelpie-tools.md`, The sandbox request).
+	 * 
+	 *  # Errors
+	 * 
+	 *  No request is waiting for `id`, or the host could not be kept. The text is for the maintainer to read.
+	 */
+	pmAnswer: (id: string, answer: SandboxAnswer) => typedError<null, string>(__TAURI_INVOKE("pm_answer", { id, answer })),
+	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
 	 *  # Errors
@@ -389,6 +404,15 @@ export type ResolvedView = {
 	/**  The project's fields, `None` before a project is picked */
 	project: ProjectView | null,
 };
+
+/**  The maintainer's answer to a [`SessionEvent::SandboxRequest`] */
+export type SandboxAnswer = 
+/**  Let the host through for as long as the session runs */
+"once" | 
+/**  Let it through for the session, and the app saves it to the project's allowlist */
+"project" | 
+/**  Change nothing */
+"deny";
 
 /**  One thing a session did, in the order it happened */
 export type SessionEvent = 

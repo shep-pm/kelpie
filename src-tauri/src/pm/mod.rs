@@ -18,7 +18,13 @@
 //! (ADR 0005), plus the domains the project's `network-allowlist` names. The
 //! `read-anywhere` setting opens its reads to the whole disk, keeping every
 //! harness's login, every secret and every other session's state closed. It
-//! lands at the session's next start, since a running sandbox is never widened.
+//! lands at the session's next start, since a settings change never widens a
+//! running sandbox.
+//!
+//! The PM asks for anything else through kelpie's own tools, and [`pm_answer`]
+//! is the maintainer's reply: it widens the running sandbox for the host the PM
+//! named, and keeps a *Allow for this project* answer to the project's settings
+//! (`docs/design/kelpie-tools.md`, The sandbox request).
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -35,11 +41,15 @@ use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
 use kelpie_engine::sandbox::{self, Reads, Sandbox};
 use kelpie_engine::session::{
-    Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, log, sandboxed_launcher,
+    Bridge, Choice, LogEntry, SandboxAnswer, Session, SessionEvent, Started, Swap, log,
+    sandboxed_launcher,
 };
-use kelpie_engine::settings::{BridgeUpdates, ConfigDir, Harness, Settings};
+use kelpie_engine::settings::{
+    BridgeUpdates, ConfigDir, Field, Harness, LayerFile, Settings, SettingsError,
+};
 use kelpie_engine::tools::{SessionTools, Tools};
 use semver::Version;
+use serde_json::Value;
 use tauri::State;
 use tauri::ipc::Channel;
 
@@ -515,6 +525,74 @@ pub fn pm_cancel(state: State<'_, AppState>) {
     if let Some(session) = state.held_session() {
         session.cancel();
     }
+}
+
+/// Answer the sandbox request `id`, and say what went wrong when the answer did not land
+///
+/// `Once` and `Project` let the host through the PM's running sandbox, and the
+/// agent hears so in the turn it is still waiting in. `Project` is kept to the
+/// project's `network-allowlist` too, where the settings page can remove it, and
+/// the PM's next session start builds it into the sandbox. `Deny` changes
+/// nothing. A request the turn's end or a cancel already answered is over, and
+/// this says so (`docs/design/kelpie-tools.md`, The sandbox request).
+///
+/// # Errors
+///
+/// No request is waiting for `id`, or the host could not be kept to the
+/// project, in which case it stays allowed for the session alone. The text is
+/// for the maintainer to read.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn pm_answer(
+    state: State<'_, AppState>,
+    id: String,
+    answer: SandboxAnswer,
+) -> Result<(), String> {
+    let Some(host) = state
+        .held_session()
+        .and_then(|session| session.answer(&id, answer))
+    else {
+        return Err("That request is over.".to_owned());
+    };
+    match answer {
+        SandboxAnswer::Project => allow_for_the_project(&state, &host),
+        // Every other answer reaches the running sandbox alone
+        _ => Ok(()),
+    }
+}
+
+/// Add `host` to the project's own `network-allowlist`
+///
+/// A project's file replaces the global list rather than adding to it, so what
+/// the PM may already reach is written into it along with `host`.
+///
+/// # Errors
+///
+/// No project is picked, or its settings file cannot be read or written.
+fn allow_for_the_project(state: &AppState, host: &str) -> Result<(), String> {
+    let id = state.project_id(None)?;
+    let resolved = Settings::load(state.config(), &id).map_err(|error| not_saved(host, error))?;
+    let mut hosts = resolved.network_allowlist.value.clone();
+    if !hosts.iter().any(|allowed| allowed == host) {
+        hosts.push(host.to_owned());
+    }
+    Settings::set(
+        state.config(),
+        LayerFile::Project(&id),
+        Field::NetworkAllowlist,
+        &Value::Array(hosts.into_iter().map(Value::String).collect()),
+    )
+    .map_err(|error| not_saved(host, error))
+}
+
+/// Why `host` could not be kept, said to the maintainer
+///
+/// The host is through the running sandbox already, so the answer took effect;
+/// only the saving did not. The chat shows this on the request's own line.
+fn not_saved(host: &str, error: SettingsError) -> String {
+    format!(
+        "{host} is allowed for this session, but kelpie could not save it to the project: {error}"
+    )
 }
 
 #[cfg(test)]
