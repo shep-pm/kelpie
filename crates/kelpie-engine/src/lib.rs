@@ -12,9 +12,11 @@
 //! [`harness`] builds what one harness runs on: its bridge, the session's own
 //! state folder, and the person's own login, which [`login`] keeps in the OS
 //! keychain and never shows. [`guard`] reads a command a worker runs the way a
-//! shell would, and [`local_paths`] finds what a text names of this machine. The crate
-//! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
-//! the engine (ADR 0002).
+//! shell would, and [`local_paths`] finds what a text names of this machine.
+//! [`pacer`] holds a new turn while a limit's window is spent, and [`worker`]
+//! caps how many of a project's workers run at once. The crate has no Tauri
+//! dependency, so the app crate hosts it and the IPC stays outside the engine
+//! (ADR 0002).
 //!
 //! # Quick start
 //!
@@ -34,7 +36,8 @@
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
 //! runs on; [`login`] holds those logins; [`guard`] splits a command, takes off
 //! its wrappers and reads its scripts; [`local_paths`] is the one check for what
-//! must not leave this machine.
+//! must not leave this machine; [`pacer`] holds a turn while a limit's window is
+//! spent; [`worker`] counts how many of a project's workers may run at once.
 
 #![doc(test(attr(deny(warnings))))]
 
@@ -44,9 +47,11 @@ pub mod guard;
 pub mod harness;
 pub mod local_paths;
 pub mod login;
+pub mod pacer;
 #[cfg(test)]
 mod parity;
 pub mod run;
 pub mod session;
 pub mod settings;
 pub mod tree;
+pub mod worker;

@@ -222,6 +222,16 @@ fn fields(
                     resolved.worker_effort.from,
                 ),
             },
+            Field::WorkerSlots => layered(
+                field,
+                &resolved.worker_slots.value,
+                resolved.worker_slots.from,
+            ),
+            Field::LeaseCapacity => layered(
+                field,
+                &resolved.lease_capacity.value,
+                resolved.lease_capacity.from,
+            ),
             Field::Provider => layered(field, &resolved.provider.value, resolved.provider.from),
             Field::Host => layered(field, &resolved.host.value, resolved.host.from),
             Field::ReplyStyle => layered(
