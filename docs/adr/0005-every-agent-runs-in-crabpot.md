@@ -1,6 +1,6 @@
 # Every agent runs in crabpot
 
-Decided on 2026-11-09 in the UX grilling (`docs/design/ux.md`, Sandbox). Amended the same day so its rules name no harness (ADR 0006).
+Decided on 2026-11-09 in the UX grilling (`docs/design/ux.md`, Sandbox). Amended the same day so its rules name no harness (ADR 0006). Amended on 2026-11-10: on a machine whose sandbox cannot start, the PM may run without one once the maintainer opts in for the project, and workers never do (`docs/design/sandbox-setup.md`).
 
 Every agent session kelpie starts runs inside a crabpot sandbox (shep-pm/crabpot): the PM, its threads and every worker. crabpot is a Rust library, so the engine wraps each agent's command with `Sandbox::start` and `Sandbox::command`, and the process tree spawns the result as it spawns anything else (ADR 0001). Starting with the PM tracer bullet, not later.
 
@@ -24,7 +24,7 @@ Workers get the same shape, with write access to their own worktree.
 - Kelpie's `main` calls `crabpot::run_from_args()` first, before Tauri, since crabpot runs the host binary again as its helper on Linux and Windows.
 - crabpot's proxy lives inside kelpie until each `Sandbox` drops, so it stops when kelpie stops.
 - crabpot replaces SK's srt glue (fence, srt, confine, about 6k lines). SK's escape tests came over with the PM's sandbox (`crates/kelpie-engine/tests/sandbox/escapes.rs`), tried against the PM's policy. The fence and `confine` come with workers, and so do the escapes that need one.
-- Linux hosts on Ubuntu 24.04 or later need crabpot's AppArmor profile, naming kelpie's own binary as the helper.
+- Linux hosts on Ubuntu 24.04 or later need an AppArmor profile, naming kelpie's own binary as the helper. Kelpie offers to install it, and until it is in, the PM runs only with the project's Run without a sandbox setting on (`docs/design/sandbox-setup.md`).
 - **Open risk on Windows:** the command runs as a separate sandbox user, through `CreateProcessWithLogonW`. srt-win's runner holds a kill-on-close job over the command, but the runner is created by the seclogon service and may sit outside kelpie's job. Whether it dies when kelpie dies has to be tested before Windows is claimed.
 - The sweep must still find sandboxed processes by `KELPIE_RUN`, which a test confirms on each platform.
 - A project whose folder is the home folder, or a folder above it, is refused when its session's sandbox starts, whichever way *Read anywhere by default* is set, whether it reaches the home folder by name or through a link: the guard compares folders as crabpot matches them, with their links resolved. The home folder holds every harness's login and every secret, so a sandbox over it would read them along with the project; the person moves the project into a folder of its own.
