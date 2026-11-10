@@ -47,9 +47,11 @@ use serde::Deserialize;
 
 use crate::settings::{ConfigDir, Harness, Layer, Resolved};
 
+mod edit;
 mod extends;
 mod write;
 
+pub use edit::{Frontmatter, Source};
 pub use write::PmKey;
 
 #[cfg(test)]
@@ -189,6 +191,16 @@ impl Agents {
     ///
     /// [`AgentsError::Read`] naming the folder, or an entry in it the listing cannot read.
     pub fn load(dir: &ConfigDir) -> Result<Self, AgentsError> {
+        Self::load_replacing(dir, None)
+    }
+
+    /// [`Agents::load`], with the file of one name read as the given text instead of from disk
+    ///
+    /// The text stands in for the file whether or not one is there, and nothing is written.
+    fn load_replacing(
+        dir: &ConfigDir,
+        replacing: Option<(&str, &str)>,
+    ) -> Result<Self, AgentsError> {
         let folder = dir.path().join(FOLDER);
         let mut agents = Self {
             agents: BTreeMap::new(),
@@ -196,9 +208,9 @@ impl Agents {
             skipped: Vec::new(),
             broken: BTreeMap::new(),
         };
-        let entries = match fs::read_dir(&folder) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(agents),
+        let entries: Vec<io::Result<fs::DirEntry>> = match fs::read_dir(&folder) {
+            Ok(entries) => entries.collect(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(failed(folder, &e)),
         };
         let mut files = Vec::new();
@@ -209,6 +221,12 @@ impl Agents {
                     true => agents.ignored.push(path),
                     false => files.push(path),
                 }
+            }
+        }
+        if let Some((name, _)) = replacing {
+            let path = folder.join(format!("{name}.md"));
+            if !files.contains(&path) {
+                files.push(path);
             }
         }
         files.sort();
@@ -224,7 +242,11 @@ impl Agents {
             }
             // A file that cannot be read is one that cannot be used: it is left
             // out, so a draft saved in another encoding stops nothing else.
-            match fs::read_to_string(&path) {
+            let read = match replacing {
+                Some((name, text)) if name == stem => Ok(text.to_owned()),
+                _ => fs::read_to_string(&path),
+            };
+            match read {
                 Ok(text) => {
                     texts.insert(stem.to_owned(), (path, text));
                 }
@@ -426,6 +448,9 @@ fn parse(merged: &extends::Merged) -> Result<Agent, String> {
             .into());
     };
     // A blank first line stands for the opening `---`, so a message's line is the file's.
+    if front.trim().is_empty() {
+        return Err("`role` is not set: an agent that extends none needs `role: pm`".into());
+    }
     let yaml = format!("\n{front}");
     let keys: Front = serde_saphyr::from_str(&yaml).map_err(|error| yaml_error(&yaml, &error))?;
     let sourced = |key: &str| merged.origins.get(key).cloned().unwrap_or(Origin::BuiltIn);

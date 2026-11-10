@@ -83,7 +83,7 @@ impl Agents {
 }
 
 /// `file` replaced by `text`, through a temporary file beside it that no agent listing reads
-fn replace(file: &Path, text: &str) -> io::Result<()> {
+pub(super) fn replace(file: &Path, text: &str) -> io::Result<()> {
     let temp = file.with_extension("md.tmp");
     fs::write(&temp, text)?;
     fs::rename(&temp, file).inspect_err(|_| {
@@ -143,7 +143,7 @@ fn edited(text: Option<&str>, key: PmKey, value: Option<&str>) -> Option<String>
 }
 
 /// `value` as a YAML scalar: plain when that reads back as the same string, else quoted
-fn scalar(value: &str) -> String {
+pub(super) fn scalar(value: &str) -> String {
     let plain = value.starts_with(|c: char| c.is_ascii_alphabetic())
         && value
             .chars()

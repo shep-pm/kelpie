@@ -25,6 +25,7 @@ use tauri::{Manager as _, RunEvent, Runtime};
 use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::collect_commands;
 
+pub mod agents;
 pub mod pm;
 pub mod settings;
 pub mod state;
@@ -52,6 +53,11 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::settings_set,
             settings::settings_reset,
             settings::settings_schema,
+            agents::agents_list,
+            agents::agent_get,
+            agents::agent_preview,
+            agents::agent_save,
+            agents::agent_new,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
