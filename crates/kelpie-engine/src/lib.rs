@@ -14,9 +14,10 @@
 //! keychain and never shows. [`sandbox`] puts each session's harness inside
 //! crabpot, which confines what it reads, writes and reaches (ADR 0005). [`guard`]
 //! reads a command a worker runs the way a shell would, and [`local_paths`] finds
-//! what a text names of this machine. The crate
-//! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
-//! the engine (ADR 0002).
+//! what a text names of this machine. [`pacer`] holds a new turn while a limit's
+//! window is spent, and [`worker`] caps how many of a project's workers run at
+//! once. The crate has no Tauri dependency, so the app crate hosts it and the IPC
+//! stays outside the engine (ADR 0002).
 //!
 //! # Quick start
 //!
@@ -37,7 +38,8 @@
 //! runs on; [`login`] holds those logins; [`sandbox`] builds the policy a
 //! session runs under and starts its sandbox; [`guard`] splits a command, takes
 //! off its wrappers and reads its scripts; [`local_paths`] is the one check for
-//! what must not leave this machine.
+//! what must not leave this machine; [`pacer`] holds a turn while a limit's window
+//! is spent; [`worker`] counts how many of a project's workers may run at once.
 
 #![doc(test(attr(deny(warnings))))]
 
@@ -47,6 +49,7 @@ pub mod guard;
 pub mod harness;
 pub mod local_paths;
 pub mod login;
+pub mod pacer;
 #[cfg(test)]
 mod parity;
 pub mod run;
@@ -54,3 +57,4 @@ pub mod sandbox;
 pub mod session;
 pub mod settings;
 pub mod tree;
+pub mod worker;
