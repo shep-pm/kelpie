@@ -148,16 +148,24 @@ struct Distribution {
 }
 
 /// One platform's archive as the registry writes it
+///
+/// `args` and `env` are optional, and empty where the entry names a bare command.
 #[derive(Deserialize)]
 struct Binary {
     archive: String,
     cmd: String,
     sha256: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 impl Wire {
     fn agent(self) -> Agent {
-        // An archive with no sha256 is never installed, since nothing could check it
+        // An archive with no sha256 is never installed, since nothing could check
+        // it, and one whose args or env is not the shape kelpie reads is left out
+        // beside it
         let platforms = self
             .distribution
             .binary
@@ -172,6 +180,8 @@ impl Wire {
                         url: binary.archive,
                         sha256: binary.sha256,
                         cmd: cmd.to_owned(),
+                        args: binary.args,
+                        env: binary.env,
                     },
                 ))
             })
