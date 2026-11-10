@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -13,6 +13,15 @@ vi.mock("@/bindings", () => ({
 }));
 
 import { App } from "./App";
+
+beforeAll(() => {
+  // The resizable panels measure themselves, which jsdom cannot do.
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
 
 afterEach(cleanup);
 
@@ -32,5 +41,20 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to the chat" }));
     expect(screen.queryByRole("tab", { name: "Global" })).toBeNull();
     expect(screen.getByPlaceholderText("Message the PM")).toBeTruthy();
+  });
+
+  it("keeps a half-written message while the settings are open", async () => {
+    render(<App />);
+    const box = await screen.findByPlaceholderText("Message the PM");
+    fireEvent.change(box, { target: { value: "half a thought" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("tab", { name: "Global" });
+    fireEvent.click(screen.getByRole("button", { name: "Back to the chat" }));
+
+    expect(
+      (screen.getByPlaceholderText("Message the PM") as HTMLTextAreaElement)
+        .value,
+    ).toBe("half a thought");
   });
 });
