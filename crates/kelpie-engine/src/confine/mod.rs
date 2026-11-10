@@ -95,9 +95,18 @@ pub fn judge_path(target: &Path, folders: &[PathBuf]) -> Verdict {
 /// The deepest part of `path` that exists, with links followed, and the rest
 /// joined on
 ///
-/// `None` when the rest climbs with `..`.
+/// A link that points at nothing is followed to where it points, so a write
+/// through it is judged where it would land. `None` when the rest climbs with
+/// `..`, and when the links lead round in a circle.
 #[must_use]
 pub fn resolve(path: &Path) -> Option<PathBuf> {
+    resolve_within(path, MAX_LINKS)
+}
+
+/// How many dangling links [`resolve`] follows before it gives up
+const MAX_LINKS: usize = 40;
+
+fn resolve_within(path: &Path, links: usize) -> Option<PathBuf> {
     let mut existing = path;
     let mut rest = Vec::new();
     loop {
@@ -107,6 +116,16 @@ pub fn resolve(path: &Path) -> Option<PathBuf> {
                 resolved.push(part);
             }
             return Some(resolved);
+        }
+        // A link to a missing file does not canonicalize, but a write through
+        // it creates the file where the link points
+        if std::fs::symlink_metadata(existing).is_ok_and(|m| m.is_symlink()) {
+            let target = std::fs::read_link(existing).ok()?;
+            let mut followed = existing.parent()?.join(target);
+            for part in rest.iter().rev() {
+                followed.push(part);
+            }
+            return resolve_within(&followed, links.checked_sub(1)?);
         }
         let name = existing.file_name()?;
         rest.push(name.to_owned());
@@ -301,6 +320,29 @@ mod tests {
             assert!(why.contains("Codex's own configuration"), "{why}");
         }
         assert_eq!(w.judge(w.path("wt/src/codex.rs")), Verdict::Allow);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_missing_file_outside_is_followed_and_refused() {
+        let w = world();
+        symlink(w.root.join("home/.zshrc"), w.root.join("wt/out")).unwrap();
+        symlink(w.root.join("home/missing"), w.root.join("wt/dir")).unwrap();
+        symlink("../home/.zshrc", w.root.join("wt/relative")).unwrap();
+        symlink("loop-b", w.root.join("wt/loop-a")).unwrap();
+        symlink("loop-a", w.root.join("wt/loop-b")).unwrap();
+        for p in ["wt/out", "wt/dir/file", "wt/relative", "wt/loop-a"] {
+            let verdict = w.judge(w.path(p));
+            assert!(matches!(verdict, Verdict::Refuse(_)), "{p}: {verdict:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_missing_file_inside_goes_ahead() {
+        let w = world();
+        symlink(w.root.join("wt/src/new.rs"), w.root.join("wt/inside")).unwrap();
+        assert_eq!(w.judge(w.path("wt/inside")), Verdict::Allow);
     }
 
     #[cfg(unix)]

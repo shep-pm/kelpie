@@ -109,43 +109,62 @@ impl fmt::Debug for ReadCall {
 /// first of `path_fields` its raw input holds, else its one location. A call
 /// that names two files, or none, is a write of no file, which the judge
 /// refuses. A call of kind execute is a [`Call::Shell`], with its raw input's
-/// `command`. Every other kind is [`Call::Other`].
+/// `command`.
+///
+/// ACP's `kind` is optional, and a harness gives its MCP tools and some of its
+/// own the kind other, so the kind alone cannot clear a call. A call of no kind
+/// or of kind other is read by what it names: a file in `path_fields` or a
+/// location makes it a write, and a `command` makes it a shell call. Only a
+/// call that names neither, and a read, search, fetch, think or mode switch, is
+/// [`Call::Other`].
 ///
 /// An adapter calls this with the fields its own harness names a file by.
 #[must_use]
 pub fn read_acp(tool_call: &ToolCallUpdate, path_fields: &[&str]) -> Call {
     let fields = &tool_call.fields;
+    let locations = fields.locations.as_deref().unwrap_or_default();
+    let named = || {
+        path_fields.iter().find_map(|field| {
+            fields
+                .raw_input
+                .as_ref()?
+                .get(field)?
+                .as_str()
+                .map(PathBuf::from)
+        })
+    };
+    let write = || {
+        let path = match locations {
+            [] | [_] => named().or_else(|| locations.first().map(|l| l.path.clone())),
+            // One path to judge: a call that names more is not read
+            _ => None,
+        };
+        Call::Write {
+            path: path.unwrap_or_default(),
+        }
+    };
+    let shell = || {
+        fields
+            .raw_input
+            .as_ref()
+            .and_then(|input| input.get("command")?.as_str())
+            .map(|command| Call::Shell {
+                command: command.to_owned(),
+            })
+    };
     match fields.kind {
-        Some(ToolKind::Edit | ToolKind::Delete | ToolKind::Move) => {
-            let locations = fields.locations.as_deref().unwrap_or_default();
-            let path = match locations {
-                [] | [_] => path_fields
-                    .iter()
-                    .find_map(|field| {
-                        fields
-                            .raw_input
-                            .as_ref()?
-                            .get(field)?
-                            .as_str()
-                            .map(PathBuf::from)
-                    })
-                    .or_else(|| locations.first().map(|location| location.path.clone())),
-                // One path to judge: a call that names more is not read
-                _ => None,
-            };
-            Call::Write {
-                path: path.unwrap_or_default(),
+        Some(ToolKind::Edit | ToolKind::Delete | ToolKind::Move) => write(),
+        Some(ToolKind::Execute) => shell().unwrap_or(Call::Shell {
+            command: String::new(),
+        }),
+        None | Some(ToolKind::Other) => {
+            if !locations.is_empty() || named().is_some() {
+                write()
+            } else {
+                shell().unwrap_or(Call::Other)
             }
         }
-        Some(ToolKind::Execute) => Call::Shell {
-            command: fields
-                .raw_input
-                .as_ref()
-                .and_then(|input| input.get("command")?.as_str())
-                .unwrap_or_default()
-                .to_owned(),
-        },
-        _ => Call::Other,
+        Some(_) => Call::Other,
     }
 }
 

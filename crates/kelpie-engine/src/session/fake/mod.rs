@@ -61,9 +61,9 @@ use futures::channel::oneshot;
 use futures::future::select;
 use serde::Serialize;
 
+use crate::permission::ReadCall;
 // Only the unix step uses them: a harness's command, and the run it carries
 #[cfg(unix)]
-use crate::permission::ReadCall;
 use crate::run::{ENV, RunId};
 
 use super::{Choice, Extension, Harness, Launch, Link, Outdated, Session, SessionId};

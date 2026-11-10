@@ -178,3 +178,49 @@ fn a_read_or_a_search_is_neither_a_write_nor_a_shell() {
         );
     }
 }
+
+#[test]
+fn a_call_of_no_kind_or_kind_other_that_names_a_file_is_a_write() {
+    let kindless = |input| ToolCallUpdate::new("t1", ToolCallUpdateFields::new().raw_input(input));
+    for (update, reader) in [
+        (
+            kindless(json!({"path": "/etc/hosts"})),
+            goose::read_call as fn(&ToolCallUpdate) -> Call,
+        ),
+        (
+            kindless(json!({"file_path": "/etc/hosts"})),
+            claude::read_call,
+        ),
+        (
+            tool(ToolKind::Other, json!({"path": "/etc/hosts"})),
+            goose::read_call,
+        ),
+        (
+            tool(ToolKind::Other, json!({"file_path": "/etc/hosts"})),
+            claude::read_call,
+        ),
+    ] {
+        assert_eq!(reader(&update), write("/etc/hosts"));
+    }
+
+    let mut located = tool(ToolKind::Other, json!(null));
+    located.fields.locations = Some(vec![
+        agent_client_protocol::v1::schema::ToolCallLocation::new("/etc/hosts"),
+    ]);
+    assert_eq!(goose::read_call(&located), write("/etc/hosts"));
+}
+
+#[test]
+fn a_call_of_kind_other_that_names_a_command_is_a_shell_call() {
+    let call = claude::read_call(&tool(ToolKind::Other, json!({"command": "rm -rf /"})));
+
+    assert!(matches!(call, Call::Shell { .. }), "{call:?}");
+}
+
+#[test]
+fn a_call_of_kind_other_that_names_no_file_goes_ahead() {
+    // A tool of kelpie's own MCP server, say
+    let call = claude::read_call(&tool(ToolKind::Other, json!({"title": "x"})));
+
+    assert_eq!(call, Call::Other);
+}
