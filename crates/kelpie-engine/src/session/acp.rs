@@ -29,9 +29,14 @@ use futures::future::{Either, select};
 use kelpie_protocol::{CacheLifetime, StopReason, ToolStatus, Usage};
 
 use super::raw;
+use super::seed;
 use super::{
-    Choice, Command, Extension, Inbox, Launch, Link, SessionEvent, SessionId, Setup, Sink, lock,
+    Choice, Command, Extension, Inbox, Launch, Link, STOP_GRACE, SessionEvent, SessionId, Setup,
+    Sink, lock,
 };
+
+/// The divider a refused resume leaves in the log
+pub const COULDNT_RESUME: &str = "Couldn't resume, started a new session";
 
 /// Run one worker: wait for the first send, start the harness, serve turns
 /// until the session is dropped or the harness is gone
@@ -53,6 +58,7 @@ pub(super) async fn run(
     shared.start_turn(first.1);
 
     let link = lock(&launcher).launch();
+    let mut stop = None;
     match link {
         Err(error) => {
             commands.close();
@@ -61,8 +67,9 @@ pub(super) async fn run(
         Ok(Link {
             transport,
             mut explain,
-            ..
+            stop: stopper,
         }) => {
+            stop = Some(stopper);
             let result = connect(
                 &shared,
                 transport,
@@ -99,6 +106,11 @@ pub(super) async fn run(
         if let Command::Send { mut sink, .. } = command {
             sink(failed(ENDED_BEFORE.to_owned()));
         }
+    }
+    // Whatever ended the worker, the harness stops with it: a session that is
+    // replaced or dropped leaves nothing running
+    if let Some(stop) = stop {
+        stop(STOP_GRACE);
     }
 }
 
@@ -360,13 +372,24 @@ async fn serve(
         .send_request(InitializeRequest::new(ProtocolVersion::V1))
         .block_task()
         .await?;
-    let (session, options, fresh) = open(cx, &init, setup, shared).await?;
+    let Opened {
+        session,
+        options,
+        fresh,
+        refused,
+    } = open(cx, &init, setup, shared).await?;
     let session_id = SessionId::from(&*session.0);
     *lock(id) = Some(session_id.clone());
     shared.emit(SessionEvent::Started { session_id });
     apply_choice(cx, &session, &options, &setup.choice, shared).await;
     let mut applied = setup.choice.clone();
 
+    // A new session after a refused resume, or one that replaces another
+    // harness's, has the seed ahead of its first message
+    let first = match &setup.seed {
+        Some(wanted) if fresh && (refused || wanted.at_start) => seeded(wanted, setup, &first),
+        _ => first,
+    };
     // Instructions a harness cannot take as a system prompt lead the first
     // message of a session that has no history to hold them yet
     let first = match &setup.instructions {
@@ -452,6 +475,24 @@ async fn idle(cx: &ConnectionTo<Agent>, commands: &mut Inbox) -> Result<Option<C
     }
 }
 
+/// `message` with the seed ahead of it: the decisions file, and the log up to the message
+///
+/// The log already holds `message` as its last user entry, since a send writes
+/// it before the worker runs, so what the seed reads stops before it. A log
+/// that cannot be read seeds with the decisions alone.
+fn seeded(wanted: &super::Seed, setup: &Setup, message: &str) -> String {
+    let entries = setup
+        .log
+        .as_ref()
+        .and_then(|log| super::log::read(log.path()).ok())
+        .unwrap_or_default();
+    let before = entries
+        .iter()
+        .rposition(|entry| matches!(entry, kelpie_protocol::LogEntry::User { .. }))
+        .map_or(&entries[..], |last| &entries[..last]);
+    seed::ahead_of(&seed::seed(&wanted.decisions, before), message)
+}
+
 /// Whether the harness takes instructions as `systemPrompt`
 fn offers_system_prompt(init: &InitializeResponse) -> bool {
     init.agent_capabilities
@@ -470,24 +511,28 @@ fn system_prompt(init: &InitializeResponse, setup: &Setup) -> Option<SystemPromp
     })
 }
 
+/// The session a connection opened
+struct Opened {
+    session: agent_client_protocol::v1::schema::SessionId,
+    options: Vec<SessionConfigOption>,
+    /// Whether it is a new session, not a resumed one
+    fresh: bool,
+    /// Whether it is new because the harness refused to resume the saved id
+    refused: bool,
+}
+
 /// Resume the session, or start one
 ///
-/// A resume that fails starts a new session and says so first. A harness that
-/// replays a loaded session has its history dropped: kelpie keeps its own.
-/// The last of the three returned is whether the session is a new one.
+/// A resume that fails starts a new session and says so first, with a
+/// `Failed` for the turn and a divider in the log. A harness that replays a
+/// loaded session has its history dropped: kelpie keeps its own.
 async fn open(
     cx: &ConnectionTo<Agent>,
     init: &InitializeResponse,
     setup: &Setup,
     shared: &Shared,
-) -> Result<
-    (
-        agent_client_protocol::v1::schema::SessionId,
-        Vec<SessionConfigOption>,
-        bool,
-    ),
-    Error,
-> {
+) -> Result<Opened, Error> {
+    let mut refused = false;
     if let Some(wanted) = &setup.resume {
         let capabilities = &init.agent_capabilities;
         let resumed = if capabilities.session_capabilities.resume.is_some() {
@@ -509,26 +554,40 @@ async fn open(
         };
         match resumed {
             Ok(options) => {
-                return Ok((
-                    wanted.to_string().into(),
-                    options.unwrap_or_default(),
-                    false,
-                ));
+                return Ok(Opened {
+                    session: wanted.to_string().into(),
+                    options: options.unwrap_or_default(),
+                    fresh: false,
+                    refused: false,
+                });
             }
             Err(error) if is_gone(&error) => return Err(error),
-            Err(error) => shared.emit(failed(format!(
-                "could not resume session {wanted}, so this is a new one: {error}"
-            ))),
+            Err(error) => {
+                refused = true;
+                shared.emit(failed(format!(
+                    "could not resume session {wanted}, so this is a new one: {error}"
+                )));
+                // Only a session that seeds its successor says so in its log
+                if setup.seed.is_some()
+                    && let Some(log) = &setup.log
+                    && let Err(error) = log.append(&kelpie_protocol::LogEntry::Divider {
+                        text: COULDNT_RESUME.to_owned(),
+                    })
+                {
+                    shared.emit(failed(format!("could not write the session log: {error}")));
+                }
+            }
         }
     }
     let request = new_session(setup.project.clone(), setup.meta.as_ref())?
         .system_prompt(system_prompt(init, setup));
     let response = cx.send_request(request).block_task().await?;
-    Ok((
-        response.session_id,
-        response.config_options.unwrap_or_default(),
-        true,
-    ))
+    Ok(Opened {
+        session: response.session_id,
+        options: response.config_options.unwrap_or_default(),
+        fresh: true,
+        refused,
+    })
 }
 
 /// `session/new` for `project`, with the harness's `_meta` on it
