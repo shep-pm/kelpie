@@ -69,6 +69,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
 - CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
+- CI posts the window's light and dark screenshots in the body of a pull request that changes `src/`, `index.html` or `e2e/` (`.github/workflows/screenshots.yml`), from the e2e test's `test-results/window-light.png` and `window-dark.png`. An issue asks no worker for a screenshot, and a pull request author posts none.
 
 ## Where things live
 
