@@ -49,8 +49,20 @@ An item on a project's board: one piece of work and everything known about it, i
 _Avoid_: work item, card, issue (the GitHub side)
 
 **Draft ticket**:
-A ticket not yet filed on GitHub, while the maintainer and the PM shape it.
+A ticket not yet ready for a worker, while the maintainer and the PM shape it: not yet filed, or filed without the ready label.
 _Avoid_: idea, proposal
+
+**Board**:
+A project's tickets in columns, Draft, Ready, Building, Review and Done. A ticket's column is a fact about it, read from its source and the engine, not a place it is put.
+_Avoid_: kanban, queue
+
+**Ticket source**:
+Where a project's tickets live and are true: GitHub issues, or local files. A project has one.
+_Avoid_: tracker, backend
+
+**Pick up**:
+An issue becoming a ticket on the board, by who opened it or by the ready label.
+_Avoid_: import, sync
 
 **Issue**:
 GitHub's record of a ticket, once filed. The ticket holds more than its issue does.
