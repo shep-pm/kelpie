@@ -16,7 +16,7 @@ import {
   it,
   vi,
 } from "vitest";
-import type { LogEntry, SessionEvent } from "@/bindings";
+import type { LogEntry, SandboxAnswer, SessionEvent } from "@/bindings";
 
 // The real Channel needs Tauri's IPC bridge, which jsdom has not got.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -32,6 +32,15 @@ const pmRetry = vi.fn<(on: Channel<SessionEvent>) => Promise<void>>();
 const pmHistory = vi.fn<() => Promise<{ status: "ok"; data: LogEntry[] }>>();
 const projectGet = vi.fn<() => Promise<string | null>>();
 const projectPick = vi.fn();
+const pmAnswer =
+  vi.fn<
+    (
+      id: string,
+      answer: SandboxAnswer,
+    ) => Promise<
+      { status: "ok"; data: null } | { status: "error"; error: string }
+    >
+  >();
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -39,6 +48,7 @@ vi.mock("@/bindings", () => ({
     pmCancel: () => pmCancel(),
     pmRetry: (on: Channel<SessionEvent>) => pmRetry(on),
     pmHistory: () => pmHistory(),
+    pmAnswer: (id: string, answer: SandboxAnswer) => pmAnswer(id, answer),
     projectGet: () => projectGet(),
     projectPick: () => projectPick(),
   },
@@ -93,6 +103,8 @@ beforeEach(() => {
   projectGet.mockReset();
   projectGet.mockResolvedValue("/work/project");
   projectPick.mockReset();
+  pmAnswer.mockReset();
+  pmAnswer.mockResolvedValue({ status: "ok", data: null });
   useChat.getState().reset();
 });
 
@@ -162,6 +174,25 @@ describe("the chat box", () => {
     expect(await screen.findByText("Read 3 files")).toBeTruthy();
     expect(screen.getByText("Grep ProcessTree")).toBeTruthy();
     expect(screen.queryByText("Read a.ts")).toBeNull();
+  });
+
+  it("a sandbox request shows in the turn and its buttons answer it", async () => {
+    await sendMessage("fetch docs.rs");
+    emit({
+      kind: "sandbox_request",
+      id: "net-1",
+      host: "docs.rs",
+      why: "To read the tokio::process docs",
+    });
+
+    expect(await screen.findByText("PM wants to reach docs.rs")).toBeTruthy();
+    expect(screen.getByText("To read the tokio::process docs")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+    await waitFor(() => expect(pmAnswer).toHaveBeenCalledWith("net-1", "once"));
+    expect(screen.getByText("docs.rs allowed for this session")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deny" })).toBeNull();
   });
 
   it("the footer shows cache read and written", async () => {
