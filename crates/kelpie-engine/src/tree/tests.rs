@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{BufRead as _, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -10,6 +11,10 @@ use super::*;
 const WAIT: Duration = Duration::from_secs(10);
 
 const GRACE: Duration = Duration::from_secs(5);
+
+/// More than either pipe can hold, so reading one after the other leaves the
+/// command blocked in a write and the reader blocked on end of file
+const OVERFLOW: usize = 200_000;
 
 /// A folder of its own for one test's run file
 struct Dir(PathBuf);
@@ -78,6 +83,30 @@ fn assert_gone(pids: &[u32]) {
         assert!(Instant::now() < deadline, "pid {pid} still runs");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Run `call` with the tree behind it, and stop the tree if it never returns
+///
+/// A command whose pipes go unread, or whose stdin is never closed, waits for
+/// something that will never happen. Stopping the tree ends the command, so the
+/// test fails on its own instead of hanging until CI's job times out.
+#[track_caller]
+fn within<T: Send>(
+    tree: &ProcessTree,
+    what: &str,
+    call: impl FnOnce() -> io::Result<T> + Send,
+) -> T {
+    std::thread::scope(|scope| {
+        let (done, answer) = mpsc::channel();
+        scope.spawn(move || done.send(call()));
+        match answer.recv_timeout(WAIT) {
+            Ok(result) => result.unwrap(),
+            Err(_) => {
+                tree.stop_all(GRACE).unwrap();
+                panic!("`{what}` never finished on its own")
+            }
+        }
+    })
 }
 
 /// Kills a process that is not under a tree, even when a test fails
@@ -402,6 +431,118 @@ fn an_exit_noticed_while_another_handle_drops_leaves_the_run_file() {
 
     let file = RunFile::read(&dir.run_file()).unwrap();
     assert_eq!(file.groups.len(), 1, "only the sleep is listed: {file:?}");
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_returns_stdout_stderr_and_the_exit_status() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+
+    let output = tree
+        .output(&mut sh("echo out; echo err >&2; exit 4"))
+        .unwrap();
+
+    assert_eq!(output.stdout, b"out\n");
+    assert_eq!(output.stderr, b"err\n");
+    assert_eq!(output.status.code(), Some(4));
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_with_input_feeds_stdin_then_closes_it() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+
+    // `cat` ends only when its input ends, so a stdin left open keeps it running
+    let output = within(&tree, "output_with_input", || {
+        tree.output_with_input(&mut sh("cat"), b"a secret\n")
+    });
+
+    assert_eq!(output.stdout, b"a secret\n");
+    assert!(output.status.success());
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_gives_a_command_nothing_to_read() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+
+    // `cat` ends at once, because its stdin is closed rather than the app's own
+    let output = within(&tree, "output", || tree.output(&mut sh("cat")));
+
+    assert!(output.stdout.is_empty());
+    assert!(output.status.success());
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_after_stop_all_is_refused() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    tree.stop_all(GRACE).unwrap();
+
+    let refused = tree.output(&mut sh("echo out"));
+    assert!(refused.is_err());
+    let refused = tree.output_with_input(&mut sh("echo out"), b"in");
+    assert!(refused.is_err());
+}
+
+#[test]
+fn a_command_run_for_its_output_carries_the_run_mark() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::new(run, dir.run_file()).unwrap();
+    let mut command = sh("sleep 2; echo $KELPIE_RUN");
+
+    let output = std::thread::scope(|scope| {
+        let running = scope.spawn(|| tree.output(&mut command));
+        // The command is in the tree while `output` waits for it, so its group
+        // is in the run file a next launch would sweep
+        let deadline = Instant::now() + WAIT;
+        while RunFile::read(&dir.run_file()).unwrap().groups.is_empty() {
+            assert!(Instant::now() < deadline, "the tree never listed the group");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        running.join().unwrap().unwrap()
+    });
+
+    assert_eq!(output.stdout, format!("{run}\n").as_bytes());
+    assert!(output.stderr.is_empty());
+    assert!(output.status.success());
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_reads_both_pipes_a_command_fills_before_it_exits() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let script = format!("head -c {OVERFLOW} /dev/zero; head -c {OVERFLOW} /dev/zero >&2");
+
+    let output = within(&tree, "output", || tree.output(&mut sh(&script)));
+
+    assert_eq!(output.stdout.len(), OVERFLOW);
+    assert_eq!(output.stderr.len(), OVERFLOW);
+    assert!(output.stdout.iter().all(|byte| *byte == 0));
+    assert!(output.stderr.iter().all(|byte| *byte == 0));
+    assert!(output.status.success());
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn output_with_input_reports_the_exit_of_a_command_that_never_reads_its_input() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+
+    // The command is gone before the input can be written, so the write meets a
+    // closed pipe. The exit status is the failure the caller needs.
+    let output = within(&tree, "output_with_input", || {
+        tree.output_with_input(&mut sh("exit 3"), &vec![b'x'; OVERFLOW])
+    });
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
     tree.stop_all(GRACE).unwrap();
 }
 
