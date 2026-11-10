@@ -112,6 +112,8 @@ pub(super) fn harness_on_path(
         hosts: hosts_of(provider),
         installs,
         unprompted: Some(UNPROMPTED.to_owned()),
+        // goose speaks ACP itself, so no bridge says anything about its version
+        outdated: None,
     })
 }
 

@@ -497,7 +497,7 @@ fn a_harness_shows_the_names_of_its_environment_and_no_values() {
         concat!(
             r#"Harness { program: "agent", args: [], env: ["TOKEN"], "#,
             r#"new_session_meta: true, extensions: [], hosts: [], installs: [], "#,
-            r#"unprompted: None }"#
+            r#"unprompted: None, outdated: None }"#
         )
     );
 }
@@ -681,11 +681,10 @@ fn a_send_while_the_worker_explains_a_dead_harness_starts_a_new_worker() {
     };
     let session = Session::with_launcher(
         Box::new(launcher),
+        agent.harness(),
         PathBuf::from("/project"),
         None,
         Choice::default(),
-        None,
-        Vec::new(),
     );
     let (sink, first) = events();
     session.send("A", sink);
@@ -705,14 +704,13 @@ fn a_send_while_the_worker_explains_a_dead_harness_starts_a_new_worker() {
 
 #[test]
 fn a_failure_that_is_not_the_harness_ending_does_not_blame_it() {
-    let agent = FakeAgent::new();
+    let agent = FakeAgent::new().meta(json!("not an object"));
     let session = Session::with_launcher(
         Box::new(agent.clone()),
+        agent.harness(),
         PathBuf::from("/project"),
         None,
         Choice::default(),
-        Some(json!("not an object")),
-        Vec::new(),
     );
 
     let (sink, heard) = events();
@@ -779,11 +777,10 @@ impl Launch for DeadOnWrite {
 fn a_harness_gone_before_the_first_write_is_explained() {
     let session = Session::with_launcher(
         Box::new(DeadOnWrite),
+        Harness::new("dead-harness-acp"),
         PathBuf::from("/project"),
         None,
         Choice::default(),
-        None,
-        Vec::new(),
     );
 
     let (sink, heard) = events();
@@ -864,6 +861,7 @@ fn the_seed_stops_at_its_cap() {
     assert!(by_size.chars().count() < 8_000 + 200, "{}", by_size.len());
 }
 
+mod bridge_moves;
 mod choose;
 mod instructions;
 mod kept_log;

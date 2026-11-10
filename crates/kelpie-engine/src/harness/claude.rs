@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 use serde_json::json;
 
 use crate::bridge::{Capability, Download, Pin, Platform};
-use crate::session::{Extension, Harness};
+use crate::session::{Extension, Harness, Outdated};
 
 use crate::login::Store;
 
@@ -38,14 +38,18 @@ const VERSION: &str = "0.101.1";
 /// Where the registry's prebuilt archives for one version hang off
 const RELEASES: &str = "https://github.com/agentclientprotocol/claude-agent-acp/releases/download";
 
-/// The command the bridge's archive holds, which is the one kelpie runs
-const CMD: &str = "claude-agent-acp";
+/// The command the bridge's archive holds, which is the one kelpie runs, and the
+/// name a divider gives the bridge
+pub const CMD: &str = "claude-agent-acp";
 
 /// The harness, as kelpie names it to the person
 const NAME: &str = "Claude Code";
 
 /// The command kelpie looks for on `PATH`: the person's own Claude Code
 const CLAUDE: &str = "claude";
+
+/// The command the person runs to update Claude Code themselves
+const UPDATE: &str = "claude update";
 
 /// The id Claude Code's login is kept under in the [`Store`]
 pub const LOGIN: &str = "claude";
@@ -71,6 +75,27 @@ const UNPROMPTED: &str = "bypassPermissions";
 
 /// The command that makes the login token
 const SETUP: &str = "claude setup-token";
+
+/// What a too-old Claude Code is said as, and how the person updates it
+///
+/// `claude-agent-acp` 0.102.0 says nothing of its own about the Claude Code it
+/// drives: it names a CLI only when it is missing (`The Claude CLI is missing:
+/// expected …`), and the SDK it bundles sets no version floor either. So these
+/// are the phrases a too-old Claude Code is reported with, from Claude Code
+/// itself and from any bridge that names the harness it needs, matched without
+/// regard to case.
+static OUTDATED: LazyLock<Outdated> = LazyLock::new(|| Outdated {
+    harness: NAME.to_owned(),
+    says: [
+        "too old".to_owned(),
+        "outdated".to_owned(),
+        "update claude code".to_owned(),
+        "requires claude code".to_owned(),
+    ]
+    .into_iter()
+    .collect(),
+    update: UPDATE.to_owned(),
+});
 
 /// The bridge archives the registry publishes for the pinned version
 ///
@@ -191,5 +216,6 @@ pub(super) fn harness_on_path(
         hosts: vec![MODEL_HOST.to_owned()],
         installs,
         unprompted: Some(UNPROMPTED.to_owned()),
+        outdated: Some(OUTDATED.clone()),
     })
 }

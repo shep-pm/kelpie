@@ -3179,6 +3179,7 @@ dependencies = [
  "getrandom 0.4.3",
  "kelpie-engine",
  "kelpie-protocol",
+ "semver",
  "serde",
  "serde_json",
  "specta",

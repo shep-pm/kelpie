@@ -187,10 +187,22 @@ fn run_checks(
     let handle = {
         let (asked, data_dir) = (Arc::clone(&asked), dir.0.clone());
         thread::spawn(move || {
-            run_bridge_checks(&[claude::pin()], &data_dir, every, &quit, &|pin| {
-                lock(&asked).push(pin.id.to_owned());
-                Ok(CheckOutcome::Current)
-            });
+            run_bridge_checks(
+                &[claude::pin()],
+                &data_dir,
+                every,
+                &quit,
+                &|pin| {
+                    lock(&asked).push(pin.id.to_owned());
+                    Ok(CheckOutcome::Current)
+                },
+                &|pin| {
+                    let versions = Versions::load(&data_dir, pin).map_err(|e| e.to_string())?;
+                    versions
+                        .prune(&data_dir, pin, &[])
+                        .map_err(|error| error.to_string())
+                },
+            );
         })
     };
     (stop, handle, asked)
@@ -227,6 +239,36 @@ fn a_bridge_never_installed_is_not_checked_and_a_quit_ends_the_wait() {
     handle.join().unwrap();
 
     assert!(lock(&asked).is_empty(), "{:?}", lock(&asked));
+}
+
+/// The version folders under the bridge `id`, oldest first
+fn installed(dir: &Dir, id: &str) -> Vec<String> {
+    let bridge = dir.0.join("bridges").join(id);
+    let mut names: Vec<_> = fs::read_dir(&bridge)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_bridge_check_prunes_a_version_folder_nothing_needs() {
+    let dir = Dir::new();
+    let bridge = dir.0.join("bridges").join(claude::pin().id);
+    fs::create_dir_all(bridge.join("0.100.0")).unwrap();
+    fs::create_dir_all(bridge.join(claude::pin().version)).unwrap();
+
+    let (stop, handle, asked) = run_checks(&dir, Duration::from_millis(20));
+    wait_for(&asked, 1);
+    drop(stop);
+    handle.join().unwrap();
+
+    assert_eq!(
+        installed(&dir, claude::pin().id),
+        [claude::pin().version],
+        "kelpie's own pin is kept, and a version no session runs on is removed"
+    );
 }
 
 #[test]

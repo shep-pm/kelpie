@@ -64,10 +64,16 @@ use serde::Serialize;
 #[cfg(unix)]
 use crate::run::{ENV, RunId};
 
-use super::{Choice, Extension, Launch, Link, Session, SessionId};
+use super::{Choice, Extension, Harness, Launch, Link, Outdated, Session, SessionId};
+
+mod bridge;
+pub use bridge::{BRIDGE, FakeBridge};
 
 /// What a session adds to the `Failed` message when it asks how the agent ended
 pub const EXPLANATION: &str = "the fake agent is gone";
+
+/// The name this agent's harness goes by
+pub const HARNESS: &str = "fake-agent-acp";
 
 /// One request the agent got, as the client sent it
 #[derive(Debug, Clone, PartialEq)]
@@ -292,6 +298,17 @@ struct Script {
     history: Vec<String>,
     offers: Vec<Offer>,
     extensions: Vec<Extension>,
+    /// `_meta` the agent's `session/new` carries
+    meta: Option<serde_json::Value>,
+    /// What its `initialize` answers with instead of its capabilities
+    initialize_error: Option<String>,
+    /// What its `session/new` answers with instead of a session
+    new_error: Option<String>,
+    /// What its harness says when the harness behind its bridge is too old
+    outdated: Option<Outdated>,
+    /// The mode its harness names to stop its own prompts, and that it runs in
+    /// a sandbox, as a sandboxed launcher says
+    sandboxed: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -416,6 +433,63 @@ impl FakeAgent {
         self
     }
 
+    /// Put `meta` on the agent's `session/new`, as a harness's `_meta`
+    #[must_use]
+    pub fn meta(mut self, meta: serde_json::Value) -> Self {
+        self.script.meta = Some(meta);
+        self
+    }
+
+    /// Answer `initialize` with `message` rather than capabilities
+    #[must_use]
+    pub fn fails_initialize(mut self, message: &str) -> Self {
+        self.script.initialize_error = Some(message.to_owned());
+        self
+    }
+
+    /// Answer `session/new` with `message` rather than a session
+    #[must_use]
+    pub fn fails_new(mut self, message: &str) -> Self {
+        self.script.new_error = Some(message.to_owned());
+        self
+    }
+
+    /// Say this agent runs in a sandbox, and its harness stops its own prompts
+    /// with `mode`, as a sandboxed harness does
+    #[must_use]
+    pub fn sandboxed(mut self, mode: &str) -> Self {
+        self.script.sandboxed = Some(mode.to_owned());
+        self
+    }
+
+    /// Say the harness this agent stands for is reported too old with `says`,
+    /// and that `update` updates it, as a bridge's harness does
+    #[must_use]
+    pub fn says_outdated(mut self, says: &[&str], update: &str) -> Self {
+        self.script.outdated = Some(Outdated {
+            harness: HARNESS.to_owned(),
+            says: says.iter().map(|phrase| (*phrase).to_owned()).collect(),
+            update: update.to_owned(),
+        });
+        self
+    }
+
+    /// What this agent's harness offers, as a session holds one
+    #[must_use]
+    pub fn harness(&self) -> Harness {
+        Harness {
+            program: PathBuf::from(HARNESS),
+            args: Vec::new(),
+            env: Vec::new(),
+            new_session_meta: self.script.meta.clone(),
+            extensions: self.script.extensions.clone(),
+            hosts: Vec::new(),
+            installs: Vec::new(),
+            unprompted: self.script.sandboxed.clone(),
+            outdated: self.script.outdated.clone(),
+        }
+    }
+
     /// Play `turn` for the next prompt nothing else has claimed
     #[must_use]
     pub fn turn(self, turn: Turn) -> Self {
@@ -429,11 +503,10 @@ impl FakeAgent {
     pub fn session(&self, project: PathBuf, resume: Option<SessionId>, choice: Choice) -> Session {
         Session::with_launcher(
             Box::new(self.clone()),
+            self.harness(),
             project,
             resume,
             choice,
-            None,
-            self.script.extensions.clone(),
         )
     }
 
@@ -532,13 +605,17 @@ fn offer(
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Launch for FakeAgent {
+    fn sandboxed(&self) -> bool {
+        self.script.sandboxed.is_some()
+    }
+
     fn launch(&mut self) -> io::Result<Link> {
         self.shared.launches.fetch_add(1, Ordering::SeqCst);
         let (client_side, agent_side) = Channel::duplex();
@@ -591,6 +668,10 @@ impl FakeAgent {
             .on_receive_request(
                 async move |request: InitializeRequest, responder, _cx| {
                     init.record("initialize", &request);
+                    if let Some(message) = &init.script.initialize_error {
+                        return responder
+                            .respond_with_error(Error::invalid_request().data(message.clone()));
+                    }
                     let mut offered = SessionCapabilities::new();
                     if init.script.can_resume {
                         offered = offered.resume(SessionResumeCapabilities::new());
@@ -620,6 +701,10 @@ impl FakeAgent {
                             let _held = responder;
                             futures::future::pending::<Result<(), Error>>().await
                         });
+                    }
+                    if let Some(message) = &new.script.new_error {
+                        return responder
+                            .respond_with_error(Error::invalid_request().data(message.clone()));
                     }
                     let number = new.shared.sessions.fetch_add(1, Ordering::SeqCst) + 1;
                     responder.respond(

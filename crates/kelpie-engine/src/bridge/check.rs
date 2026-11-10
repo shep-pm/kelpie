@@ -175,5 +175,8 @@ fn probe_harness(pin: &Pin<'_>, command: PathBuf) -> Result<Harness, String> {
         hosts: Vec::new(),
         installs: Vec::new(),
         unprompted: None,
+        // A probe that fails is recorded with the bridge's own words, so nothing
+        // here has to name the harness the person installed
+        outdated: None,
     })
 }

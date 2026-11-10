@@ -11,7 +11,8 @@
 //! in `agentclientprotocol/registry`. Pins are kelpie's own code. [`check`] finds a
 //! newer version in the registry ([`registry`]), installs it with this same
 //! [`ensure`], probes it ([`probe()`]) and records it in [`Versions`]
-//! (`docs/design/bridge-updates.md`). Nothing swaps to it yet.
+//! (`docs/design/bridge-updates.md`). A session on a [`crate::session::Bridge`]
+//! takes a `ready` version at its next idle point.
 //!
 //! The install lands at `<data_dir>/bridges/<id>/<version>/<cmd>`, with the
 //! command's own sha256 recorded beside it in `<cmd>.sha256`. A later call
@@ -53,6 +54,7 @@ use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use semver::Version;
 use sha2::{Digest as _, Sha256};
 
 mod check;
@@ -241,6 +243,23 @@ pub fn ensure(data_dir: &Path, pin: &Pin<'_>) -> Result<PathBuf, BridgeError> {
     }
     install(&dir, download)?;
     Ok(target)
+}
+
+/// The command kelpie runs for `id` at `version`, `None` when it is not installed or not intact
+///
+/// [`check`] installs a newer version before it probes it, so a session taking
+/// that version into use finds it here instead of downloading it again.
+#[must_use]
+pub fn installed(data_dir: &Path, id: &str, version: &Version, cmd: &str) -> Option<PathBuf> {
+    if !is_name(id) || !is_name(cmd) {
+        return None;
+    }
+    let target = data_dir
+        .join(BRIDGES_FOLDER)
+        .join(id)
+        .join(version.to_string())
+        .join(cmd);
+    is_installed(&target).then_some(target)
 }
 
 /// The first name in the pin that is not one folder or file name

@@ -74,6 +74,20 @@ pub enum HarnessError {
 
     /// The login store could not be read, so whether the harness has a login is unknown
     Login(LoginError),
+
+    /// A bridge kelpie runs a harness through needs a newer harness than the person has.
+    /// Kelpie never updates a harness itself (`docs/design/bridge-updates.md`, Scope),
+    /// so this only says what the bridge said and what the person can run.
+    TooOld {
+        /// The harness, as kelpie names it to the person
+        harness: String,
+
+        /// What the bridge said, in its own words
+        bridge: String,
+
+        /// The command the person runs to update the harness, such as `claude update`
+        update: String,
+    },
 }
 
 impl fmt::Display for HarnessError {
@@ -91,6 +105,15 @@ impl fmt::Display for HarnessError {
                  {harness}'s login on kelpie's settings page."
             ),
             Self::Login(error) => write!(f, "kelpie could not read the login: {error}"),
+            Self::TooOld {
+                harness,
+                bridge,
+                update,
+            } => write!(
+                f,
+                "{harness} is too old for the bridge kelpie runs it through: {bridge}. \
+                 Kelpie never updates {harness} itself: run `{update}`, then send again."
+            ),
         }
     }
 }
@@ -105,7 +128,7 @@ impl core::error::Error for HarnessError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Login(error) => Some(error),
-            Self::NotInstalled { .. } | Self::NoLogin { .. } => None,
+            Self::NotInstalled { .. } | Self::NoLogin { .. } | Self::TooOld { .. } => None,
         }
     }
 }

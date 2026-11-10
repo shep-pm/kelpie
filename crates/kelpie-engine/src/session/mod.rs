@@ -48,6 +48,7 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use semver::Version;
 
 pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
@@ -94,6 +95,9 @@ pub struct Harness {
     /// The value of the harness's `mode` option that turns its own permission
     /// prompts off, which a sandboxed session sets
     pub unprompted: Option<String>,
+    /// What its bridge says when the harness behind it is too old, and how the
+    /// person updates that harness
+    pub outdated: Option<Outdated>,
 }
 
 impl Harness {
@@ -109,6 +113,7 @@ impl Harness {
             hosts: Vec::new(),
             installs: Vec::new(),
             unprompted: None,
+            outdated: None,
         }
     }
 }
@@ -154,6 +159,7 @@ impl fmt::Debug for Harness {
             .field("hosts", &self.hosts)
             .field("installs", &self.installs)
             .field("unprompted", &self.unprompted)
+            .field("outdated", &self.outdated)
             .finish()
     }
 }
@@ -267,7 +273,10 @@ enum Command {
 }
 
 /// A started agent: the pipe to speak ACP over, and how to say why it ended
-pub(crate) struct Link {
+///
+/// The engine makes every [`Link`] itself, so a launcher outside it cannot be
+/// written.
+pub struct Link {
     pub(crate) transport: DynConnectTo<Client>,
     /// What the harness left behind when it ended, if it can be known
     pub(crate) explain: Box<dyn FnMut() -> Option<String> + Send>,
@@ -276,29 +285,206 @@ pub(crate) struct Link {
     pub(crate) stop: Box<dyn FnOnce(Duration) -> Option<String> + Send>,
 }
 
+impl fmt::Debug for Link {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Link").finish_non_exhaustive()
+    }
+}
+
 /// How a session gets an agent to talk to
-pub(crate) trait Launch: Send + 'static {
+///
+/// Kelpie writes every launcher itself: [`launcher`] for a harness's program,
+/// and whatever a [`Bridge`] hands a session for one of its versions.
+pub trait Launch: Send + 'static {
     /// Start the agent
     ///
     /// # Errors
     ///
     /// The agent cannot be started.
     fn launch(&mut self) -> io::Result<Link>;
+
+    /// Whether the agent it starts runs inside a sandbox
+    ///
+    /// A session whose launcher says so sets the harness's
+    /// [`Harness::unprompted`] mode on the version it runs, so a bridge's every
+    /// version is covered by what that version's launcher says, not by what the
+    /// first one did (ADR 0005).
+    fn sandboxed(&self) -> bool {
+        false
+    }
+}
+
+/// The launcher that starts `harness` through `tree`, in `project`
+#[must_use]
+pub fn launcher(tree: Arc<ProcessTree>, harness: Harness, project: PathBuf) -> Box<dyn Launch> {
+    Box::new(ProcessLauncher {
+        tree,
+        harness,
+        sandbox: None,
+        project,
+    })
+}
+
+/// The launcher that starts `harness` through `tree` inside `sandbox`, in `project`
+///
+/// The sandbox wraps the command before the tree spawns it, and lives as long
+/// as the launcher. A [`Bridge`] builds one per version it starts.
+#[must_use]
+pub fn sandboxed_launcher(
+    tree: Arc<ProcessTree>,
+    harness: Harness,
+    sandbox: Sandbox,
+    project: PathBuf,
+) -> Box<dyn Launch> {
+    Box::new(ProcessLauncher {
+        tree,
+        harness,
+        sandbox: Some(sandbox),
+        project,
+    })
+}
+
+/// What a harness's bridge says when the harness behind it is too old, and how
+/// the person updates it
+///
+/// A bridge needs a harness new enough for it. Kelpie never updates a harness
+/// itself (`docs/design/bridge-updates.md`, Scope), so a bridge saying so ends
+/// the turn with [`crate::harness::HarnessError::TooOld`], which names the
+/// harness's own update command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outdated {
+    /// The harness, as kelpie names it to the person
+    pub harness: String,
+
+    /// Phrases in the bridge's error that say so, matched without regard to case
+    pub says: Vec<String>,
+
+    /// The command the person runs to update the harness, such as `claude update`
+    pub update: String,
+}
+
+/// One bridge version's agent: the harness it runs, and what starts it
+pub struct Started {
+    /// What to run, with the `_meta`, extension notifications and [`Outdated`]
+    /// its harness offers
+    pub harness: Harness,
+
+    /// The launcher that starts it
+    pub launch: Box<dyn Launch>,
+}
+
+impl fmt::Debug for Started {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Started")
+            .field("harness", &self.harness)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The swap [`Bridge::current`] offers: the version to start on, and the one it
+/// takes over from
+///
+/// `from` is `Some` only when this look actually took a newer version into use,
+/// which is what makes a later failure *that version's* failure rather than the
+/// harness's (`docs/design/bridge-updates.md`, Flow).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Swap {
+    /// The version to start on
+    pub version: Version,
+
+    /// The version this swap leaves behind, `None` when nothing swapped
+    pub from: Option<Version>,
+}
+
+/// The swap the next agent runs on
+type Current = Box<dyn Fn() -> Swap + Send + Sync>;
+
+/// The agent to start on one bridge version, and what its harness offers
+type Start = Box<dyn Fn(&Version) -> Result<Started, String> + Send + Sync>;
+
+/// What a version that failed a session gives back: the version to go to, `None` when there is none
+type Fallback = Box<dyn Fn(&Version, &str) -> Option<Version> + Send + Sync>;
+
+/// A bridge kelpie installs and can update, which a session moves to a newer
+/// version of between turns
+///
+/// The app builds one from the bridge's [`crate::bridge::Versions`] and its own
+/// way of building a harness for a version; a test builds one over scripted
+/// agents (`fake::FakeBridge`, under the `testing` feature).
+/// (`docs/design/bridge-updates.md`, Swapping)
+pub struct Bridge {
+    /// The bridge, as kelpie names it in a divider, such as `claude-agent-acp`
+    pub id: String,
+
+    /// The version to run on, and the one it swaps from
+    ///
+    /// Answers with the version in use when nothing newer is to be used. Taking
+    /// a ready version into use is what moves it into use, and is what answers
+    /// with the version it left
+    /// ([`crate::bridge::Versions::current`]).
+    pub current: Current,
+
+    /// The agent to start on `version`, and what its harness offers
+    ///
+    /// # Errors
+    ///
+    /// The harness for that version could not be built. The text is for the maintainer.
+    pub start: Start,
+
+    /// Say `version` failed a session with `reason`, and get the version to go
+    /// back to, `None` when there is none
+    pub failed: Fallback,
+}
+
+impl fmt::Debug for Bridge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bridge").field("id", &self.id).finish()
+    }
+}
+
+/// The bridge as a divider names it
+impl fmt::Display for Bridge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.id)
+    }
+}
+
+/// Where a session's agent comes from
+#[derive(Clone)]
+enum Source {
+    /// One harness, started the same way every turn
+    Fixed {
+        /// What to run, and what its harness offers
+        ///
+        /// Boxed so this variant is no larger than the bridge one
+        harness: Box<Harness>,
+        /// What starts it
+        launcher: Arc<Mutex<Box<dyn Launch>>>,
+    },
+
+    /// A bridge kelpie installs, which a session moves to a newer version of at
+    /// its next idle point
+    Bridge {
+        /// Which versions to run on, and what starts each one
+        bridge: Arc<Bridge>,
+    },
 }
 
 /// What a worker needs to open its session
 struct Setup {
+    source: Source,
     project: PathBuf,
-    resume: Option<SessionId>,
+    /// The id to resume, which the worker replaces with the one the harness gives
+    id: Arc<Mutex<Option<SessionId>>>,
     choice: Choice,
     /// What [`Session::choose`] last set, read before each turn
     wanted: Arc<Mutex<Choice>>,
-    meta: Option<serde_json::Value>,
-    extensions: Vec<Extension>,
     instructions: Option<String>,
     mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
+    /// The bridge version the session's process runs on, shared with [`Session::bridge_version`]
+    running: Arc<Mutex<Option<Version>>>,
 }
 
 /// Where a session that starts over takes its seed from, and when
@@ -324,18 +510,19 @@ struct Worker {
 /// Dropping it closes the connection, which a harness takes as its end. The
 /// process tree stops it for certain when the run ends.
 pub struct Session {
-    launcher: Arc<Mutex<Box<dyn Launch>>>,
+    source: Source,
     project: PathBuf,
     /// The choice the next message runs on, which [`Session::choose`] changes
     choice: Arc<Mutex<Choice>>,
-    meta: Option<serde_json::Value>,
-    extensions: Vec<Extension>,
     instructions: Option<String>,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
     id: Arc<Mutex<Option<SessionId>>>,
+    /// The bridge version the session's process runs on, `None` before the
+    /// first start, and for a harness kelpie does not move
+    running: Arc<Mutex<Option<Version>>>,
     /// The running worker, `None` before the first send
     worker: Mutex<Option<Worker>>,
 }
@@ -362,7 +549,8 @@ impl Session {
         resume: Option<SessionId>,
         choice: Choice,
     ) -> Self {
-        Self::on_tree(tree, harness, None, project, resume, choice)
+        let launcher = launcher(Arc::clone(&tree), harness.clone(), project.clone());
+        Self::with_launcher(launcher, harness, project, resume, choice)
     }
 
     /// A session like [`Session::new`] that runs its harness inside `sandbox`
@@ -373,6 +561,9 @@ impl Session {
     /// the session turns the harness's own permission prompts off by setting
     /// its [`Harness::unprompted`] mode. A request that still arrives is
     /// refused, and a command the sandbox refuses shows as a failed step.
+    ///
+    /// A session on a [`Bridge`] has no one sandbox: each version's
+    /// [`Started::launch`] comes from [`sandboxed_launcher`] with its own.
     #[must_use]
     pub fn sandboxed(
         tree: Arc<ProcessTree>,
@@ -382,57 +573,68 @@ impl Session {
         resume: Option<SessionId>,
         choice: Choice,
     ) -> Self {
-        Self::on_tree(tree, harness, Some(sandbox), project, resume, choice)
+        let launcher = sandboxed_launcher(tree, harness.clone(), sandbox, project.clone());
+        Self::with_launcher(launcher, harness, project, resume, choice)
     }
 
-    fn on_tree(
-        tree: Arc<ProcessTree>,
-        harness: Harness,
-        sandbox: Option<Sandbox>,
+    /// A session on `bridge`, which kelpie can move to a newer version of
+    ///
+    /// The first send starts the version [`Bridge::current`] names. Each later
+    /// send at an idle point moves the session to a newer one and resumes it,
+    /// and a version that fails the session sends it back to the one before
+    /// (`docs/design/bridge-updates.md`, Swapping).
+    #[must_use]
+    pub fn on_bridge(
+        bridge: Bridge,
         project: PathBuf,
         resume: Option<SessionId>,
         choice: Choice,
     ) -> Self {
-        let meta = harness.new_session_meta.clone();
-        let extensions = harness.extensions.clone();
-        let mode = sandbox.as_ref().and(harness.unprompted.clone());
-        let launcher = ProcessLauncher {
-            tree,
-            harness,
-            sandbox,
-            project: project.clone(),
-        };
-        let mut session = Self::with_launcher(
-            Box::new(launcher),
+        Self::from_source(
+            Source::Bridge {
+                bridge: Arc::new(bridge),
+            },
             project,
             resume,
             choice,
-            meta,
-            extensions,
-        );
-        session.mode = mode;
-        session
+        )
     }
 
+    /// A session whose agent `launcher` starts, on what `harness` offers
     pub(crate) fn with_launcher(
         launcher: Box<dyn Launch>,
+        harness: Harness,
         project: PathBuf,
         resume: Option<SessionId>,
         choice: Choice,
-        meta: Option<serde_json::Value>,
-        extensions: Vec<Extension>,
+    ) -> Self {
+        Self::from_source(
+            Source::Fixed {
+                harness: Box::new(harness),
+                launcher: Arc::new(Mutex::new(launcher)),
+            },
+            project,
+            resume,
+            choice,
+        )
+    }
+
+    fn from_source(
+        source: Source,
+        project: PathBuf,
+        resume: Option<SessionId>,
+        choice: Choice,
     ) -> Self {
         Self {
-            launcher: Arc::new(Mutex::new(launcher)),
+            source,
             project,
             choice: Arc::new(Mutex::new(choice)),
-            meta,
-            extensions,
             instructions: None,
             mode: None,
             log: None,
             seed: None,
             id: Arc::new(Mutex::new(resume)),
+            running: Arc::new(Mutex::new(None)),
             worker: Mutex::new(None),
         }
     }
@@ -542,14 +744,25 @@ impl Session {
         lock(&self.id).clone()
     }
 
+    /// The bridge version the session's process runs on
+    ///
+    /// `None` before the first start, and for a session on a harness kelpie does
+    /// not update. A session that moved and fell back reports the version it is
+    /// on, not the one that failed it.
+    #[must_use]
+    pub fn bridge_version(&self) -> Option<Version> {
+        lock(&self.running).clone()
+    }
+
     /// Send `text` as the next message, and stream the turn into `sink`
     ///
     /// Returns at once. Every send ends with one `TurnEnded`, or with a
     /// `Failed` when the harness could not carry on. A `Failed` can also come
     /// first and the send go on: the session started over because the id could
-    /// not be resumed, or kept its default because a model or effort was not
-    /// taken. Those come before the turn's own `TurnEnded`. `sink` runs on the
-    /// session's own thread and must not block for long.
+    /// not be resumed, moved to a newer bridge version, or kept its default
+    /// because a model or effort was not taken. Those come before the turn's own
+    /// `TurnEnded`. `sink` runs on the session's own thread and must not block
+    /// for long.
     pub fn send(&self, text: impl Into<String>, sink: impl FnMut(SessionEvent) + Send + 'static) {
         let text = text.into();
         let sink: Sink = match &self.log {
@@ -567,24 +780,20 @@ impl Session {
         }
         let (inbox, commands) = unbounded();
         let setup = Setup {
+            source: self.source.clone(),
             project: self.project.clone(),
-            resume: lock(&self.id).clone(),
+            id: Arc::clone(&self.id),
             choice: lock(&self.choice).clone(),
             wanted: Arc::clone(&self.choice),
-            meta: self.meta.clone(),
-            extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
             mode: self.mode.clone(),
             log: self.log.clone(),
             seed: self.seed.clone(),
+            running: Arc::clone(&self.running),
         };
-        let launcher = Arc::clone(&self.launcher);
-        let id = Arc::clone(&self.id);
         let started = thread::Builder::new()
             .name("kelpie-session".to_owned())
-            .spawn(move || {
-                futures::executor::block_on(acp::run(launcher, setup, commands, id));
-            });
+            .spawn(move || futures::executor::block_on(acp::run(setup, commands)));
         match started {
             Ok(thread) => {
                 // The thread holds the receiver, so this cannot fail
@@ -626,6 +835,10 @@ struct ProcessLauncher {
 }
 
 impl Launch for ProcessLauncher {
+    fn sandboxed(&self) -> bool {
+        self.sandbox.is_some()
+    }
+
     fn launch(&mut self) -> io::Result<Link> {
         let mut command = Process::new(&self.harness.program);
         command
