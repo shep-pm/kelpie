@@ -533,6 +533,18 @@ fn a_project_inside_a_secret_folder_is_refused() {
     for reads in [Reads::Project, Reads::Anywhere] {
         refuses_denied("inside-ssh", &folder, &secret, reads);
     }
+
+    // And the same folder reached through a link, which is only refused when
+    // the folder the link names is there to be reached
+    #[cfg(unix)]
+    {
+        let secret = SecretFolder::new();
+        let linked = Linked::new("inside-secret");
+
+        for reads in [Reads::Project, Reads::Anywhere] {
+            refuses_denied("links-into-ssh", &linked.secret(), &secret.folder, reads);
+        }
+    }
 }
 
 /// The folder `~/.ssh`, made when this machine has none and taken back when this
@@ -568,21 +580,6 @@ impl Drop for SecretFolder {
         if self.made {
             let _ = fs::remove_dir(&self.folder);
         }
-    }
-}
-
-/// A project that reaches a denied folder through a link is inside it
-///
-/// As `~/.ssh` named from a link beside it is `~/.ssh`, whichever way the project
-/// reads.
-#[cfg(unix)]
-#[test]
-fn a_project_that_links_into_a_denied_folder_is_refused() {
-    let secret = SecretFolder::new();
-    let linked = Linked::new("inside-secret");
-
-    for reads in [Reads::Project, Reads::Anywhere] {
-        refuses_denied("links-into-ssh", &linked.secret(), &secret.folder, reads);
     }
 }
 
