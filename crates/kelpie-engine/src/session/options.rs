@@ -21,8 +21,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    CloseSessionRequest, InitializeRequest, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelectOption, SessionConfigSelectOptions,
+    CloseSessionRequest, InitializeRequest, InitializeResponse, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    SessionConfigSelectOptions,
 };
 use agent_client_protocol::{Agent, Client, DynConnectTo, Error};
 use futures::future::{Either, select};
@@ -89,13 +90,65 @@ pub(crate) fn asked_within(
     meta: Option<&serde_json::Value>,
     deadline: Duration,
 ) -> Result<Options, SessionError> {
+    asking(launcher, deadline, async |cx| {
+        talk(cx, project.to_path_buf(), meta).await
+    })
+}
+
+/// What a harness answers to `initialize` alone, and then it is stopped
+///
+/// Starts it through `launcher`, sends `initialize` and no `session/new`, no
+/// prompt, and stops it, giving it `deadline` to answer. This is the probe's
+/// start (`docs/design/bridge-updates.md`, The probe).
+pub(crate) fn initialized_within(
+    launcher: &mut dyn Launch,
+    deadline: Duration,
+) -> Result<InitializeResponse, SessionError> {
+    asking(launcher, deadline, async |cx| {
+        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+            .block_task()
+            .await
+    })
+}
+
+/// Start the harness, run `talk` on its connection, and stop it
+///
+/// The harness is stopped whether `talk` finished, failed or ran past `deadline`.
+async fn asking_with<T>(
+    transport: DynConnectTo<Client>,
+    talk: impl AsyncFnOnce(&ConnectionTo<Agent>) -> Result<T, Error>,
+) -> Result<T, Failure> {
+    Client
+        .v1()
+        .name("kelpie")
+        .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
+            Ok(match talk(&cx).await {
+                Ok(done) => Ok(done),
+                Err(error) => {
+                    let gone = is_gone(&error)
+                        || cx.is_incoming_closed()
+                        || until(CLOSE_FOLLOWS, cx.incoming_closed()).await.is_some();
+                    Err(Failure { error, gone })
+                }
+            })
+        })
+        .await
+        // The connection failing outside the ask, such as a write to a pipe
+        // nobody reads, is the harness going; its own errors arrive inside
+        .map_err(|error| Failure { gone: true, error })
+        .and_then(|asked| asked)
+}
+
+/// [`asking_with`] on a harness `launcher` starts, naming how it failed
+fn asking<T>(
+    launcher: &mut dyn Launch,
+    deadline: Duration,
+    talk: impl AsyncFnOnce(&ConnectionTo<Agent>) -> Result<T, Error>,
+) -> Result<T, SessionError> {
     let Link {
         transport, stop, ..
     } = launcher.launch().map_err(SessionError::Start)?;
-    let answer = futures::executor::block_on(until(
-        deadline,
-        exchange(transport, project.to_path_buf(), meta),
-    ));
+    let answer = futures::executor::block_on(until(deadline, asking_with(transport, talk)));
     // The harness is kelpie's to stop, whether it closed its own session or not
     let said = stop(STOP_GRACE);
     match answer {
@@ -197,7 +250,7 @@ pub(crate) fn offerings_at(
 }
 
 /// The launcher that starts `harness` through `tree`, in `project`
-fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Path) -> ProcessLauncher {
+pub(crate) fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Path) -> impl Launch {
     ProcessLauncher {
         tree: Arc::clone(tree),
         harness: harness.clone(),
@@ -223,33 +276,6 @@ struct Failure {
 /// follows a moment after. A harness that is alive and answered with an error
 /// never closes, so this is the most that failure costs.
 const CLOSE_FOLLOWS: Duration = Duration::from_millis(200);
-
-/// `initialize`, `session/new` and `session/close` over `transport`, and what the harness listed
-async fn exchange(
-    transport: DynConnectTo<Client>,
-    project: PathBuf,
-    meta: Option<&serde_json::Value>,
-) -> Result<Options, Failure> {
-    Client
-        .v1()
-        .name("kelpie")
-        .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            Ok(match talk(&cx, project, meta).await {
-                Ok(listed) => Ok(listed),
-                Err(error) => {
-                    let gone = is_gone(&error)
-                        || cx.is_incoming_closed()
-                        || until(CLOSE_FOLLOWS, cx.incoming_closed()).await.is_some();
-                    Err(Failure { error, gone })
-                }
-            })
-        })
-        .await
-        // The connection failing outside the ask, such as a write to a pipe
-        // nobody reads, is the harness going; its own errors arrive inside
-        .map_err(|error| Failure { gone: true, error })
-        .and_then(|asked| asked)
-}
 
 /// What the harness lists, from `initialize`, `session/new` and `session/close` on `cx`
 async fn talk(

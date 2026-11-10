@@ -6,6 +6,7 @@
 //! [`Field::layers`], and a field none of them sets falls back to
 //! [`BUILT_IN`].
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -86,11 +87,13 @@ impl Field {
     #[must_use]
     pub fn layers(self) -> &'static [Layer] {
         const PROJECT: &[Layer] = &[Layer::Project];
+        const GLOBAL: &[Layer] = &[Layer::Global];
         const GLOBAL_AND_PROJECT: &[Layer] = &[Layer::Global, Layer::Project];
         match self {
             Self::PmHarness | Self::PmModel | Self::PmEffort => PROJECT,
             Self::Provider | Self::Host | Self::ReplyStyle => GLOBAL_AND_PROJECT,
             Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
+            Self::BridgeUpdates => GLOBAL,
         }
     }
 }
@@ -141,6 +144,7 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             project,
             BUILT_IN.harness_global_folder,
         )?,
+        bridge_updates: Field::BridgeUpdates.resolve(global, project, BTreeMap::new())?,
     })
 }
 

@@ -1,5 +1,25 @@
 {
   "$defs": {
+    "BridgeUpdates": {
+      "description": "Where a bridge's new versions come from (`docs/design/bridge-updates.md`, The setting)",
+      "oneOf": [
+        {
+          "const": "registry-automatic",
+          "description": "The default. A version that passes the probe is used at each session's next idle point",
+          "type": "string"
+        },
+        {
+          "const": "registry-ask-first",
+          "description": "A quiet notice with an Update button. It is not in the needs-you count, since nothing is blocked",
+          "type": "string"
+        },
+        {
+          "const": "kelpies-pin",
+          "description": "Only the version in kelpie's code, which changes with kelpie's releases",
+          "type": "string"
+        }
+      ]
+    },
     "Harness": {
       "description": "A harness kelpie can run a session on",
       "oneOf": [
@@ -40,6 +60,17 @@
       "description": "The schema this file is written against",
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "bridge-updates": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BridgeUpdates"
+      },
+      "default": null,
+      "description": "Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.",
+      "type": [
+        "object",
         "null"
       ]
     },

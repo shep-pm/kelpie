@@ -1,0 +1,52 @@
+{
+  "version": "1.0.0",
+  "agents": [
+    {
+      "id": "claude-acp",
+      "name": "Claude Agent",
+      "version": "0.102.0",
+      "description": "ACP wrapper for Anthropic's Claude",
+      "distribution": {
+        "binary": {
+          "darwin-aarch64": {
+            "archive": "{{base}}/bridge.zip",
+            "cmd": "./claude-code-acp",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "darwin-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "cmd": "./claude-code-acp",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "linux-aarch64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "cmd": "./claude-code-acp",
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "linux-x86_64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "cmd": "./claude-code-acp",
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "windows-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "cmd": "./claude-code-acp.exe",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          }
+        }
+      }
+    },
+    {
+      "id": "codex-acp",
+      "name": "Codex CLI",
+      "version": "2.6.0",
+      "description": "ACP adapter for OpenAI's coding assistant",
+      "distribution": {
+        "npx": {
+          "package": "@agentclientprotocol/codex-acp@2.6.0"
+        }
+      }
+    }
+  ],
+  "extensions": []
+}
