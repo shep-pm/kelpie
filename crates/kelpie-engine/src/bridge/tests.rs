@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use super::*;
 use crate::run::RunId;
+use crate::session::Harness;
 use crate::session::fake::FakeAgent;
+use crate::settings::BridgeUpdates;
+use semver::Version;
 
 /// The bridge every test installs
 const ID: &str = "claude-acp";
@@ -17,6 +20,9 @@ const VERSION: &str = "0.101.1";
 
 /// The command the fixtures hold, and the only one kelpie unpacks
 const CMD: &str = "claude-code-acp";
+
+/// How long a fake bridge is given to answer the probe
+const ANSWER: Duration = Duration::from_secs(5);
 
 /// What the command says, which is how a test tells a whole file from half one
 const COMMAND_TEXT: &str = "#!/bin/sh\necho kelpie bridge fixture\n";
@@ -459,7 +465,7 @@ fn the_index_gives_a_pin_for_the_stable_version() {
 fn the_probe_sends_no_prompt_and_stops_the_bridge() {
     let mut agent = FakeAgent::new().can_resume();
 
-    probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap();
+    probe::probed_within(&mut agent, &[Capability::ResumeSession], ANSWER).unwrap();
 
     assert_eq!(
         agent.methods(),
@@ -475,14 +481,14 @@ fn the_probe_sends_no_prompt_and_stops_the_bridge() {
 fn a_bridge_that_can_load_a_session_keeps_the_resume_capability() {
     let mut agent = FakeAgent::new().can_load();
 
-    probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap();
+    probe::probed_within(&mut agent, &[Capability::ResumeSession], ANSWER).unwrap();
 }
 
 #[test]
 fn a_bridge_that_lost_a_capability_fails_the_probe_naming_it() {
     let mut agent = FakeAgent::new();
 
-    let error = probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap_err();
+    let error = probe::probed_within(&mut agent, &[Capability::ResumeSession], ANSWER).unwrap_err();
 
     assert!(
         matches!(
@@ -495,4 +501,254 @@ fn a_bridge_that_lost_a_capability_fails_the_probe_naming_it() {
     );
     assert!(error.to_string().contains("session/resume"), "{error}");
     assert_eq!(agent.stopped(), 1, "a failed probe still stops the bridge");
+}
+
+/// A version that is not kelpie's pin
+fn version(text: &str) -> Version {
+    Version::parse(text).unwrap()
+}
+
+/// The versions file of the bridge every test installs
+fn versions_file(dir: &Dir) -> PathBuf {
+    dir.data().join("bridges").join(ID).join("versions.json")
+}
+
+/// Check the bridge against the registry `server` serves, probing with `probe`
+fn checked_with(
+    dir: &Dir,
+    server: &Server,
+    url: &str,
+    probe: &dyn Fn(&Harness) -> Result<(), ProbeError>,
+) -> CheckOutcome {
+    let platforms = platforms_for(server, TAR);
+    check::checked(
+        url,
+        dir.data(),
+        &pin(&platforms),
+        BridgeUpdates::RegistryAutomatic,
+        probe,
+    )
+}
+
+#[test]
+fn with_no_file_the_pin_is_in_use_and_a_save_reads_back() {
+    let dir = Dir::new();
+    let platforms = [(this_platform(), unfetched(TAR))];
+
+    let mut versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    assert_eq!(versions.in_use, version(VERSION));
+    assert_eq!(versions.previous, None);
+    assert_eq!(versions.ready, None);
+    assert!(versions.held_back.is_empty() && versions.bad.is_empty());
+
+    versions.ready = Some(version("0.102.0"));
+    versions.bad.push(Rejected {
+        version: version("0.100.0"),
+        reason: "failed to resume".to_string(),
+    });
+    versions.save(dir.data(), ID).unwrap();
+
+    assert_eq!(
+        Versions::load(dir.data(), &pin(&platforms)).unwrap(),
+        versions
+    );
+    assert_eq!(
+        entries(&versions_file(&dir).parent().unwrap().to_path_buf()),
+        ["versions.json"],
+        "the temporary file was left behind"
+    );
+}
+
+#[test]
+fn the_versions_file_is_the_json_people_and_later_builds_read() {
+    let dir = Dir::new();
+    let platforms = [(this_platform(), unfetched(TAR))];
+    fs::create_dir_all(versions_file(&dir).parent().unwrap()).unwrap();
+    fs::write(
+        versions_file(&dir),
+        r#"{
+  "in_use": "0.101.1",
+  "previous": "0.101.0",
+  "ready": "0.102.0",
+  "held_back": [{"version": "0.103.0", "reason": "no session/resume"}],
+  "bad": []
+}"#,
+    )
+    .unwrap();
+
+    let versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+
+    assert_eq!(versions.in_use, version("0.101.1"));
+    assert_eq!(versions.previous, Some(version("0.101.0")));
+    assert_eq!(versions.ready, Some(version("0.102.0")));
+    assert_eq!(
+        versions.held_back,
+        [Rejected {
+            version: version("0.103.0"),
+            reason: "no session/resume".to_string()
+        }]
+    );
+}
+
+#[test]
+fn a_file_that_is_not_a_versions_file_is_an_error_not_a_reset() {
+    let dir = Dir::new();
+    let platforms = [(this_platform(), unfetched(TAR))];
+    fs::create_dir_all(versions_file(&dir).parent().unwrap()).unwrap();
+    fs::write(versions_file(&dir), "{ not json").unwrap();
+
+    let error = Versions::load(dir.data(), &pin(&platforms)).unwrap_err();
+
+    assert!(matches!(error, VersionsError::Malformed { .. }), "{error}");
+    assert_eq!(
+        fs::read_to_string(versions_file(&dir)).unwrap(),
+        "{ not json"
+    );
+}
+
+#[test]
+fn a_bridge_missing_from_the_index_keeps_what_it_has() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
+    let mut other = pin(&platforms);
+    other.registry_id = "not-in-the-index";
+
+    let outcome = check::checked(
+        &server.url(REGISTRY),
+        dir.data(),
+        &other,
+        BridgeUpdates::RegistryAutomatic,
+        &|_| panic!("nothing was installed to probe"),
+    );
+
+    assert_eq!(outcome, CheckOutcome::Current);
+    assert!(!dir.data().join("bridges").exists(), "nothing was written");
+}
+
+#[test]
+fn a_newer_version_is_installed_probed_and_ready() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let probed = std::cell::RefCell::new(Vec::new());
+
+    let outcome = checked_with(&dir, &server, &server.url(REGISTRY), &|harness| {
+        probed.borrow_mut().push(harness.program.clone());
+        Ok(())
+    });
+
+    assert_eq!(
+        outcome,
+        CheckOutcome::Ready {
+            version: version("0.102.0")
+        }
+    );
+    let installed = dir
+        .data()
+        .join("bridges")
+        .join(ID)
+        .join("0.102.0")
+        .join(CMD);
+    assert_eq!(
+        *probed.borrow(),
+        [installed.clone()],
+        "the new version was probed once"
+    );
+    assert_eq!(fs::read_to_string(&installed).unwrap(), COMMAND_TEXT);
+    let platforms = [(this_platform(), unfetched(TAR))];
+    let versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    assert_eq!(versions.in_use, version(VERSION), "nothing swaps here");
+    assert_eq!(versions.ready, Some(version("0.102.0")));
+    assert!(versions.held_back.is_empty());
+}
+
+#[test]
+fn a_version_failing_the_probe_is_held_back_with_its_reason() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+
+    let outcome = checked_with(&dir, &server, &server.url(REGISTRY), &|_| {
+        Err(ProbeError::Missing {
+            capability: Capability::ResumeSession,
+        })
+    });
+
+    let CheckOutcome::HeldBack {
+        version: held,
+        reason,
+    } = outcome
+    else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(held, version("0.102.0"));
+    assert!(reason.contains("session/resume"), "{reason}");
+    let platforms = [(this_platform(), unfetched(TAR))];
+    let versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    assert_eq!(versions.ready, None);
+    assert_eq!(
+        versions.held_back,
+        [Rejected {
+            version: version("0.102.0"),
+            reason
+        }]
+    );
+}
+
+#[test]
+fn a_bad_version_is_not_tried_again() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let platforms = [(this_platform(), unfetched(TAR))];
+    let mut versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    versions.bad.push(Rejected {
+        version: version("0.102.0"),
+        reason: "failed to resume".to_string(),
+    });
+    versions.save(dir.data(), ID).unwrap();
+
+    let outcome = checked_with(&dir, &server, &server.url(REGISTRY), &|_| {
+        panic!("a bad version was probed again")
+    });
+
+    assert_eq!(outcome, CheckOutcome::Current);
+    assert_eq!(server.served(), 0, "a bad version was downloaded again");
+    assert!(!dir.data().join("bridges").join(ID).join("0.102.0").exists());
+}
+
+#[test]
+fn kelpies_pin_fetches_nothing() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
+
+    let outcome = check::checked(
+        &server.url(REGISTRY),
+        dir.data(),
+        &pin(&platforms),
+        BridgeUpdates::KelpiesPin,
+        &|_| panic!("kelpie's pin probed a version"),
+    );
+
+    assert_eq!(outcome, CheckOutcome::Pinned);
+    assert_eq!(server.served(), 0);
+    assert!(!dir.data().join("bridges").exists());
+}
+
+#[test]
+fn a_failed_fetch_changes_nothing() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+
+    let outcome = checked_with(&dir, &server, &server.url("missing.json"), &|_| {
+        panic!("nothing was installed to probe")
+    });
+
+    let CheckOutcome::Failed { reason } = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert!(reason.contains("missing.json"), "{reason}");
+    assert!(
+        !dir.data().join("bridges").exists(),
+        "a failed check wrote something"
+    );
 }

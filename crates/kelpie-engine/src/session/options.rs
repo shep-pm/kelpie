@@ -21,8 +21,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    CloseSessionRequest, InitializeRequest, InitializeResponse, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelectOption, SessionConfigSelectOptions,
+    CloseSessionRequest, InitializeRequest, InitializeResponse, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    SessionConfigSelectOptions,
 };
 use agent_client_protocol::{Agent, Client, DynConnectTo, Error};
 use futures::future::{Either, select};
@@ -249,11 +250,7 @@ pub(crate) fn offerings_at(
 }
 
 /// The launcher that starts `harness` through `tree`, in `project`
-pub(crate) fn launcher(
-    tree: &Arc<ProcessTree>,
-    harness: &Harness,
-    project: &Path,
-) -> impl Launch {
+pub(crate) fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Path) -> impl Launch {
     ProcessLauncher {
         tree: Arc::clone(tree),
         harness: harness.clone(),

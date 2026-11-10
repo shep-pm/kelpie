@@ -1,0 +1,139 @@
+//! The check that finds a bridge's newer version, installs it and probes it
+//!
+//! [`check`] is one pass of `docs/design/bridge-updates.md` (Flow): read the
+//! registry's index, and when its stable version is newer than the one in use
+//! and not marked bad, install it with [`ensure`] and probe it. What it finds is
+//! written to `versions.json` ([`Versions`]). Nothing swaps here: a session
+//! takes a `ready` version at its next idle point.
+
+use std::path::Path;
+use std::sync::Arc;
+
+use semver::Version;
+
+use crate::session::Harness;
+use crate::settings::BridgeUpdates;
+use crate::tree::ProcessTree;
+
+use super::probe::{Capability, ProbeError, probe};
+use super::registry::{self, URL};
+use super::versions::{self, Rejected, Versions};
+use super::{Pin, ensure};
+
+/// What one [`check`] found
+// kelpie-engine is a library: an out-of-tree match would break on a new variant
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CheckOutcome {
+    /// The bridge is on kelpie's pin, so nothing was fetched
+    Pinned,
+
+    /// Nothing newer to try: the index has no stable version of this bridge newer
+    /// than the one in use, or the newer one is ready or marked bad already
+    Current,
+
+    /// A newer version is installed and passed the probe
+    Ready {
+        /// The version that is ready
+        version: Version,
+    },
+
+    /// A newer version is installed and failed the probe
+    HeldBack {
+        /// The version held back
+        version: Version,
+        /// Why the probe failed it
+        reason: String,
+    },
+
+    /// The check could not run, and nothing it wrote changed what is in use or ready
+    Failed {
+        /// What went wrong, for the log
+        reason: String,
+    },
+}
+
+/// Look for a newer version of `pin`'s bridge, install it and probe it
+///
+/// Under [`BridgeUpdates::KelpiesPin`] it fetches nothing. Otherwise it reads
+/// [`registry::URL`], and a stable version newer than the one in use and not
+/// marked bad is installed and probed against `requires`, then recorded as
+/// `ready` or `held_back`. [`BridgeUpdates::RegistryAskFirst`] checks the same
+/// way: asking is what a session does before it swaps. A failed fetch or install
+/// changes nothing and is [`CheckOutcome::Failed`], for the caller to log.
+///
+/// This blocks on the network and on the probe, so call it off the main thread.
+#[must_use]
+pub fn check(
+    data_dir: &Path,
+    tree: &Arc<ProcessTree>,
+    pin: &Pin<'_>,
+    policy: BridgeUpdates,
+    requires: &[Capability],
+) -> CheckOutcome {
+    checked(URL, data_dir, pin, policy, &|harness| {
+        probe(tree, harness, requires)
+    })
+}
+
+/// [`check`], reading the index from `url` and probing with `probe`
+pub(crate) fn checked(
+    url: &str,
+    data_dir: &Path,
+    pin: &Pin<'_>,
+    policy: BridgeUpdates,
+    probe: &dyn Fn(&Harness) -> Result<(), ProbeError>,
+) -> CheckOutcome {
+    if policy == BridgeUpdates::KelpiesPin {
+        return CheckOutcome::Pinned;
+    }
+    run(url, data_dir, pin, probe).unwrap_or_else(|reason| CheckOutcome::Failed { reason })
+}
+
+fn run(
+    url: &str,
+    data_dir: &Path,
+    pin: &Pin<'_>,
+    probe: &dyn Fn(&Harness) -> Result<(), ProbeError>,
+) -> Result<CheckOutcome, String> {
+    let mut versions = Versions::load(data_dir, pin).map_err(|error| error.to_string())?;
+    let index = registry::fetch(url).map_err(|error| error.to_string())?;
+    let Some(stable) = index.bridge(pin.registry_id) else {
+        return Ok(CheckOutcome::Current);
+    };
+    let candidate = versions::parse(stable.version).map_err(|error| error.to_string())?;
+    if candidate <= versions.in_use
+        || versions.ready.as_ref() == Some(&candidate)
+        || versions.is_bad(&candidate)
+    {
+        return Ok(CheckOutcome::Current);
+    }
+    // The registry's id may differ from the folder kelpie keeps the bridge in
+    let stable = Pin {
+        id: pin.id,
+        ..stable
+    };
+    let command = ensure(data_dir, &stable).map_err(|error| error.to_string())?;
+    let outcome = match probe(&Harness::new(command)) {
+        Ok(()) => {
+            versions.ready = Some(candidate.clone());
+            versions.held_back.clear();
+            CheckOutcome::Ready { version: candidate }
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            versions.held_back = vec![Rejected {
+                version: candidate.clone(),
+                reason: reason.clone(),
+            }];
+            CheckOutcome::HeldBack {
+                version: candidate,
+                reason,
+            }
+        }
+    };
+    versions
+        .save(data_dir, pin.id)
+        .map_err(|error| error.to_string())?;
+    Ok(outcome)
+}

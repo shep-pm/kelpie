@@ -100,7 +100,10 @@ impl fmt::Display for ProbeError {
         match self {
             Self::Start(error) => write!(f, "kelpie could not start the bridge: {error}"),
             Self::Ended { message } => {
-                write!(f, "the bridge ended the connection before it answered: {message}")
+                write!(
+                    f,
+                    "the bridge ended the connection before it answered: {message}"
+                )
             }
             Self::TimedOut { after, message } => {
                 write!(
@@ -116,7 +119,10 @@ impl fmt::Display for ProbeError {
             }
             Self::Refused { message } => write!(f, "the bridge refused to initialize: {message}"),
             Self::WrongProtocol { answered } => {
-                write!(f, "the bridge speaks protocol {answered}, and kelpie speaks 1")
+                write!(
+                    f,
+                    "the bridge speaks protocol {answered}, and kelpie speaks 1"
+                )
             }
             Self::Missing { capability } => {
                 write!(f, "the bridge no longer offers {}", capability.name())
@@ -165,18 +171,14 @@ pub fn probe(
     requires: &[Capability],
 ) -> Result<(), ProbeError> {
     let folder = harness.program.parent().unwrap_or(Path::new("."));
-    probed_within(&mut launcher(tree, harness, folder), requires, ANSWER_WITHIN)
+    probed_within(
+        &mut launcher(tree, harness, folder),
+        requires,
+        ANSWER_WITHIN,
+    )
 }
 
-/// [`probe`], on a bridge `launcher` starts instead of one from the process tree
-pub(crate) fn probed(
-    launcher: &mut dyn Launch,
-    requires: &[Capability],
-) -> Result<(), ProbeError> {
-    probed_within(launcher, requires, ANSWER_WITHIN)
-}
-
-/// [`probed`], giving the bridge `deadline` to answer
+/// [`probe`], on a bridge `launcher` starts instead of one from the process tree, with `deadline` to answer
 pub(crate) fn probed_within(
     launcher: &mut dyn Launch,
     requires: &[Capability],

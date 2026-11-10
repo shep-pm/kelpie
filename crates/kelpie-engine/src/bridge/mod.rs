@@ -8,9 +8,10 @@
 //! because the fetch is an HTTP client in the engine (ADR 0001).
 //!
 //! A [`Pin`] is one bridge at one version, copied from the bridge's `agent.json`
-//! in `agentclientprotocol/registry`. Pins are kelpie's own code, and Phase 1
-//! updates none at runtime; `docs/design/bridge-updates.md` fetches newer ones
-//! later on top of this same [`ensure`].
+//! in `agentclientprotocol/registry`. Pins are kelpie's own code. [`check`] finds a
+//! newer version in the registry ([`registry`]), installs it with this same
+//! [`ensure`], probes it ([`probe()`]) and records it in [`Versions`]
+//! (`docs/design/bridge-updates.md`). Nothing swaps to it yet.
 //!
 //! The install lands at `<data_dir>/bridges/<id>/<version>/<cmd>`, with the
 //! command's own sha256 recorded beside it in `<cmd>.sha256`. A later call
@@ -50,11 +51,15 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+mod check;
 mod error;
 mod probe;
 pub mod registry;
+pub mod versions;
 
+pub use check::{CheckOutcome, check};
 pub use probe::{Capability, ProbeError, probe};
+pub use versions::{Rejected, Versions, VersionsError};
 
 pub use error::BridgeError;
 use error::{could_not_download, could_not_read, could_not_write, missing_command};
