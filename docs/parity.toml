@@ -1,0 +1,47 @@
+# The harness parity matrix (ADR 0006): what each harness does over ACP.
+#
+# `crates/kelpie-engine/src/parity/` reads this on every `cargo test` and holds
+# it to the code. Each cell is one of:
+#
+#   "yes"
+#   { gap = <n> }      the open issue that adds it
+#   { cannot = "why", doc = "<repo path>", says = "<words that file holds>" }
+#
+# `providers` is every `settings::Harness`: a harness added to the code fails
+# the check until each row has its cell. Code that branches on some harnesses
+# carries `// parity: harness.<row>` on that line or the three above it.
+# Rows come from the harness interface in `docs/design/pm-chat.md`, and
+# `docs/acp.md` is where each cell was read.
+
+[harness]
+providers = ["claude-code", "goose"]
+
+[harness.send]
+what = "send a message, and stream the reply as text, tool steps and an end of turn"
+claude-code = "yes"
+goose = "yes"
+
+[harness.interrupt]
+what = "stop the turn in flight with `session/cancel`"
+claude-code = "yes"
+goose = "yes"
+
+[harness.resume]
+what = "resume a saved session after its process stopped, through `session/resume` or, where a harness has only that, `session/load`"
+claude-code = "yes"
+goose = "yes"
+
+[harness.model-and-effort]
+what = "pick model and effort as config options, each applied where the harness lists it"
+claude-code = "yes"
+goose = "yes"
+
+[harness.usage]
+what = "usage per turn on `PromptResponse.usage`, with the cache read and the cache written"
+claude-code = "yes"
+goose = { cannot = "goose reports no cache counts in a turn's usage", doc = "docs/acp.md", says = "has total, input, output only. No cache counts." }
+
+[harness.pm]
+what = "the app runs the PM on the harness, from its settings"
+claude-code = "yes"
+goose = { gap = 9 }

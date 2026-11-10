@@ -39,6 +39,8 @@ pub mod agents;
 pub mod bridge;
 pub mod harness;
 pub mod login;
+#[cfg(test)]
+mod parity;
 pub mod run;
 pub mod session;
 pub mod settings;
