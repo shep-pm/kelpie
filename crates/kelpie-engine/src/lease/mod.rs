@@ -58,8 +58,6 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::pacer::Timestamp;
-use crate::run::RunId;
-use crate::sandbox::worker::LEASE_SOCKET;
 use crate::settings::Resolved;
 use crate::tools::Door;
 
@@ -176,10 +174,11 @@ impl Leases {
     /// Open the lease socket of a session whose state folder is `state_dir`, and
     /// serve asks on it until the returned lease is dropped
     ///
-    /// macOS binds [`LEASE_SOCKET`] there, or under the temporary folder when the
-    /// state folder is too deep for a socket's path. Linux binds a port on
-    /// `127.0.0.1`, which its sandbox policy names in place of a socket
-    /// (ADR 0005). Either way [`SessionLease::door`] is the one the policy names.
+    /// macOS binds [`crate::sandbox::worker::LEASE_SOCKET`] there, or under the
+    /// temporary folder when the state folder is too deep for a socket's path.
+    /// Linux binds a port on `127.0.0.1`, which its sandbox policy names in place
+    /// of a socket (ADR 0005). Either way [`SessionLease::door`] is the one the
+    /// policy names.
     ///
     /// # Errors
     ///
@@ -341,13 +340,17 @@ impl Drop for Socket {
 
 /// Bind the lease socket of a session whose state folder is `state_dir`
 ///
-/// macOS binds [`LEASE_SOCKET`] there, replacing one a killed run left, or under
-/// the temporary folder with a name no other session holds when the path is
-/// longer than a socket's path may be. Linux binds a port on `127.0.0.1` the OS
-/// picks. Each listener is made without a runtime and registered with one by the
-/// caller.
+/// macOS binds [`crate::sandbox::worker::LEASE_SOCKET`] there, replacing one a
+/// killed run left, or under the temporary folder with a name no other session
+/// holds when the path is longer than a socket's path may be. Linux binds a port
+/// on `127.0.0.1` the OS picks. Each listener is made without a runtime and
+/// registered with one by the caller.
 #[cfg(target_os = "macos")]
 fn bind(state_dir: &Path) -> io::Result<(Door, std::os::unix::net::UnixListener, Option<PathBuf>)> {
+    // Both are macOS-only: Linux binds no socket file and draws no run id for a name
+    use crate::run::RunId;
+    use crate::sandbox::worker::LEASE_SOCKET;
+
     std::fs::create_dir_all(state_dir)?;
     let mut socket = state_dir.join(LEASE_SOCKET);
     // A state folder too deep for a socket's path gets one under the temporary
