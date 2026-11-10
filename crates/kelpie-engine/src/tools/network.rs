@@ -31,8 +31,10 @@ pub trait Reach: Send + Sync + fmt::Debug {
     /// Whether the sandbox already lets `host` through
     fn allows(&self, host: &str) -> bool;
 
-    /// Let `host` through, for as long as the sandbox runs
-    fn allow(&self, host: &str);
+    /// Let `host` through, for as long as the sandbox runs, and say whether it did
+    ///
+    /// `false` when the sandbox is gone or cannot list `host`.
+    fn allow(&self, host: &str) -> bool;
 }
 
 /// Puts an event on the turn in flight, and says whether a turn took it
@@ -52,13 +54,21 @@ struct State {
     waiting: HashMap<String, Waiting>,
     turn: Option<Emit>,
     reach: Option<Arc<dyn Reach>>,
+    /// The hosts the maintainer let through, which a sandbox started later gets too
+    granted: Vec<String>,
     /// The session is gone: nothing more is asked
     closed: bool,
 }
 
 struct Waiting {
     host: String,
-    answer: oneshot::Sender<SandboxAnswer>,
+    answer: oneshot::Sender<Reply>,
+}
+
+/// What a waiting call is told: the maintainer's answer, or that an allow did not take
+enum Reply {
+    Answered(SandboxAnswer),
+    NotWidened,
 }
 
 impl fmt::Debug for Asks {
@@ -75,8 +85,15 @@ impl Asks {
     }
 
     /// The sandbox an answer widens
+    ///
+    /// A sandbox that replaces the one before it, as a swap's does, is given the
+    /// hosts already allowed, so what the agent was told holds.
     pub(crate) fn bind(&self, reach: Arc<dyn Reach>) {
-        self.state().reach = Some(reach);
+        let mut state = self.state();
+        for host in &state.granted {
+            reach.allow(host);
+        }
+        state.reach = Some(reach);
     }
 
     /// Where a request's event goes, or `None` when no turn can be asked
@@ -90,20 +107,26 @@ impl Asks {
     /// can use it as soon as it hears. Saving a `Project` answer to the
     /// project's allowlist is the app's part.
     pub(crate) fn answer(&self, id: &str, answer: SandboxAnswer) -> bool {
-        let (waiting, reach) = {
-            let mut state = self.state();
-            let Some(waiting) = state.waiting.remove(id) else {
-                return false;
-            };
-            (waiting, state.reach.clone())
+        let mut state = self.state();
+        let Some(waiting) = state.waiting.remove(id) else {
+            return false;
         };
-        if matches!(answer, SandboxAnswer::Once | SandboxAnswer::Project)
-            && let Some(reach) = reach
-        {
-            reach.allow(&waiting.host);
-        }
+        let widened = !matches!(answer, SandboxAnswer::Once | SandboxAnswer::Project)
+            || state
+                .reach
+                .as_ref()
+                .is_some_and(|reach| reach.allow(&waiting.host));
+        let reply = if widened {
+            if !matches!(answer, SandboxAnswer::Deny) {
+                state.granted.push(waiting.host.clone());
+            }
+            Reply::Answered(answer)
+        } else {
+            Reply::NotWidened
+        };
+        drop(state);
         // The agent gave up on the call in the meantime, which no one hears of
-        let _ = waiting.answer.send(answer);
+        let _ = waiting.answer.send(reply);
         true
     }
 
@@ -163,10 +186,15 @@ impl Asks {
             return Ok(DENIED.to_owned());
         }
         Ok(match receiver.await {
-            Ok(SandboxAnswer::Once) => format!("{host} is allowed for this session"),
-            Ok(SandboxAnswer::Project) => {
+            Ok(Reply::Answered(SandboxAnswer::Once)) => {
+                format!("{host} is allowed for this session")
+            }
+            Ok(Reply::Answered(SandboxAnswer::Project)) => {
                 format!("{host} is allowed and saved for this project")
             }
+            Ok(Reply::NotWidened) => format!(
+                "{host} was allowed, but the sandbox could not take it, so it is still refused"
+            ),
             _ => DENIED.to_owned(),
         })
     }

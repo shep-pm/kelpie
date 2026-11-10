@@ -674,7 +674,7 @@ fn an_allowed_host_is_reached_by_a_running_sandbox() {
     );
     let network = sandbox.network();
 
-    network.allow("example.com");
+    assert!(network.allow("example.com"), "the sandbox took the host");
 
     // Let through: a 200 with a network, and no 403 without one
     let code = connect_code(&sandbox, "example.com");

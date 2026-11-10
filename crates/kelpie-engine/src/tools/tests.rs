@@ -16,8 +16,9 @@ use serde_json::{Value, json};
 use super::network::REQUEST_NETWORK;
 use super::relay::{is_relay, relay, settings};
 use super::*;
+use crate::sandbox::{Project, Sandbox};
 use crate::session::fake::{FakeAgent, Turn};
-use crate::session::{Choice, SandboxAnswer, SessionEvent};
+use crate::session::{Choice, Harness, SandboxAnswer, SessionEvent};
 
 /// How long a test waits for something it forced to happen
 const WAIT: Duration = Duration::from_secs(10);
@@ -533,8 +534,9 @@ impl Reach for Hosts {
         self.list().iter().any(|allowed| allowed == host)
     }
 
-    fn allow(&self, host: &str) {
+    fn allow(&self, host: &str) -> bool {
         self.0.lock().unwrap().push(host.to_owned());
+        true
     }
 }
 
@@ -804,7 +806,7 @@ fn a_turn_that_ended_answers_what_it_left_waiting_denied() {
 }
 
 #[test]
-fn allow_once_widens_the_running_sandbox() {
+fn an_answer_through_the_session_widens_the_sandbox() {
     let mut turn = in_a_turn();
     turn.asking.hosts.allow("api.anthropic.com");
     turn.asking.asks_for("docs.rs", "to read the crate's docs");
@@ -818,4 +820,84 @@ fn allow_once_widens_the_running_sandbox() {
 
     assert_eq!(turn.asking.heard().0, "docs.rs is allowed for this session");
     assert_eq!(turn.asking.hosts.list(), ["api.anthropic.com", "docs.rs"]);
+}
+
+#[test]
+fn allow_once_widens_the_running_sandbox() {
+    let mut agent = asking(&[]);
+    let scratch = Scratch::new();
+    let allowed = ["api.anthropic.com".to_owned()];
+    let project = Project {
+        folder: &scratch.0,
+        network_allowlist: &allowed,
+        read_anywhere: false,
+    };
+    // A real sandbox, started as a session's is, whose lists the answer widens
+    let sandbox = Sandbox::start(&Harness::new("/bin/sh"), &project, &scratch.0.join("state"))
+        .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"));
+    let network = sandbox.network();
+    agent.session.asks().bind(Arc::new(network.clone()));
+    assert!(!network.allows("docs.rs"), "refused before the answer");
+
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+    assert!(!network.allows("docs.rs"), "refused while it is asked");
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+
+    assert_eq!(agent.heard().0, "docs.rs is allowed for this session");
+    assert!(network.allows("docs.rs"), "reached after the answer");
+    assert!(
+        network.allows("api.anthropic.com"),
+        "what was allowed stays"
+    );
+    assert!(!network.allows("example.com"), "only the host asked for");
+    drop(sandbox);
+}
+
+#[test]
+fn a_sandbox_that_replaces_the_one_before_gets_what_was_allowed() {
+    let mut agent = asking(&[]);
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+    agent.heard();
+    agent.asks_for("example.com", "to fetch a file");
+    let (id, ..) = agent.shown();
+    agent.session.asks().answer(&id, SandboxAnswer::Deny);
+    agent.heard();
+
+    // A newer harness's launch starts a sandbox of its own
+    let replacement = Hosts::allowing(&[]);
+    agent.session.asks().bind(replacement.clone());
+
+    assert_eq!(replacement.list(), ["docs.rs"]);
+}
+
+/// A sandbox that cannot take a host: it has dropped, or cannot list it
+#[derive(Debug)]
+struct Gone;
+
+impl Reach for Gone {
+    fn allows(&self, _host: &str) -> bool {
+        false
+    }
+
+    fn allow(&self, _host: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+fn an_allow_the_sandbox_could_not_take_is_not_told_as_allowed() {
+    let mut agent = asking(&[]);
+    agent.session.asks().bind(Arc::new(Gone));
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+
+    let (line, failed) = agent.heard();
+    assert!(!failed);
+    assert!(line.contains("still refused"), "{line}");
+    assert!(!line.contains("is allowed"), "{line}");
 }

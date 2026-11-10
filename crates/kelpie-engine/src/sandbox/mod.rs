@@ -217,10 +217,10 @@ impl Reach for Network {
 
     /// Adds `host` to the allowed domains, which crabpot's proxy follows from its next request on
     ///
-    /// A host crabpot cannot list changes nothing: the tool checks it before it asks.
-    fn allow(&self, host: &str) {
+    /// Says `false`, and changes nothing, when the sandbox has dropped or crabpot cannot list `host`
+    fn allow(&self, host: &str) -> bool {
         let Some(sandbox) = self.inner.upgrade() else {
-            return;
+            return false;
         };
         let mut config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         let mut allowed: Vec<&str> = config
@@ -235,10 +235,11 @@ impl Reach for Network {
             "filesystem": {"denyRead": [], "allowWrite": [], "denyWrite": []},
         });
         let Ok(widened) = Config::from_json(&lists.to_string()) else {
-            return;
+            return false;
         };
         sandbox.replace_network_lists(&widened);
         config.network.allowed_domains = widened.network.allowed_domains;
+        true
     }
 }
 
