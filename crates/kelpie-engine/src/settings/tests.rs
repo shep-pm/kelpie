@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Barrier;
+use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
@@ -142,6 +143,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: TWO_WORKERS,
                 from: Layer::BuiltIn,
             },
+            worker_turn_timeout: Layered {
+                value: SIXTY_MINUTES,
+                from: Layer::BuiltIn,
+            },
             provider: Layered {
                 value: None,
                 from: Layer::BuiltIn,
@@ -178,6 +183,53 @@ fn an_unset_field_comes_from_the_built_in_layer() {
     );
     assert_eq!(BUILT_IN.reply_style, ReplyStyle::ConcisePlus);
     assert_eq!(BUILT_IN.network_allowlist, &[] as &[&str]);
+}
+
+#[test]
+fn worker_turn_timeout_defaults_to_sixty_minutes() {
+    let dir = Dir::new();
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        settings.worker_turn_timeout.value.duration(),
+        Duration::from_secs(60 * 60)
+    );
+    assert_eq!(settings.worker_turn_timeout.from, Layer::BuiltIn);
+
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::WorkerTurnTimeout,
+        &json!(90),
+    )
+    .unwrap();
+    let longer = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        longer.worker_turn_timeout.value.duration(),
+        Duration::from_secs(90 * 60)
+    );
+    assert_eq!(longer.worker_turn_timeout.from, Layer::Project);
+
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+    assert_eq!(
+        other.worker_turn_timeout.value.duration(),
+        Duration::from_secs(60 * 60),
+        "the ceiling is one project's own"
+    );
+
+    for value in [json!(0), json!("60"), json!(-1), json!(MAX_TURN_MINUTES + 1)] {
+        let error = Settings::set(
+            &dir.config(),
+            LayerFile::Project("web"),
+            Field::WorkerTurnTimeout,
+            &value,
+        )
+        .expect_err("a ceiling of no minutes, or a typo, is refused");
+        assert!(
+            matches!(error, SettingsError::ValueRefused { .. }),
+            "refuses {value}"
+        );
+    }
 }
 
 #[test]

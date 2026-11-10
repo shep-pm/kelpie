@@ -32,6 +32,7 @@ use std::io::{self, Write as _};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -272,13 +273,16 @@ pub enum Field {
     /// How many of a project's workers may run at once
     WorkerSlots,
 
+    /// How long a worker's turn may run before kelpie stops it
+    WorkerTurnTimeout,
+
     /// How many commands may hold each lease at once
     LeaseCapacity,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 15] = [
+    pub const ALL: [Field; 16] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -286,6 +290,7 @@ impl Field {
         Field::WorkerModel,
         Field::WorkerEffort,
         Field::WorkerSlots,
+        Field::WorkerTurnTimeout,
         Field::Provider,
         Field::Host,
         Field::ReplyStyle,
@@ -307,6 +312,7 @@ impl Field {
             Self::WorkerModel => "worker-model",
             Self::WorkerEffort => "worker-effort",
             Self::WorkerSlots => "worker-slots",
+            Self::WorkerTurnTimeout => "worker-turn-timeout",
             Self::Provider => "provider",
             Self::Host => "host",
             Self::ReplyStyle => "reply-style",
@@ -335,6 +341,23 @@ impl Slots {
     }
 }
 
+/// How long a worker's turn may run, in whole minutes
+///
+/// Never zero: a ceiling of no time would stop every turn before it began. It
+/// counts from when the worker's slot was granted ([`crate::worker::ceiling`]).
+// wire format: a settings file holds it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TurnTimeout(NonZeroU32);
+
+impl TurnTimeout {
+    /// The ceiling as a length of time
+    #[must_use]
+    pub fn duration(self) -> Duration {
+        Duration::from_secs(u64::from(self.0.get()) * SECONDS_PER_MINUTE)
+    }
+}
+
 /// How many commands hold a lease at once
 ///
 /// Never zero: a lease with no place can never be taken, and every command
@@ -359,6 +382,13 @@ impl Capacity {
 /// then cannot read back.
 const MAX_COUNT: u32 = 64;
 
+/// The longest turn ceiling a settings file may name, one day in minutes
+///
+/// Past it a stuck turn holds its slot for longer than a person looks back at it.
+const MAX_TURN_MINUTES: u32 = 24 * 60;
+
+const SECONDS_PER_MINUTE: u64 = 60;
+
 /// A count the schema bounds, as the nonzero one [`Capacity`] holds
 const fn nonzero(count: u32) -> NonZeroU32 {
     match NonZeroU32::new(count) {
@@ -381,6 +411,24 @@ impl JsonSchema for Slots {
             "type": "integer",
             "minimum": 0,
             "maximum": MAX_COUNT,
+        })
+    }
+}
+
+impl JsonSchema for TurnTimeout {
+    fn schema_name() -> Cow<'static, str> {
+        "TurnTimeout".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_TURN_MINUTES,
         })
     }
 }
@@ -411,6 +459,10 @@ pub const CARGO_TEST_CAPACITY: Capacity = Capacity(nonzero(3));
 
 /// How many commands hold a lease no layer names a capacity for
 const ONE_AT_A_TIME: Capacity = Capacity(nonzero(1));
+
+/// How long a worker's turn may run when no layer names a ceiling, as SK's
+/// `worker.turn_timeout` has it
+const SIXTY_MINUTES: TurnTimeout = TurnTimeout(nonzero(60));
 
 /// How many of a project's workers run at once when no layer names a cap
 const TWO_WORKERS: Slots = Slots(2);
@@ -447,6 +499,9 @@ pub struct Settings {
 
     /// How many of this project's workers run at once. A worker that is Paused or waiting on the maintainer holds no slot. 0 holds every worker out of the project's slots.
     pub worker_slots: Option<Slots>,
+
+    /// How many minutes a worker's turn may run before kelpie cancels it and pauses the worker. The count starts when the worker's slot is granted, not when its process launches.
+    pub worker_turn_timeout: Option<TurnTimeout>,
 
     /// Where a harness's model runs, for a harness that reaches a model through a server
     pub provider: Option<String>,
@@ -500,6 +555,9 @@ pub struct Defaults {
     /// How many of a project's workers run at once when no layer caps them
     pub worker_slots: Slots,
 
+    /// How long a worker's turn may run when no layer sets a ceiling
+    pub worker_turn_timeout: TurnTimeout,
+
     /// The built-in provider
     pub provider: Option<&'static str>,
 
@@ -534,6 +592,7 @@ pub const BUILT_IN: Defaults = Defaults {
     worker_model: None,
     worker_effort: None,
     worker_slots: TWO_WORKERS,
+    worker_turn_timeout: SIXTY_MINUTES,
     provider: None,
     host: None,
     reply_style: ReplyStyle::ConcisePlus,
@@ -566,6 +625,9 @@ pub struct Resolved {
 
     /// How many of the project's workers run at once
     pub worker_slots: Layered<Slots>,
+
+    /// How long a worker's turn may run
+    pub worker_turn_timeout: Layered<TurnTimeout>,
 
     /// Where a harness's model runs
     pub provider: Layered<Option<String>>,
