@@ -622,7 +622,12 @@ fn a_bridge_missing_from_the_index_keeps_what_it_has() {
         &|_| panic!("nothing was installed to probe"),
     );
 
-    assert_eq!(outcome, CheckOutcome::Current);
+    assert_eq!(
+        outcome,
+        CheckOutcome::Unlisted {
+            in_use: version(VERSION)
+        }
+    );
     assert!(!dir.data().join("bridges").exists(), "nothing was written");
 }
 

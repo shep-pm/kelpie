@@ -28,9 +28,16 @@ pub enum CheckOutcome {
     /// The bridge is on kelpie's pin, so nothing was fetched
     Pinned,
 
-    /// Nothing newer to try: the index has no stable version of this bridge newer
-    /// than the one in use, or the newer one is ready or marked bad already
+    /// Nothing newer to try: the index's stable version is no newer than the one in
+    /// use, or it is ready or marked bad already
     Current,
+
+    /// The index gives no pin for this bridge: it is missing, quarantined, removed or
+    /// has no binary for a platform kelpie ships on, so kelpie keeps what it has
+    Unlisted {
+        /// The version that stays in use
+        in_use: Version,
+    },
 
     /// A newer version is installed and passed the probe
     Ready {
@@ -99,7 +106,9 @@ fn run(
     let mut versions = Versions::load(data_dir, pin).map_err(|error| error.to_string())?;
     let index = registry::fetch(url).map_err(|error| error.to_string())?;
     let Some(stable) = index.bridge(pin.registry_id) else {
-        return Ok(CheckOutcome::Current);
+        return Ok(CheckOutcome::Unlisted {
+            in_use: versions.in_use,
+        });
     };
     let candidate = versions::parse(stable.version).map_err(|error| error.to_string())?;
     if candidate <= versions.in_use

@@ -538,6 +538,12 @@ fn run_bridge_checks(
                         pin.id
                     );
                 }
+                Ok(CheckOutcome::Unlisted { in_use }) => {
+                    eprintln!(
+                        "kelpie: {} not usable in the registry index, keeping {in_use}",
+                        pin.id
+                    );
+                }
                 Ok(CheckOutcome::HeldBack { version, reason }) => {
                     eprintln!("kelpie: {} {version} is held back: {reason}", pin.id);
                 }
