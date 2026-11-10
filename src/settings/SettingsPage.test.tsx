@@ -70,6 +70,14 @@ const schema = {
         { const: "goose", description: "goose", type: "string" },
       ],
     },
+    Theme: {
+      description: "How kelpie's window looks",
+      oneOf: [
+        { const: "system", description: "System", type: "string" },
+        { const: "light", description: "Light", type: "string" },
+        { const: "dark", description: "Dark", type: "string" },
+      ],
+    },
   },
   $schema: "https://json-schema.org/draft/2020-12/schema",
   additionalProperties: false,
@@ -100,6 +108,12 @@ const schema = {
       description: "Whether an agent may read anywhere by default",
       type: ["boolean", "null"],
     },
+    theme: {
+      anyOf: [{ $ref: "#/$defs/Theme" }, { type: "null" }],
+      default: null,
+      description:
+        "How kelpie's window looks. `system` follows the OS's appearance.",
+    },
   },
   title: "Settings",
   type: "object",
@@ -116,6 +130,7 @@ const globalFields = [
   field("pm-model", "opus", "kelpie"),
   field("pm-effort", null, "kelpie"),
   field("host", "http://one", "global"),
+  field("theme", "system", "kelpie"),
   field("read-anywhere", false, "kelpie"),
   field("bridge-updates", null, "kelpie"),
 ];
@@ -366,6 +381,63 @@ describe("the settings page", () => {
 
     await waitFor(() => expect(loginClear).toHaveBeenCalledWith("claude"));
     expect(await within(login).findByText("not set")).toBeTruthy();
+  });
+
+  it("a choice the schema carries no type for is still a select", async () => {
+    await openPage();
+
+    const row = await screen.findByRole("group", { name: "PM harness" });
+    const select = within(row).getByRole("combobox", { name: "PM harness" });
+    fireEvent.keyDown(select, { key: "Enter" });
+
+    expect(
+      await screen.findByRole("option", { name: "Claude Code" }),
+    ).toBeTruthy();
+    expect(await screen.findByRole("option", { name: "goose" })).toBeTruthy();
+  });
+});
+
+describe("the theme", () => {
+  it("Theme is a global choice of System, Light and Dark", async () => {
+    await openPage();
+
+    const row = await screen.findByRole("group", { name: "Theme" });
+    expect(within(row).getByText("from kelpie")).toBeTruthy();
+
+    const select = within(row).getByRole("combobox", { name: "Theme" });
+    fireEvent.keyDown(select, { key: "Enter" });
+    for (const name of ["System", "Light", "Dark"]) {
+      expect(await screen.findByRole("option", { name })).toBeTruthy();
+    }
+
+    fireEvent.click(await screen.findByRole("option", { name: "Dark" }));
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(
+        { kind: "global" },
+        "theme",
+        "dark",
+      ),
+    );
+  });
+
+  it("the Project tab has no theme of its own", async () => {
+    settingsGet.mockResolvedValue(
+      ok(
+        resolved([
+          field("pm-harness", "claude-code", "kelpie"),
+          field("pm-model", "opus", "kelpie"),
+          field("pm-effort", null, "kelpie"),
+          field("host", "http://one", "global"),
+          field("read-anywhere", false, "kelpie"),
+        ]),
+      ),
+    );
+    await openPage();
+    openProjectTab();
+
+    await screen.findByRole("group", { name: "PM model" });
+    expect(screen.queryByRole("group", { name: "Theme" })).toBeNull();
   });
 });
 

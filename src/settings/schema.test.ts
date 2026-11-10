@@ -1,9 +1,24 @@
 import { describe, expect, it } from "vitest";
 
+import type { Value } from "@/bindings";
+
 import { formSchema, ordered } from "./schema";
 
-/** The two fields the worker slice adds, as the Rust types write them. */
-const raw = {
+/**
+ * A few fields as the Rust types write them, with the `Theme` def a `$ref`
+ * names.
+ */
+const raw: Value = {
+  $defs: {
+    Theme: {
+      description: "How kelpie's window looks",
+      oneOf: [
+        { const: "system", description: "System", type: "string" },
+        { const: "light", description: "Light", type: "string" },
+        { const: "dark", description: "Dark", type: "string" },
+      ],
+    },
+  },
   properties: {
     "lease-capacity": {
       additionalProperties: { maximum: 64, minimum: 1, type: "integer" },
@@ -23,6 +38,11 @@ const raw = {
       minimum: 0,
       type: ["integer", "null"],
     },
+    theme: {
+      anyOf: [{ $ref: "#/$defs/Theme" }, { type: "null" }],
+      default: null,
+      description: "How kelpie's window looks",
+    },
   },
   type: "object",
 };
@@ -30,8 +50,9 @@ const raw = {
 const keys = ["pm-harness", "worker-slots", "lease-capacity"];
 
 const drawn = formSchema(raw, keys);
-const field = (key: string) =>
-  (drawn.properties as Record<string, Record<string, unknown>>)[key];
+const themed = formSchema(raw, ["theme"]);
+const field = (key: string, from = drawn) =>
+  (from.properties as Record<string, Record<string, unknown>>)[key];
 
 describe("the settings form's fields", () => {
   it("draws the worker cap as one plain field, named", () => {
@@ -53,6 +74,26 @@ describe("the settings form's fields", () => {
       "pm-harness",
       "worker-slots",
       "lease-capacity",
+    ]);
+  });
+
+  it("draws a choice as a string field, each option titled", () => {
+    const theme = field("theme", themed) ?? {};
+
+    expect(theme.title).toBe("Theme");
+    expect(theme.type).toBe("string");
+    expect(theme.oneOf).toEqual([
+      { const: "system", title: "System" },
+      { const: "light", title: "Light" },
+      { const: "dark", title: "Dark" },
+    ]);
+  });
+
+  it("shows the theme beside how kelpie phrases its replies", () => {
+    expect(ordered(["read-anywhere", "theme", "reply-style"])).toEqual([
+      "reply-style",
+      "theme",
+      "read-anywhere",
     ]);
   });
 });
