@@ -10,8 +10,8 @@
 //! Each adapter supplies its own row as an [`OwnFiles`] (`harness::claude::OWN_FILES`
 //! and the rest, gathered in [`harness::OWN_FILES`]). Codex's and pi's rows stay
 //! here until their adapters exist, so a worker on any harness still cannot
-//! plant them. Nothing calls the fence yet: the worker's policy and the turn's
-//! end do.
+//! plant them. [`deny_write`] fences them in a running sandbox, and a turn's end
+//! checks them with [`differ`] and [`matches_main`] (`crate::worker::turn_end`).
 //!
 //! Git is asked through the [`worktree`] module and its [`ProcessTree`]
 //! (ADR 0001).

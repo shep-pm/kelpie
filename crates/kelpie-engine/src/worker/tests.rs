@@ -23,7 +23,7 @@ use crate::session::{Harness, Session};
 use crate::settings::{ConfigDir, Settings};
 use crate::tools::Door;
 use crate::tree::ProcessTree;
-use crate::worktree::tests::{Dir, git, process_tree};
+use crate::worktree::tests::{Dir, git, process_tree, write_in};
 
 /// How long a test waits for an event its own turn must send
 const WAIT: Duration = Duration::from_secs(20);
@@ -105,6 +105,7 @@ fn ticket(id: &str, text: &str) -> Ticket {
 /// A project with an origin holding `main`, a checkout of it, and its records file
 struct Rig {
     _dir: Dir,
+    root: PathBuf,
     tree: Arc<ProcessTree>,
     repo: PathBuf,
     paths: Paths,
@@ -128,6 +129,7 @@ impl Rig {
         let tree = Arc::new(process_tree(&root));
         Self {
             _dir: dir,
+            root,
             tree,
             repo,
             paths,
@@ -761,6 +763,196 @@ fn each_worker_gets_a_lease_socket_of_its_own_named_in_its_environment() {
             assert!(address.ip().is_loopback(), "{address}");
         }
     }
+}
+
+/// A worker mid-turn in `rig`, whose turn the test cancels after writing in its
+/// worktree, so the turn's end settles it
+struct Mid {
+    worktree: PathBuf,
+    session: Arc<Session>,
+    heard: Receiver<SessionEvent>,
+}
+
+/// Start `agent` on ticket `74` in `rig` and wait for its turn to be in flight
+fn mid_turn(rig: &Rig, agent: &FakeAgent) -> Mid {
+    let binding = binding();
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(agent, opening)) };
+    let (sink, heard) = events();
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running {
+        session, worktree, ..
+    } = started
+    else {
+        panic!("the ticket was not started: {started:?}");
+    };
+    assert!(
+        matches!(until_started(&heard), SessionEvent::Started { .. }),
+        "the turn is in flight"
+    );
+    Mid {
+        worktree,
+        session,
+        heard,
+    }
+}
+
+/// Commit `file` on the worker's branch, as its turn leaves it
+fn commit(worktree: &Path, file: &str, text: &str) {
+    write_in(worktree, file, text);
+    git(worktree, &["add", file]);
+    git(worktree, &["commit", "--quiet", "-m", file]);
+}
+
+/// What the fence made of ticket `74`'s branch, and what its record says
+fn settled(rig: &Rig, worktree: &Path) -> (Ending, Vec<(Status, Seat)>) {
+    let ending = turn_end::check(&rig.tree, &rig.repo, worktree, "main");
+    let kept = kept(rig)
+        .iter()
+        .map(|record| (record.status, record.seat))
+        .collect::<Vec<_>>();
+    (ending, kept)
+}
+
+#[test]
+fn a_branch_that_changes_a_harnesss_own_file_is_held_naming_it() {
+    let rig = Rig::new("fence held");
+    let agent = FakeAgent::new().turn(Turn::new().text("working").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+
+    // What the sandbox's globs miss: a harness's own file, committed on the branch
+    commit(&turn.worktree, ".claude/settings.json", "{\"hooks\":{}}\n");
+    turn.session.cancel();
+    until_turn_ends(&turn.heard);
+
+    let (ending, kept) = settled(&rig, &turn.worktree);
+    assert_eq!(
+        ending,
+        Ending::Held(Held::OwnFiles {
+            files: vec![".claude/settings.json".to_owned()],
+        }),
+        "the branch is held, naming each file"
+    );
+    let Ending::Held(held) = &ending else {
+        panic!("the branch was not held: {ending:?}");
+    };
+    assert_eq!(
+        held.line(),
+        "the branch changes a harness's own files: .claude/settings.json (Claude Code)",
+        "the held branch names each file and the harness that owns it"
+    );
+    assert_eq!(
+        ending.status(),
+        Status::WaitingOnMaintainer,
+        "the ticket waits on the maintainer"
+    );
+    assert_eq!(
+        kept,
+        [(Status::WaitingOnMaintainer, Seat::Without)],
+        "the held ticket gives its slot back"
+    );
+}
+
+#[test]
+fn a_clean_branch_marks_the_worker_done() {
+    let rig = Rig::new("fence clean");
+    let agent = FakeAgent::new().turn(Turn::new().text("working").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+
+    commit(&turn.worktree, "src/lib.rs", "work\n");
+    turn.session.cancel();
+    until_turn_ends(&turn.heard);
+
+    let (ending, kept) = settled(&rig, &turn.worktree);
+    assert_eq!(ending, Ending::Done, "no harness file changed");
+    assert_eq!(
+        kept,
+        [(Status::Ended, Seat::Without)],
+        "the worker is done and holds no slot"
+    );
+}
+
+#[test]
+fn a_planted_git_file_does_not_hide_a_fenced_change() {
+    let rig = Rig::new("fence planted");
+    let agent = FakeAgent::new().turn(Turn::new().text("working").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+    commit(&turn.worktree, ".claude/settings.json", "{\"hooks\":{}}\n");
+
+    // A repo of the worker's own, whose `main` holds the same file, planted where
+    // the worktree's `.git` points: git run in the worktree answers from it
+    let planted = rig.root.join("planted");
+    git(&rig.root, &["init", "--quiet", "-b", "main", "planted"]);
+    commit(&planted, ".claude/settings.json", "{\"hooks\":{}}\n");
+    std::fs::write(
+        turn.worktree.join(".git"),
+        format!("gitdir: {}\n", planted.join(".git").display()),
+    )
+    .unwrap();
+
+    turn.session.cancel();
+    until_turn_ends(&turn.heard);
+
+    assert_eq!(
+        git(&turn.worktree, &["rev-parse", "HEAD"]),
+        git(&planted, &["rev-parse", "HEAD"]),
+        "the planted repo is what a git that finds the worktree's own dirs reads"
+    );
+    let (ending, kept) = settled(&rig, &turn.worktree);
+    assert_eq!(
+        ending,
+        Ending::Held(Held::OwnFiles {
+            files: vec![".claude/settings.json".to_owned()],
+        }),
+        "kelpie reads the branch through the clone's git dirs, never the planted ones"
+    );
+    assert_eq!(kept, [(Status::WaitingOnMaintainer, Seat::Without)]);
+}
+
+#[test]
+fn a_branch_that_lags_a_change_main_made_to_its_own_files_is_held() {
+    let rig = Rig::new("fence behind");
+    commit(&rig.repo, ".claude/settings.json", "{\"model\":\"a\"}\n");
+    git(&rig.repo, &["push", "--quiet", "origin", "main"]);
+
+    let binding = binding();
+    let first = FakeAgent::new().turn(Turn::new().text("first turn"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&first, opening)) };
+    let (sink, heard) = events();
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    assert!(matches!(started, Started::Running { .. }), "{started:?}");
+    until_turn_ends(&heard);
+    let resumed = kept(&rig)[0].session.clone().expect("no session id kept");
+
+    // `main` moves, and the next start brings it to the worktree without merging it
+    commit(&rig.repo, ".claude/settings.json", "{\"model\":\"b\"}\n");
+    git(&rig.repo, &["push", "--quiet", "origin", "main"]);
+
+    let second = FakeAgent::new()
+        .can_resume()
+        .knows(&resumed.to_string())
+        .turn(Turn::new().text("second turn").until_cancelled());
+    let turn = mid_turn(&rig, &second);
+    commit(&turn.worktree, "src/lib.rs", "work\n");
+    turn.session.cancel();
+    until_turn_ends(&turn.heard);
+
+    let (ending, kept) = settled(&rig, &turn.worktree);
+    assert_eq!(
+        ending,
+        Ending::Held(Held::BehindMain),
+        "the branch carries main's settings as it cut them, not as main holds them now"
+    );
+    assert_eq!(kept, [(Status::WaitingOnMaintainer, Seat::Without)]);
 }
 
 /// What crabpot makes of `paths` as a list of its own
