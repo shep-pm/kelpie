@@ -40,11 +40,13 @@ use serde_json::{Map, Value};
 
 pub mod layers;
 mod schema;
+pub mod theme;
 
 #[cfg(test)]
 mod tests;
 
 pub use layers::{Layer, LayerFile, Layered};
+pub use theme::Theme;
 
 /// The schema every settings file points at with `$schema`
 pub const SCHEMA_REF: &str =
@@ -258,6 +260,9 @@ pub enum Field {
     /// How kelpie asks a harness to phrase replies
     ReplyStyle,
 
+    /// How kelpie's window looks
+    Theme,
+
     /// Domains a sandbox request saved with *Allow for this project*
     NetworkAllowlist,
 
@@ -282,7 +287,7 @@ pub enum Field {
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 16] = [
+    pub const ALL: [Field; 17] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -294,6 +299,7 @@ impl Field {
         Field::Provider,
         Field::Host,
         Field::ReplyStyle,
+        Field::Theme,
         Field::NetworkAllowlist,
         Field::ReadAnywhere,
         Field::HarnessGlobalFolder,
@@ -316,6 +322,7 @@ impl Field {
             Self::Provider => "provider",
             Self::Host => "host",
             Self::ReplyStyle => "reply-style",
+            Self::Theme => "theme",
             Self::NetworkAllowlist => "network-allowlist",
             Self::ReadAnywhere => "read-anywhere",
             Self::HarnessGlobalFolder => "harness-global-folder",
@@ -512,6 +519,9 @@ pub struct Settings {
     /// How kelpie asks a harness to phrase its replies
     pub reply_style: Option<ReplyStyle>,
 
+    /// How kelpie's window looks. `system` follows the OS's appearance; `light` and `dark` say otherwise. The window's own theme is set to match, at once and with no restart.
+    pub theme: Option<Theme>,
+
     /// Domains a sandbox request may reach, one saved with *Allow for this project*
     pub network_allowlist: Option<Vec<String>>,
 
@@ -567,6 +577,9 @@ pub struct Defaults {
     /// The built-in reply style
     pub reply_style: ReplyStyle,
 
+    /// The appearance kelpie follows when no layer names a theme
+    pub theme: Theme,
+
     /// The built-in network allowlist
     pub network_allowlist: &'static [&'static str],
 
@@ -596,6 +609,7 @@ pub const BUILT_IN: Defaults = Defaults {
     provider: None,
     host: None,
     reply_style: ReplyStyle::ConcisePlus,
+    theme: Theme::System,
     network_allowlist: &[],
     read_anywhere: false,
     harness_global_folder: false,
@@ -637,6 +651,9 @@ pub struct Resolved {
 
     /// How kelpie asks a harness to phrase replies
     pub reply_style: Layered<ReplyStyle>,
+
+    /// How kelpie's window looks
+    pub theme: Layered<Theme>,
 
     /// Domains a sandbox request may reach
     pub network_allowlist: Layered<Vec<String>>,

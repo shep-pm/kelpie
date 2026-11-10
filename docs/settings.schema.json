@@ -49,6 +49,26 @@
           "type": "string"
         }
       ]
+    },
+    "Theme": {
+      "description": "How kelpie's window looks",
+      "oneOf": [
+        {
+          "const": "system",
+          "description": "System",
+          "type": "string"
+        },
+        {
+          "const": "light",
+          "description": "Light",
+          "type": "string"
+        },
+        {
+          "const": "dark",
+          "description": "Dark",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -169,6 +189,18 @@
       ],
       "default": null,
       "description": "How kelpie asks a harness to phrase its replies"
+    },
+    "theme": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Theme"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How kelpie's window looks. `system` follows the OS's appearance; `light` and `dark` say otherwise. The window's own theme is set to match, at once and with no restart."
     },
     "worker-effort": {
       "default": null,

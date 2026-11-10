@@ -101,8 +101,9 @@ impl Field {
                 GLOBAL_AND_PROJECT
             }
             Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
-            // A lease is the machine's, so its capacity is one value for every project
-            Self::BridgeUpdates | Self::LeaseCapacity => GLOBAL,
+            // A lease is the machine's, so its capacity is one value for every
+            // project, and so is the appearance of the window they share
+            Self::BridgeUpdates | Self::LeaseCapacity | Self::Theme => GLOBAL,
         }
     }
 }
@@ -155,6 +156,7 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
         )?,
         host: Field::Host.resolve(global, project, BUILT_IN.host.map(str::to_string))?,
         reply_style: Field::ReplyStyle.resolve(global, project, BUILT_IN.reply_style)?,
+        theme: Field::Theme.resolve(global, project, BUILT_IN.theme)?,
         network_allowlist: Field::NetworkAllowlist.resolve(
             global,
             project,
