@@ -19,6 +19,7 @@ use kelpie_engine::agents::{Agents, Binding, Origin, PM, PmKey, WORKER};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
+use kelpie_engine::sandbox::{self, Sandbox};
 use kelpie_engine::session::options;
 use kelpie_engine::settings::{ConfigDir, Field, Layer, LayerFile, Resolved, Settings};
 use kelpie_protocol::Options;
@@ -100,10 +101,30 @@ pub fn harness_options(
     let asked = data.join(ASKS_FOLDER).join(&harness);
     fs::create_dir_all(&asked).map_err(|error| error.to_string())?;
     let harness = claude::harness(bridge, &asked, &logins).map_err(|error| error.to_string())?;
+    // The ask sends no prompt, but kelpie starts no harness outside a sandbox
+    // (ADR 0005): it reads and writes its own `asked` folder, reaches no host,
+    // and the sandbox drops when the ask returns. One that cannot start fails
+    // the ask, and nothing runs in its place.
+    let sandbox = Sandbox::start(
+        &harness,
+        &sandbox::Project {
+            folder: &asked,
+            network_allowlist: &[],
+            read_anywhere: false,
+        },
+        &asked,
+    )
+    .map_err(|error| {
+        format!(
+            "could not start the sandbox to ask {}: {error}",
+            claude::LOGIN
+        )
+    })?;
     options::offerings(
         &state.tree(),
         &harness,
         claude::LOGIN,
+        sandbox,
         data,
         &asked,
         refresh,

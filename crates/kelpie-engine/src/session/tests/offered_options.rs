@@ -124,7 +124,8 @@ fn a_harness_that_exits_before_answering_is_explained_from_its_stderr() {
     let mut harness = Harness::new("sh");
     harness.args = vec!["-c".into(), "echo token rejected >&2; exit 3".into()];
 
-    let error = options::ask(&tree, &harness, &dir).unwrap_err();
+    // The sandbox is no part of what is tested here: how a harness that exits is explained
+    let error = options::asked(&mut *launcher(tree, harness, dir.clone()), &dir, None).unwrap_err();
 
     let SessionError::Ended { message } = &error else {
         panic!("a harness that exited did not end the ask: {error}");
@@ -155,4 +156,35 @@ fn a_harness_id_that_names_no_file_starts_nothing() {
     );
     assert_eq!(agent.launches(), 0, "a bad name started no harness");
     std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn the_ask_runs_the_harness_in_the_sandbox_it_is_given() {
+    use crate::run::RunId;
+    use crate::sandbox::{Project, Sandbox};
+    use crate::tree::ProcessTree;
+
+    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
+    let project = dir.join("asked");
+    std::fs::create_dir_all(&project).unwrap();
+    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), dir.join("run.json")).unwrap());
+    let harness = Harness::new("sh");
+    let sandbox = Sandbox::start(
+        &harness,
+        &Project {
+            folder: &project,
+            network_allowlist: &[],
+            read_anywhere: false,
+        },
+        &project,
+    )
+    .unwrap();
+
+    let launcher = options::launcher(&tree, &harness, sandbox, &project);
+
+    assert!(
+        launcher.sandboxed(),
+        "the ask would start the harness outside the sandbox it was given"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
