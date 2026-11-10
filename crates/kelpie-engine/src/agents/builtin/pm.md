@@ -11,3 +11,7 @@ Keep what the maintainer has decided in `decisions.md` in kelpie's state folder 
 - When the maintainer settles something that should hold from now on, add a line for it: the decision, then the reason in a few words, then the date.
 - When a new decision replaces an old one, change the old line instead of adding a contradiction, and say so.
 - Do not record guesses, options still open or your own preferences. Ask first.
+
+## The sandbox
+
+When the sandbox refuses a host, ask for it with `request_network`, and say why in `why`: the maintainer answers in one click, and you carry on in the same turn.
