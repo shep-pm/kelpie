@@ -1,4 +1,4 @@
-//! The PM's commands, on the mock runtime
+//! Tests for the PM commands
 
 use std::fs;
 use std::path::PathBuf;
@@ -58,6 +58,54 @@ impl Chat {
         chat
     }
 
+    /// A chat whose PM is Claude Code on `claude` until the settings name goose, which runs on `goose`
+    fn switching(claude: &FakeAgent, goose: &FakeAgent) -> Self {
+        let chat = Self::with(
+            Self::two_harnesses(claude, goose),
+            Box::new(|| Ok(None)),
+            None,
+        );
+        chat.state().set_project(chat.dir.clone()).unwrap();
+        chat
+    }
+
+    /// A chat as a launch finds it after Claude Code ran the PM as `ran` and saved the session `s-claude`
+    fn after_claude(claude: &FakeAgent, goose: &FakeAgent, ran: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("kelpie-pm-{}", RunId::new().unwrap()));
+        fs::create_dir_all(&dir).unwrap();
+        let list = format!(
+            r#"[{{"id":"p1","path":"{}","pm_session":"s-claude","pm_ran":{ran}}}]"#,
+            dir.display()
+        );
+        fs::write(dir.join("projects.json"), list).unwrap();
+        Self::at(
+            dir,
+            Self::two_harnesses(claude, goose),
+            Box::new(|| Ok(None)),
+        )
+    }
+
+    /// An opener that gives Claude Code's `claude` and every other harness's `goose`
+    fn two_harnesses(claude: &FakeAgent, goose: &FakeAgent) -> Opener {
+        let (claude, goose) = (claude.clone(), goose.clone());
+        Box::new(move |opening| {
+            let agent = match opening.pm.harness {
+                Harness::ClaudeCode => &claude,
+                _ => &goose,
+            };
+            Ok(agent.session(
+                opening.project.path.clone(),
+                opening.project.pm_session.clone(),
+                opening.pm.choice.clone(),
+            ))
+        })
+    }
+
+    /// What the PM's log holds
+    fn log(&self) -> Vec<LogEntry> {
+        log::read(self.state().pm_log_path().unwrap()).unwrap()
+    }
+
     /// An opener whose session asks the harness for no model or effort
     fn opener(agent: &FakeAgent) -> Opener {
         let agent = agent.clone();
@@ -80,6 +128,11 @@ impl Chat {
             );
             fs::write(dir.join("projects.json"), list).unwrap();
         }
+        Self::at(dir, opener, picker)
+    }
+
+    /// A chat whose state folder is `dir`, which may already hold `projects.json`
+    fn at(dir: PathBuf, opener: Opener, picker: Picker) -> Self {
         let config = ConfigDir::at(dir.join("config"));
         let state =
             AppState::open(dir.clone(), config, Store::memory(), opener, picker, None).unwrap();
@@ -409,6 +462,201 @@ fn a_saved_session_is_resumed_on_the_next_launch() {
             .iter()
             .any(|method| method == "session/resume")
     );
+}
+
+/// The text of the last prompt an agent got
+fn last_prompt(agent: &FakeAgent) -> String {
+    let prompts = agent.params("session/prompt");
+    prompts.last().unwrap()["prompt"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_new_harness_stops_the_old_session_and_logs_a_divider() {
+    let claude = FakeAgent::new()
+        .turn(Turn::new().text("Claude answers"))
+        .turn(Turn::new().text("never asked"));
+    let goose = FakeAgent::new()
+        .offers_models("other", &["other", "qwen"])
+        .turn(Turn::new().text("goose answers"));
+    let chat = Chat::switching(&claude, &goose);
+    let project = chat.state().project_id(None).unwrap();
+    let set = |key: &str, value: &str| {
+        let target = Target::Project {
+            id: project.clone(),
+        };
+        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+    };
+    chat.send("First").until_turn_ends();
+    assert_eq!(claude.stopped(), 0, "the session runs between messages");
+
+    set("pm-harness", "goose");
+    set("pm-model", "qwen");
+    chat.send("Second").until_turn_ends();
+
+    assert_eq!(claude.stopped(), 1, "the old harness was stopped");
+    assert_eq!(goose.launches(), 1);
+    assert_eq!(
+        claude.params("session/prompt").len(),
+        1,
+        "the old session was sent nothing more"
+    );
+    let divider = LogEntry::Divider {
+        text: "Switched from Claude Code (opus) to goose (qwen)".to_owned(),
+    };
+    let log = chat.log();
+    let at = log.iter().position(|entry| *entry == divider).unwrap();
+    assert_eq!(
+        log[at + 1],
+        LogEntry::User {
+            text: "Second".to_owned()
+        },
+        "the divider comes before the message that started the new session: {log:?}"
+    );
+    let prompt = last_prompt(&goose);
+    assert!(prompt.contains("Maintainer: First"), "{prompt}");
+    assert!(prompt.contains("PM: Claude answers"), "{prompt}");
+    assert!(prompt.ends_with("Second"), "{prompt}");
+}
+
+#[test]
+fn a_refused_resume_starts_a_seeded_session() {
+    let agent = FakeAgent::new()
+        .can_resume()
+        .knows("other")
+        .turn(Turn::new().text("Fresh"));
+    let chat = Chat::resumed(&agent, "gone");
+    let log_path = chat.state().pm_log_path().unwrap();
+    let earlier = log::Log::open(&log_path).unwrap();
+    for entry in [
+        LogEntry::User {
+            text: "Earlier question".to_owned(),
+        },
+        LogEntry::Event(SessionEvent::Text {
+            delta: "Earlier answer".to_owned(),
+        }),
+    ] {
+        earlier.append(&entry).unwrap();
+    }
+    fs::write(
+        log_path.with_file_name("decisions.md"),
+        "- Never squash merges\n",
+    )
+    .unwrap();
+
+    let events = chat.send("Now");
+    // The refusal is a `Failed` the turn goes on from, so wait for its end
+    while !matches!(events.next(), SessionEvent::TurnEnded { .. }) {}
+
+    let prompt = last_prompt(&agent);
+    let decisions = prompt.find("Never squash merges").unwrap();
+    let exchange = prompt.find("Maintainer: Earlier question").unwrap();
+    assert!(decisions < exchange, "{prompt}");
+    assert!(prompt.contains("PM: Earlier answer"), "{prompt}");
+    assert!(prompt.ends_with("Now"), "{prompt}");
+    assert!(
+        !prompt.contains("Maintainer: Now"),
+        "the message being sent is not part of its own seed: {prompt}"
+    );
+    let log = chat.log();
+    let divider = LogEntry::Divider {
+        text: "Couldn't resume, started a new session".to_owned(),
+    };
+    assert_eq!(log.iter().filter(|entry| **entry == divider).count(), 1);
+}
+
+#[test]
+fn a_harness_changed_before_a_restart_starts_a_seeded_session_instead_of_resuming() {
+    let claude = FakeAgent::new().can_resume().knows("s-claude");
+    let goose = FakeAgent::new()
+        .can_resume()
+        .knows("s-claude")
+        .offers_models("other", &["other", "qwen"])
+        .turn(Turn::new().text("goose answers"));
+    let chat = Chat::after_claude(
+        &claude,
+        &goose,
+        r#"{"harness":"claude-code","model":"opus"}"#,
+    );
+    let log = log::Log::open(chat.state().pm_log_path().unwrap()).unwrap();
+    for entry in [
+        LogEntry::User {
+            text: "Before the restart".to_owned(),
+        },
+        LogEntry::Event(SessionEvent::Text {
+            delta: "Claude's answer".to_owned(),
+        }),
+    ] {
+        log.append(&entry).unwrap();
+    }
+    let set = |key: &str, value: &str| {
+        let target = Target::Project { id: "p1".into() };
+        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+    };
+    set("pm-harness", "goose");
+    set("pm-model", "qwen");
+
+    chat.send("After").until_turn_ends();
+
+    assert_eq!(
+        goose.params("session/resume"),
+        Vec::<serde_json::Value>::new(),
+        "goose is not offered Claude Code's session id"
+    );
+    let prompt = last_prompt(&goose);
+    assert!(prompt.contains("PM: Claude's answer"), "{prompt}");
+    assert!(prompt.ends_with("After"), "{prompt}");
+    let divider = |text: &str| LogEntry::Divider {
+        text: text.to_owned(),
+    };
+    let log = chat.log();
+    assert!(
+        log.contains(&divider("Switched from Claude Code (opus) to goose (qwen)")),
+        "{log:?}"
+    );
+    assert!(
+        !log.contains(&divider("Couldn't resume, started a new session")),
+        "{log:?}"
+    );
+    assert_eq!(
+        chat.projects().first().unwrap().pm_session,
+        Some("fake-1".into()),
+        "the saved id is goose's own, not Claude Code's"
+    );
+}
+
+#[test]
+fn the_divider_names_the_model_the_old_session_last_ran_on() {
+    let claude = FakeAgent::new()
+        .offers_models("small", &["small", "large"])
+        .turn(Turn::new().text("one"))
+        .turn(Turn::new().text("two"));
+    let goose = FakeAgent::new()
+        .offers_models("other", &["other", "qwen"])
+        .turn(Turn::new().text("three"));
+    let chat = Chat::switching(&claude, &goose);
+    let project = chat.state().project_id(None).unwrap();
+    let set = |key: &str, value: &str| {
+        let target = Target::Project {
+            id: project.clone(),
+        };
+        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+    };
+    set("pm-model", "small");
+    chat.send("First").until_turn_ends();
+    set("pm-model", "large");
+    chat.send("Second").until_turn_ends();
+
+    set("pm-harness", "goose");
+    set("pm-model", "qwen");
+    chat.send("Third").until_turn_ends();
+
+    let divider = LogEntry::Divider {
+        text: "Switched from Claude Code (large) to goose (qwen)".to_owned(),
+    };
+    assert!(chat.log().contains(&divider), "{:?}", chat.log());
 }
 
 #[test]

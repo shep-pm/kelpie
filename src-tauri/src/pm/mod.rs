@@ -5,6 +5,11 @@
 //! process: the engine's session does, through the process tree (ADR 0001), and
 //! the app only forwards what it says.
 //!
+//! A send whose harness differs from the session's does not move the session: it
+//! stops it, logs a divider and starts a seeded one ([`AppState::pm_session`]),
+//! and a resume the harness refuses starts a seeded session the same way
+//! (`docs/design/pm-chat.md`, Switching harness or model).
+//!
 //! [`pm_history`] reads kelpie's own log of the PM and starts nothing, and
 //! [`pm_retry`] sends the last message again after a quit cut a turn off.
 //!
@@ -172,6 +177,22 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
     })
 }
 
+/// How the maintainer's divider names a harness and the model it runs, such as `goose (qwen)`
+#[must_use]
+pub fn describe(harness: Harness, model: Option<&str>) -> String {
+    // parity: harness.pm
+    let name = match harness {
+        Harness::ClaudeCode => "Claude Code",
+        Harness::Goose => "goose",
+        // `Harness` grows with each harness's slice
+        other => return format!("{other:?}"),
+    };
+    match model {
+        Some(model) => format!("{name} ({model})"),
+        None => name.to_owned(),
+    }
+}
+
 /// The app's [`Opener`](crate::state::Opener): the PM on what `opening.pm` says
 ///
 /// Installs the bridge if it is not yet, confines the harness in a sandbox of
@@ -263,10 +284,20 @@ pub fn project_pick(state: State<'_, AppState>) -> Result<Option<String>, String
 /// session id is saved to `projects.json` when the session starts, so the next
 /// launch resumes it. A failure before the session exists is the turn's only
 /// event, a `Failed`.
+///
+/// A send whose settings name another harness than the session runs on stops
+/// that session and starts a new one with a seed ahead of the message. It
+/// returns the divider's text, which is in the log already, and `None` for any
+/// other send. A resume the harness refuses does the same, and its divider is
+/// in the log and not returned: the turn's `Failed` says it live.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<SessionEvent>) {
-    send(&state, text, on_event);
+pub fn pm_send(
+    state: State<'_, AppState>,
+    text: String,
+    on_event: Channel<SessionEvent>,
+) -> Option<String> {
+    send(&state, text, on_event)
 }
 
 /// Send the last message the maintainer sent again, and stream the reply into `on_event`
@@ -274,9 +305,10 @@ pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<Sessi
 /// For a turn a quit cut off. The message is read from kelpie's log and goes
 /// through the same path as [`pm_send`], so the log gets it again and the
 /// session resumes. Nothing in the log to send is a `Failed` on the channel.
+/// Returns what [`pm_send`] does.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) {
+pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) -> Option<String> {
     let last = state
         .pm_log_path()
         .map_or(Ok(Vec::new()), log::read)
@@ -292,21 +324,23 @@ pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) {
             let _ = on_event.send(SessionEvent::Failed {
                 message: "There is no message to send again.".to_owned(),
             });
+            None
         }
         Err(error) => {
             let _ = on_event.send(SessionEvent::Failed {
                 message: format!("could not read the PM's log: {error}"),
             });
+            None
         }
     }
 }
 
-fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) {
-    let (session, project) = match state.pm_session() {
+fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) -> Option<String> {
+    let (session, project, divider) = match state.pm_session() {
         Ok(held) => held,
         Err(message) => {
             let _ = on_event.send(SessionEvent::Failed { message });
-            return;
+            return None;
         }
     };
     session.send(text, move |event| {
@@ -320,6 +354,7 @@ fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) {
         }
         let _ = on_event.send(event);
     });
+    divider
 }
 
 /// The history kelpie logged for the PM, oldest first, empty before a project or a message

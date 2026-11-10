@@ -15,7 +15,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kelpie_protocol::{LogEntry, SessionEvent};
@@ -25,6 +25,7 @@ use super::Sink;
 /// A log file open for appending, shared by every clone
 #[derive(Debug, Clone)]
 pub struct Log {
+    path: PathBuf,
     /// `None` once closed
     file: Arc<Mutex<Option<File>>>,
 }
@@ -58,8 +59,15 @@ impl Log {
             file.write_all(b"\n")?;
         }
         Ok(Self {
+            path: path.to_owned(),
             file: Arc::new(Mutex::new(Some(file))),
         })
+    }
+
+    /// The file the log is kept in
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Append `entry` as one line, and flush it

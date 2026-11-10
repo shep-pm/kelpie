@@ -60,6 +60,7 @@ pub mod fake;
 pub mod log;
 pub mod options;
 mod raw;
+pub mod seed;
 mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
@@ -296,6 +297,26 @@ struct Setup {
     extensions: Vec<Extension>,
     instructions: Option<String>,
     mode: Option<String>,
+    log: Option<log::Log>,
+    seed: Option<Seed>,
+}
+
+/// Where a session that starts over takes its seed from, and when
+#[derive(Debug, Clone)]
+struct Seed {
+    /// The standing-decisions file
+    decisions: PathBuf,
+    /// Whether a new session is seeded though no resume was refused
+    at_start: bool,
+}
+
+/// How long a stopped harness is given to exit before the ladder goes on
+const STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// The running worker: its inbox, and the thread that holds the harness
+struct Worker {
+    inbox: UnboundedSender<Command>,
+    thread: thread::JoinHandle<()>,
 }
 
 /// One conversation with a harness
@@ -313,9 +334,10 @@ pub struct Session {
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
     log: Option<log::Log>,
+    seed: Option<Seed>,
     id: Arc<Mutex<Option<SessionId>>>,
-    /// The running worker's inbox, `None` before the first send
-    worker: Mutex<Option<UnboundedSender<Command>>>,
+    /// The running worker, `None` before the first send
+    worker: Mutex<Option<Worker>>,
 }
 
 impl fmt::Debug for Session {
@@ -409,6 +431,7 @@ impl Session {
             instructions: None,
             mode: None,
             log: None,
+            seed: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
         }
@@ -445,6 +468,50 @@ impl Session {
     pub fn with_log(mut self, log: log::Log) -> Self {
         self.log = Some(log);
         self
+    }
+
+    /// Seed a session that starts over from the file at `decisions` and from this session's log
+    ///
+    /// When the harness refuses to resume the saved id, the new session it
+    /// starts has [`seed::seed`] ahead of the message, and the log gets a
+    /// divider saying so. Needs [`Session::with_log`]: without a log there is
+    /// nothing to seed from, and no divider is written. Call this before the
+    /// first send.
+    #[must_use]
+    pub fn with_seed(mut self, decisions: impl Into<PathBuf>) -> Self {
+        self.seed = Some(Seed {
+            decisions: decisions.into(),
+            at_start: false,
+        });
+        self
+    }
+
+    /// Seed this session's first message too, for a session that replaces one on another harness
+    ///
+    /// As [`Session::with_seed`], and a session that starts with no id to
+    /// resume gets the seed as well. The caller writes the divider, since it
+    /// knows what was switched.
+    #[must_use]
+    pub fn with_seed_at_start(mut self, decisions: impl Into<PathBuf>) -> Self {
+        self.seed = Some(Seed {
+            decisions: decisions.into(),
+            at_start: true,
+        });
+        self
+    }
+
+    /// Stop the harness and wait until it has stopped
+    ///
+    /// A turn in flight is abandoned. Later sends start the harness again and
+    /// resume the session, so a session that is to be replaced is dropped after
+    /// this. Does nothing before the first send.
+    pub fn stop(&self) {
+        let worker = lock(&self.worker).take();
+        if let Some(Worker { inbox, thread }) = worker {
+            // The worker ends when its inbox does, and stops the harness
+            drop(inbox);
+            let _ = thread.join();
+        }
     }
 
     /// Stop writing to the session's log, for good
@@ -491,7 +558,7 @@ impl Session {
         };
         let mut command = Command::Send { text, sink };
         let mut worker = lock(&self.worker);
-        if let Some(inbox) = worker.as_ref() {
+        if let Some(Worker { inbox, .. }) = worker.as_ref() {
             match inbox.unbounded_send(command) {
                 Ok(()) => return,
                 // The worker ended, so the next one starts the harness again
@@ -508,6 +575,8 @@ impl Session {
             extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
             mode: self.mode.clone(),
+            log: self.log.clone(),
+            seed: self.seed.clone(),
         };
         let launcher = Arc::clone(&self.launcher);
         let id = Arc::clone(&self.id);
@@ -517,10 +586,10 @@ impl Session {
                 futures::executor::block_on(acp::run(launcher, setup, commands, id));
             });
         match started {
-            Ok(_) => {
+            Ok(thread) => {
                 // The thread holds the receiver, so this cannot fail
                 let _ = inbox.unbounded_send(command);
-                *worker = Some(inbox);
+                *worker = Some(Worker { inbox, thread });
             }
             Err(error) => {
                 if let Command::Send { mut sink, .. } = command {
@@ -537,7 +606,7 @@ impl Session {
     /// The turn then ends as the harness reports it, normally `Cancelled`.
     /// Does nothing between turns.
     pub fn cancel(&self) {
-        if let Some(inbox) = lock(&self.worker).as_ref() {
+        if let Some(Worker { inbox, .. }) = lock(&self.worker).as_ref() {
             let _ = inbox.unbounded_send(Command::Cancel);
         }
     }
