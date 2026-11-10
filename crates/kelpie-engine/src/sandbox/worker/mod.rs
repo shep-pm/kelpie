@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 use std::env;
+use std::net::SocketAddr;
 use std::path::Path;
 
 use crabpot::{Config, ConfigError};
@@ -48,6 +49,10 @@ pub struct Worker<'a> {
     pub kelpie_home: &'a Path,
     /// Kelpie's tools door
     pub door: Option<&'a Door>,
+    /// The loopback address the lease is served on, for a platform whose sandbox
+    /// reaches no Unix socket (Linux). Elsewhere the lease is [`LEASE_SOCKET`]
+    /// and this is ignored.
+    pub lease_address: Option<SocketAddr>,
 }
 
 /// What a clone's own git dir denies the worker: the parts that run code outside
@@ -62,6 +67,8 @@ const GITHUB: [&str; 2] = ["github.com", "api.github.com"];
 /// so a worker's `cargo test` waits its turn behind the others'
 ///
 /// The name is short: a Unix socket's path is limited to about a hundred bytes.
+/// Linux cannot reach a Unix socket from the sandbox, so there the lease is
+/// [`Worker::lease_address`] instead.
 pub const LEASE_SOCKET: &str = "lease.sock";
 
 /// What SK's `CREDENTIALS` holds beyond the secrets the PM's policy denies: the
@@ -158,14 +165,25 @@ fn compose(
         // the sandbox request prompt's, not the proxy's
         "strictAllowlist": true,
     });
-    let mut sockets = vec![text(&worker.state_dir.join(LEASE_SOCKET))];
-    if let Some(door) = worker.door {
-        sockets.extend(door.socket().map(text));
-        if let Some(address) = door.tcp() {
-            network["allowTcp"] = json!([address.to_string()]);
+    if cfg!(target_os = "linux") {
+        // Linux turns every Unix socket off whatever `allowUnixSockets` lists
+        // (`tests/sandbox/escapes.rs`), so the door and the lease are both
+        // loopback addresses, as the PM's door is
+        let addresses: Vec<String> = worker
+            .door
+            .and_then(Door::tcp)
+            .into_iter()
+            .chain(worker.lease_address)
+            .map(|address| address.to_string())
+            .collect();
+        if !addresses.is_empty() {
+            network["allowTcp"] = json!(addresses);
         }
+    } else {
+        let mut sockets = vec![text(&worker.state_dir.join(LEASE_SOCKET))];
+        sockets.extend(worker.door.and_then(Door::socket).map(text));
+        network["allowUnixSockets"] = json!(sockets);
     }
-    network["allowUnixSockets"] = json!(sockets);
     // Only macOS has a keychain to ask
     if cfg!(target_os = "macos") {
         network["denyMachLookup"] = json!(KEYCHAIN_SERVICES);

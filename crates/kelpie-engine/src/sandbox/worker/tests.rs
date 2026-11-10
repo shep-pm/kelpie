@@ -12,6 +12,7 @@ const GIT_DIR: &str = "/data/kelpie/worktrees/74.git";
 const COMMON_DIR: &str = "/work/kelpie/.git";
 const STATE: &str = "/data/kelpie/state/74";
 const KELPIE_HOME: &str = "/data/kelpie";
+const LEASE_ADDRESS: &str = "127.0.0.1:41998";
 
 /// A harness whose model answers on `hosts`
 fn on(hosts: &[&str]) -> Harness {
@@ -36,6 +37,7 @@ fn worker(door: Option<&Door>) -> Worker<'_> {
         state_dir: Path::new(STATE),
         kelpie_home: Path::new(KELPIE_HOME),
         door,
+        lease_address: Some(LEASE_ADDRESS.parse().unwrap()),
     }
 }
 
@@ -255,47 +257,69 @@ fn github_is_reached_and_no_host_beyond_the_harness_and_the_allowlist() {
     assert_eq!(config.network.strict_allowlist, Some(true));
 }
 
-#[test]
-fn the_lease_socket_and_the_door_are_the_only_sockets() {
-    let (text, tcp) = if cfg!(target_os = "linux") {
-        ("127.0.0.1:41999", true)
-    } else {
-        ("/data/kelpie/0123.sock", false)
-    };
-    let door = Door::parse(text).unwrap();
-    let lease = "/data/kelpie/state/74/lease.sock";
-
-    let with = policy(&on(&[]), &project(&[], false), &worker(Some(&door))).unwrap();
-    let without = built(&on(&[]), &[], false);
-
-    let mut sockets = vec![lease];
-    if !tcp {
-        sockets.push(text);
-    }
-    let wanted = Config::from_json(
+/// The settings with only `network` named, as crabpot reads them
+fn network(network: serde_json::Value) -> Config {
+    let mut network = network;
+    network["allowedDomains"] = json!([]);
+    network["deniedDomains"] = json!([]);
+    Config::from_json(
         &json!({
-            "network": {
-                "allowedDomains": [], "deniedDomains": [],
-                "allowUnixSockets": sockets,
-            },
+            "network": network,
             "filesystem": {"denyRead": [], "allowWrite": [], "denyWrite": []},
         })
         .to_string(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn the_lease_socket_and_the_door_are_the_only_sockets() {
+    let door = Door::parse("/data/kelpie/0123.sock").unwrap();
+
+    let with = policy(&on(&[]), &project(&[], false), &worker(Some(&door))).unwrap();
+    let without = built(&on(&[]), &[], false);
+
+    let wanted = network(json!({
+        "allowUnixSockets": ["/data/kelpie/state/74/lease.sock", "/data/kelpie/0123.sock"],
+    }));
     assert_eq!(
         with.network.allow_unix_sockets,
         wanted.network.allow_unix_sockets
     );
-    assert_eq!(with.network.allow_tcp.is_some(), tcp);
-    assert_eq!(with.network.allow_local_binding, None);
     assert_eq!(
-        without
+        without.network.allow_unix_sockets,
+        network(json!({"allowUnixSockets": ["/data/kelpie/state/74/lease.sock"]}))
             .network
-            .allow_unix_sockets
-            .map(|sockets| sockets.len()),
-        Some(1),
+            .allow_unix_sockets,
         "the lease socket alone, with no door"
     );
-    assert_eq!(without.network.allow_tcp, None);
+    assert_eq!(with.network.allow_tcp, None);
+    assert_eq!(with.network.allow_local_binding, None);
+}
+
+/// Linux turns every Unix socket off, so the door and the lease are addresses
+#[cfg(target_os = "linux")]
+#[test]
+fn the_lease_socket_and_the_door_are_the_only_sockets() {
+    let door = Door::parse("127.0.0.1:41999").unwrap();
+
+    let with = policy(&on(&[]), &project(&[], false), &worker(Some(&door))).unwrap();
+    let without = built(&on(&[]), &[], false);
+
+    assert_eq!(
+        with.network.allow_tcp,
+        network(json!({"allowTcp": ["127.0.0.1:41999", "127.0.0.1:41998"]}))
+            .network
+            .allow_tcp
+    );
+    assert_eq!(
+        without.network.allow_tcp,
+        network(json!({"allowTcp": ["127.0.0.1:41998"]}))
+            .network
+            .allow_tcp,
+        "the lease address alone, with no door"
+    );
+    assert_eq!(with.network.allow_unix_sockets, None);
+    assert_eq!(with.network.allow_local_binding, None);
 }
