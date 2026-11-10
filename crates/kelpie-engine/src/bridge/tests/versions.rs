@@ -133,6 +133,36 @@ fn ask_first_waits_for_approval() {
 
 #[test]
 
+fn an_update_writes_after_the_latest_read() {
+    let dir = Dir::new();
+    let platforms = [(this_platform(), unfetched(TAR))];
+    let mut versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    versions.ready = Some(version("0.102.0"));
+    versions.approve();
+    versions.save(dir.data(), ID).unwrap();
+
+    Versions::update(dir.data(), &pin(&platforms), |fresh| {
+        fresh.held_back = vec![Rejected {
+            version: version("0.103.0"),
+            reason: "no resume".to_owned(),
+        }];
+    })
+    .unwrap();
+
+    let after = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    assert_eq!(after.approved, Some(version("0.102.0")));
+    assert_eq!(after.ready, Some(version("0.102.0")));
+    assert_eq!(
+        after.held_back,
+        [Rejected {
+            version: version("0.103.0"),
+            reason: "no resume".to_owned(),
+        }]
+    );
+}
+
+#[test]
+
 fn automatic_takes_the_ready_version_and_keeps_the_one_before() {
     let dir = Dir::new();
     let platforms = [(this_platform(), unfetched(TAR))];

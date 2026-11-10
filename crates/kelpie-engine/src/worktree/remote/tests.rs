@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::Remote;
 use crate::tree::ProcessTree;
 use crate::worktree::tests::{Dir, git, process_tree};
 use crate::worktree::{
     Base, Start, Worktree, WorktreeError, base_of, change_start, clone, head, head_with_main,
-    origin_head, prepare,
+    holder_of, holds_work, origin_head, prepare, remove,
 };
 
 // An origin holding `main`, a clone of it, and a second bare repository whose
@@ -653,4 +653,183 @@ fn base_of_says_whether_the_pushed_head_has_main_or_lags_the_forge() {
     );
 
     assert_eq!(base(&pushed), Base::Behind);
+}
+
+// What origin holds under `name`, one line per branch
+fn on_origin(root: &Path, name: &str) -> String {
+    git(&root.join("origin.git"), &["branch", "--list", name])
+}
+
+#[test]
+fn remove_takes_the_clones_git_dir_away() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    let git_dir = clone::git_dir_of(&rig.worktree());
+    assert!(git_dir.is_dir());
+
+    remove(
+        &rig.tree,
+        &rig.repo(),
+        &rig.worktree(),
+        "kelpie/7",
+        &rig.build(),
+        None,
+    )
+    .unwrap();
+
+    assert!(!rig.worktree().exists());
+    assert!(!git_dir.exists());
+    assert!(!rig.build().exists());
+}
+
+#[test]
+fn remove_takes_a_linked_worktree_and_its_branch_away_as_before() {
+    let rig = Rig::new();
+    let at = rig.worktree();
+    git(
+        &rig.repo(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "kelpie/7",
+            at.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+
+    remove(&rig.tree, &rig.repo(), &at, "kelpie/7", &rig.build(), None).unwrap();
+
+    assert!(!at.exists());
+    assert_eq!(rig.checkout_branches(), "");
+    assert!(!git(&rig.repo(), &["worktree", "list", "--porcelain"]).contains(at.to_str().unwrap()));
+}
+
+#[test]
+fn remove_finishes_a_removal_that_took_the_worktree_and_left_the_clones_git_dir() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    std::fs::remove_dir_all(rig.worktree()).unwrap();
+
+    remove(
+        &rig.tree,
+        &rig.repo(),
+        &rig.worktree(),
+        "kelpie/7",
+        &rig.build(),
+        None,
+    )
+    .unwrap();
+
+    assert!(!clone::git_dir_of(&rig.worktree()).exists());
+}
+
+#[test]
+fn remove_takes_the_branch_off_origin_too() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    rig.at_worktree(&["commit", "--quiet", "--allow-empty", "-m", "work"]);
+    rig.at_worktree(&["push", "--quiet", "origin", "HEAD:refs/heads/kelpie/7"]);
+    assert!(on_origin(&rig.root, "kelpie/7").contains("kelpie/7"));
+
+    remove(
+        &rig.tree,
+        &rig.repo(),
+        &rig.worktree(),
+        "kelpie/7",
+        &rig.build(),
+        Some(&Remote::Origin),
+    )
+    .unwrap();
+
+    assert!(!rig.worktree().exists());
+    assert_eq!(on_origin(&rig.root, "kelpie/7"), "");
+}
+
+#[test]
+fn remove_skips_a_branch_origin_deleted_first() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    rig.at_worktree(&["commit", "--quiet", "--allow-empty", "-m", "work"]);
+    rig.at_worktree(&["push", "--quiet", "origin", "HEAD:refs/heads/kelpie/7"]);
+    // What a forge does itself with a head branch it merged.
+    git(
+        &rig.root.join("origin.git"),
+        &["update-ref", "-d", "refs/heads/kelpie/7"],
+    );
+
+    remove(
+        &rig.tree,
+        &rig.repo(),
+        &rig.worktree(),
+        "kelpie/7",
+        &rig.build(),
+        Some(&Remote::Origin),
+    )
+    .unwrap();
+
+    assert!(!rig.worktree().exists());
+    assert!(!clone::git_dir_of(&rig.worktree()).exists());
+}
+
+#[test]
+fn holder_of_names_the_worktree_that_holds_the_branch() {
+    let rig = Rig::new();
+    let at = rig.worktree();
+    git(
+        &rig.repo(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "kelpie/7",
+            at.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    let own = rig.root.join("elsewhere");
+
+    assert_eq!(
+        holder_of(&rig.tree, &rig.repo(), "kelpie/7", &own).unwrap(),
+        Some(at.clone())
+    );
+    // The worktree that holds it is not a holder of it elsewhere.
+    assert_eq!(
+        holder_of(&rig.tree, &rig.repo(), "kelpie/7", &at).unwrap(),
+        None
+    );
+    assert_eq!(
+        holder_of(&rig.tree, &rig.repo(), "kelpie/11", &own).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn holds_work_sees_a_commit_only_the_clone_holds() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    assert!(!holds_work(&rig.tree, &rig.repo(), &rig.worktree(), "kelpie/7", "main").unwrap());
+
+    rig.at_worktree(&["commit", "--quiet", "--allow-empty", "-m", "work"]);
+
+    assert!(holds_work(&rig.tree, &rig.repo(), &rig.worktree(), "kelpie/7", "main").unwrap());
+}
+
+#[test]
+fn holds_work_sees_the_commits_of_a_worktree_folder_that_is_gone() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    rig.at_worktree(&["commit", "--quiet", "--allow-empty", "-m", "work"]);
+    std::fs::remove_dir_all(rig.worktree()).unwrap();
+
+    assert!(holds_work(&rig.tree, &rig.repo(), &rig.worktree(), "kelpie/7", "main").unwrap());
+}
+
+#[test]
+fn holds_work_says_no_for_a_branch_and_worktree_that_are_not_there() {
+    let rig = Rig::new();
+
+    assert!(!holds_work(&rig.tree, &rig.repo(), &rig.worktree(), "kelpie/7", "main").unwrap());
 }
