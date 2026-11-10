@@ -40,10 +40,12 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// The reaper's name, as `bundle.externalBin` in `tauri.conf.json` names it
 ///
-/// Tauri reads that as `src-tauri/binaries/kelpie-reaper-<target triple>`, which
-/// `scripts/build-reaper.sh` writes, and copies it beside the app binary under
-/// this name, the triple dropped.
-const REAPER: &str = "kelpie-reaper";
+/// Tauri reads that as `src-tauri/binaries/kelpie-reaper-sidecar-<target triple>`,
+/// which `scripts/build-reaper.sh` writes, and copies it beside the app binary
+/// under this name, the triple dropped. It is not `kelpie-reaper`, the name of
+/// the cargo bin: `tauri-build` deletes whatever holds the name it copies to, so
+/// the sidecar would replace the file cargo built.
+const REAPER: &str = "kelpie-reaper-sidecar";
 
 /// The reaper beside this executable, where Tauri puts a sidecar
 ///

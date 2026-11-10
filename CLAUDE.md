@@ -54,7 +54,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `pnpm typecheck`: `tsc -b`.
 - `pnpm lint`: `biome check .`.
 - `pnpm test`: `vitest run`.
-- `pnpm build-reaper`: `scripts/build-reaper.sh`, which builds `kelpie-reaper` into `src-tauri/binaries/kelpie-reaper-<target triple>`, the sidecar `bundle.externalBin` names. `src-tauri/build.rs` copies that file next to the app binary and stops when it is missing, so on a fresh clone run it before any cargo command that compiles `src-tauri`.
+- `pnpm build-reaper`: `scripts/build-reaper.sh`, which builds `kelpie-reaper` into `src-tauri/binaries/kelpie-reaper-sidecar-<target triple>`, the sidecar `bundle.externalBin` names. The sidecar's name differs from the cargo bin's, because `tauri-build` overwrites the file named like the sidecar in `target/<profile>/`. `src-tauri/build.rs` copies that file next to the app binary and stops when it is missing, so on a fresh clone run it before any cargo command that compiles `src-tauri`.
 - `pnpm tauri dev`: the Tauri window on the Vite dev server. It runs `pnpm build-reaper && pnpm dev` first, then waits on `build.devUrl`.
 - `pnpm tauri build`: the release build, then the bundles, with the reaper sidecar bundled beside the app binary. `cargo build --release` is not a release build: it leaves Tauri's `custom-protocol` feature off, so the binary loads `devUrl` instead of its own assets.
 - `pnpm tauri icon docs/design/system/assets/logos/kelpie-app-icon.svg`: regenerates `src-tauri/icons/` from the app icon.
