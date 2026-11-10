@@ -1,0 +1,71 @@
+/*
+ * The editor's palette follows the Chelone tokens in dark mode. The editor's own
+ * stylesheet sets the same variables on `.mdxeditor` and loads after this one,
+ * so the class is doubled to win the tie. The editor puts `mdxeditor-dark` on
+ * its popup container too, which has no `mdxeditor` class, so the rule cannot
+ * name that one.
+ */
+.mdxeditor-dark.mdxeditor-dark {
+  --mdxeditor-bg-color: var(--background);
+  --mdxeditor-text-color: var(--foreground);
+  --mdxeditor-toolbar-bg-color: var(--card);
+
+  /* The editor reads these palette variables for its own surfaces. */
+  --basePageBg: var(--mdxeditor-bg-color);
+  --baseBase: var(--mdxeditor-toolbar-bg-color);
+  --baseBg: var(--mdxeditor-toolbar-bg-color);
+  --baseText: var(--mdxeditor-text-color);
+  --baseTextContrast: var(--mdxeditor-text-color);
+
+  background-color: var(--mdxeditor-bg-color);
+  color: var(--mdxeditor-text-color);
+}
+
+.mdxeditor-dark.mdxeditor-dark [role="toolbar"] {
+  background-color: var(--mdxeditor-toolbar-bg-color);
+}
+
+/*
+ * The editor ships no typography, and a Tailwind reset leaves headings, lists
+ * and links looking like body text. These restore them inside the content only.
+ */
+.mdxeditor-root-contenteditable h1,
+.mdxeditor-root-contenteditable h2,
+.mdxeditor-root-contenteditable h3,
+.mdxeditor-root-contenteditable h4,
+.mdxeditor-root-contenteditable h5,
+.mdxeditor-root-contenteditable h6 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1em 0 0.5em;
+}
+
+.mdxeditor-root-contenteditable h1 {
+  font-size: 1.875rem;
+}
+
+.mdxeditor-root-contenteditable h2 {
+  font-size: 1.5rem;
+}
+
+.mdxeditor-root-contenteditable h3 {
+  font-size: 1.25rem;
+}
+
+.mdxeditor-root-contenteditable h4 {
+  font-size: 1.125rem;
+}
+
+.mdxeditor-root-contenteditable ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+}
+
+.mdxeditor-root-contenteditable ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+}
+
+.mdxeditor-root-contenteditable a {
+  text-decoration: underline;
+}
