@@ -273,6 +273,27 @@ describe("the chat box", () => {
     expect(pmSend).not.toHaveBeenCalled();
   });
 
+  it("shows a divider above the message that started a new session", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "divider", text: "Switched from Claude Code to goose" },
+        { entry: "user", text: "first on goose" },
+      ],
+    });
+
+    await openBox();
+
+    const divider = await screen.findByText(
+      "Switched from Claude Code to goose",
+    );
+    const message = await screen.findByText("first on goose");
+    expect(
+      divider.compareDocumentPosition(message) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("retry sends the interrupted message again", async () => {
     pmHistory.mockResolvedValue({
       status: "ok",

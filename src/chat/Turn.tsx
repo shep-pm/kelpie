@@ -4,6 +4,7 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { Divider } from "./Divider";
 import { type Turn as TurnData, useChat } from "./store";
 import { ToolSteps } from "./ToolSteps";
 import { UsageFooter } from "./UsageFooter";
@@ -14,6 +15,11 @@ export const SCREENFUL = 24;
 /** The turn with `id`, read one field at a time so a delta re-renders only its reader. */
 function useField<K extends keyof TurnData>(id: number, key: K) {
   return useChat((s) => s.turns.find((t) => t.id === id)?.[key]);
+}
+
+function Dividers({ id }: { id: number }) {
+  const dividers = useField(id, "dividers");
+  return dividers?.map((text) => <Divider key={text} text={text} />);
 }
 
 function UserBubble({ id }: { id: number }) {
@@ -118,6 +124,7 @@ function Footer({ id }: { id: number }) {
 export function Turn({ id }: { id: number }) {
   return (
     <article className="flex flex-col gap-2">
+      <Dividers id={id} />
       <UserBubble id={id} />
       <Interrupted id={id} />
       <StepsOfTurn id={id} />
