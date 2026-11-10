@@ -28,6 +28,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod login;
 pub mod record;
 pub mod slots;
 pub mod start;

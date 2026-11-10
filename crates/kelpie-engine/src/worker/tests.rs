@@ -4,6 +4,7 @@
 //! and a [`FakeAgent`] as the harness, so a start prepares a real worktree
 //! through git and runs a real session over ACP with no model behind it.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -15,6 +16,8 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::{Binding, Origin, Sourced};
+use crate::github::fake::{FakeClock, FakeGithub};
+use crate::github::{AppTokens, TokenError};
 use crate::sandbox::{self, Reads};
 use crate::session::fake::{FakeAgent, Turn};
 use crate::session::{Harness, Session};
@@ -105,6 +108,9 @@ struct Rig {
     repo: PathBuf,
     paths: Paths,
     records: Arc<Mutex<Records>>,
+    // The Apps kelpie mints this project's workers' tokens from, `None` where it
+    // keeps none at all
+    tokens: Option<AppTokens>,
 }
 
 impl Rig {
@@ -128,7 +134,28 @@ impl Rig {
             repo,
             paths,
             records,
+            tokens: None,
         }
+    }
+
+    /// Make the checkout's `origin` `slug` on GitHub
+    ///
+    /// A `[url "<the bare origin here>"] insteadOf = <slug's URL>` section is
+    /// what git resolves that URL with, so the origin stays the local bare repo
+    /// this rig was cloned from and every fetch the start makes is off the
+    /// network. It is appended to the clone's config by hand: git's own
+    /// `config` command keeps the quotes of a key like
+    /// `url."<base>".insteadOf` in the subsection it writes.
+    fn on_github(&mut self, slug: &str) {
+        let url = format!("https://github.com/{slug}.git");
+        let origin = self._dir.path().join("origin.git").canonicalize().unwrap();
+        git(&self.repo, &["config", "remote.origin.url", &url]);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.repo.join(".git/config"))
+            .unwrap()
+            .write_all(format!("[url \"{}\"]\n\tinsteadOf = {url}\n", origin.display()).as_bytes())
+            .unwrap();
     }
 
     /// The project a test starts in, with `open` as its opener and `slots` as its cap
@@ -149,6 +176,7 @@ impl Rig {
             network_allowlist: &[],
             reads: Reads::Project,
             tools: None,
+            tokens: self.tokens.as_ref(),
             open,
         }
     }
@@ -673,6 +701,235 @@ fn the_instructions_carry_the_base_branch_and_the_hand_over_file() {
             && !prompt.contains("{pull_request}"),
         "no placeholder reaches the worker: {prompt:?}"
     );
+}
+
+/// The variables each start gave its opener, in order
+fn envs(held: &Mutex<Vec<Vec<(String, String)>>>) -> Vec<Vec<(String, String)>> {
+    held.lock().unwrap().clone()
+}
+
+/// `name` in `env`, `None` where kelpie sets no such variable
+fn in_env(env: &[(String, String)], name: &str) -> Option<String> {
+    env.iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
+}
+
+/// The token file the worker's `gh` reads, as kelpie wrote it
+fn hosts(state_dir: &Path) -> String {
+    std::fs::read_to_string(login::config_dir(state_dir).join("hosts.yml")).unwrap()
+}
+
+/// The first turn's prompt, which carries the instructions and the ticket's text
+fn prompt(agent: &FakeAgent) -> String {
+    agent.params("session/prompt")[0]["prompt"][0]["text"]
+        .as_str()
+        .expect("the prompt holds no text")
+        .to_owned()
+}
+
+// The worker's credential on GitHub: one repo, minted for this turn alone, in a
+// folder of its own that git's credential helper answers from. No variable
+// carries it, so a harness that strips token-shaped names, and every process
+// that reads another's environment, still sees nothing.
+#[test]
+fn a_worker_pushes_with_a_token_for_its_one_repo_minted_fresh_for_each_turn() {
+    let mut rig = Rig::new("worker token");
+    rig.on_github("shep-pm/koji");
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    github.registered(home.path(), "shep-pm/koji");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("first turn"))
+        .turn(Turn::new().text("second turn"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> {
+        seen.lock().unwrap().push(opening.env.clone());
+        Ok(on(&agent, opening))
+    };
+
+    let (sink, heard) = events();
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running { state_dir, .. } = started else {
+        panic!("{started:?}");
+    };
+    until_turn_ends(&heard);
+    let first = hosts(&state_dir);
+    assert!(first.contains("oauth_token: ghs_test1"), "{first}");
+    assert!(first.contains("user: x-access-token"), "{first}");
+
+    let (sink, heard) = events();
+    let again = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    assert!(matches!(again, Started::Running { .. }), "{again:?}");
+    until_turn_ends(&heard);
+
+    let second = hosts(&state_dir);
+    assert!(second.contains("oauth_token: ghs_test2"), "{second}");
+    assert!(!second.contains("ghs_test1"), "{second}");
+    assert_eq!(
+        github.asked().len(),
+        4,
+        "each turn mints its own, and kelpie mints no token of its own here"
+    );
+
+    let envs = envs(&seen);
+    assert_eq!(envs.len(), 2, "each turn gets its own environment");
+    for env in &envs {
+        let build = rig.paths.build_dir("74");
+        let dir = login::config_dir(&state_dir);
+        assert_eq!(
+            in_env(env, "CARGO_TARGET_DIR").as_deref(),
+            Some(build.to_string_lossy().as_ref()),
+            "{env:?}"
+        );
+        assert_eq!(
+            in_env(env, "GH_CONFIG_DIR").as_deref(),
+            Some(dir.to_string_lossy().as_ref()),
+            "the worker's `gh` reads its own folder, not the maintainer's: {env:?}"
+        );
+        assert_eq!(
+            in_env(env, "GIT_TERMINAL_PROMPT").as_deref(),
+            Some("0"),
+            "{env:?}"
+        );
+        assert!(
+            in_env(env, "GIT_CONFIG_PARAMETERS")
+                .unwrap()
+                .contains("!gh auth git-credential"),
+            "git answers github.com from the worker's own login: {env:?}"
+        );
+        assert!(
+            env.iter().all(|(_, value)| !value.contains("ghs_test")),
+            "no variable carries the token: {env:?}"
+        );
+    }
+}
+
+// An App kelpie registered that the repo does not cover leaves the worker with
+// nothing to push with. It runs, says so, and git is pointed at no helper at
+// all, so nothing the maintainer logged into is ever asked.
+#[test]
+fn a_worker_with_no_app_on_its_repo_is_told_it_cannot_push() {
+    let mut rig = Rig::new("no app");
+    rig.on_github("shep-pm/koji");
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    // Registered, and installed on another repo alone
+    github.registered(home.path(), "other/koji");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> {
+        seen.lock().unwrap().push(opening.env.clone());
+        Ok(on(&agent, opening))
+    };
+    let (sink, heard) = events();
+
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running { state_dir, .. } = started else {
+        panic!("{started:?}");
+    };
+    until_turn_ends(&heard);
+
+    let prompt = prompt(&agent);
+    assert!(
+        prompt.contains("no credential for this repo") && prompt.contains("git push"),
+        "{prompt:?}"
+    );
+    assert!(
+        !login::config_dir(&state_dir).join("hosts.yml").exists(),
+        "no login is written where there is no token"
+    );
+    let env = &envs(&seen)[0];
+    assert_eq!(
+        in_env(env, "GIT_CONFIG_PARAMETERS").as_deref(),
+        Some(login::NO_HELPER),
+        "the maintainer's helpers are emptied, and github.com is answered by nothing: {env:?}"
+    );
+}
+
+// A repo kelpie cannot name on GitHub gets no token, whatever Apps it has: the
+// token is for one repo, and this is not it.
+#[test]
+fn a_repo_that_is_not_github_gets_the_worker_no_token() {
+    let mut rig = Rig::new("not github");
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    github.registered(home.path(), "shep-pm/koji");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+    let (sink, heard) = events();
+
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    assert!(matches!(started, Started::Running { .. }), "{started:?}");
+    until_turn_ends(&heard);
+
+    assert!(
+        github.asked().is_empty(),
+        "no token was minted for any repo"
+    );
+    assert!(!login::config_dir(&rig.paths.state_dir("74")).exists());
+    assert!(prompt(&agent).contains("no credential for this repo"));
+}
+
+// A token GitHub made hold more than pushing is never handed to a worker, and
+// the start says why instead of running the turn with it.
+#[test]
+fn a_token_holding_more_than_pushing_refuses_the_start() {
+    let mut rig = Rig::new("too broad");
+    rig.on_github("shep-pm/koji");
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    github.registered(home.path(), "shep-pm/koji");
+    github.grants_too("pull_requests", "write");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+    let (sink, heard) = events();
+
+    let error = start(&rig.project(&binding, &open, 2), &ticket("74", "x"), sink)
+        .expect_err("GitHub made the token hold pull_requests");
+    assert!(
+        matches!(error, StartError::Token(TokenError::TooBroad(_))),
+        "{error:?}"
+    );
+    assert!(heard.try_recv().is_err(), "no turn ran with it");
+    assert!(kept(&rig).is_empty(), "the refused start holds no slot");
+    assert!(
+        !login::config_dir(&rig.paths.state_dir("74")).exists(),
+        "no login was written"
+    );
+    assert_eq!(agent.launches(), 0);
 }
 
 /// What crabpot makes of `paths` as a list of its own

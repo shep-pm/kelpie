@@ -16,23 +16,34 @@
 //! The session is built by the caller's `open`, as the PM's is
 //! ([`crate::session`]). Kelpie ships no harness (ADR 0006), and only the app
 //! holds the logins and the installed bridges; `start` hands it the folders the
-//! worker works in and a way to start its sandbox, so every harness on every
-//! caller gets the same policy ([`crate::sandbox::worker`]).
+//! worker works in, the variables its harness runs with, and a way to start its
+//! sandbox, so every harness on every caller gets the same policy
+//! ([`crate::sandbox::worker`]).
+//!
+//! Before each turn `start` mints the worker a token for its one repo and writes
+//! it into a `gh` folder of the worker's own ([`login`],
+//! `docs/design/workers.md`, Pushing and the pull request). No variable carries
+//! the token: the environment names the folder and points git's credential
+//! helper at it. Where kelpie has no App for the repo, the worker is told it
+//! cannot push.
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::agents::Binding;
+use crate::github::{AppTokens, ForgeSlug, GithubApp, TokenError, forge_of};
 use crate::permission::Judge;
 use crate::sandbox::{self, Reads, Sandbox};
 use crate::session::log::Log;
 use crate::session::{Choice, Harness, Session, SessionEvent, SessionId};
 use crate::tools::{SessionTools, Tools};
 use crate::tree::ProcessTree;
+use crate::worker_folder;
 use crate::worktree::{self, Remote, clone};
 
-use super::{Record, Records, Seat, Status};
+use super::{Record, Records, Seat, Status, login};
 
 /// The folder under the data folder that holds each project's state
 const PROJECTS_FOLDER: &str = "projects";
@@ -197,6 +208,11 @@ pub struct Project<'a> {
     /// `None` where the door could not open.
     pub tools: Option<&'a Tools>,
 
+    /// kelpie's GitHub App tokens, which mint what the worker pushes with.
+    /// `None` where kelpie keeps no Apps at all, which is the same as having no
+    /// App for the repo: the worker runs with no credential and is told so.
+    pub tokens: Option<&'a AppTokens>,
+
     /// Build the worker's session on the harness the binding names, inside the
     /// sandbox [`Opening::sandbox`] starts. The text of an error is for the
     /// maintainer to read.
@@ -238,6 +254,12 @@ pub struct Opening<'a> {
 
     /// kelpie's tools for this session, with a token of its own
     pub tools: Option<SessionTools>,
+
+    /// The variables the worker's harness and every command it runs carry:
+    /// its build folder, the `gh` folder its login is in, and git's config
+    /// pointing at that login ([`login`]). The opener adds them to the harness's
+    /// own, and no value in them is a token.
+    pub env: Vec<(String, String)>,
 
     /// Start the worker's sandbox for `harness`, as its policy has it
     ///
@@ -310,6 +332,14 @@ pub enum StartError {
     /// The worker's log could not be opened, so its turn would be kept nowhere
     Log(io::Error),
 
+    /// The worker's login folder could not be written, so its turn would have no
+    /// credential to push with
+    Login(worker_folder::Error),
+
+    /// The worker's token could not be minted, with why. Asking again may work:
+    /// GitHub was out of reach, busy, or made a token hold more than pushing.
+    Token(TokenError),
+
     /// The worker's session could not be built, with the reason for the maintainer
     Session(String),
 }
@@ -329,6 +359,12 @@ impl std::fmt::Display for StartError {
             }
             Self::Record(error) => write!(f, "the worker's record could not be kept: {error}"),
             Self::Log(error) => write!(f, "the worker's log could not be opened: {error}"),
+            Self::Login(error) => {
+                write!(f, "the worker's login could not be written: {error}")
+            }
+            Self::Token(error) => {
+                write!(f, "the worker's GitHub token could not be minted: {error}")
+            }
             Self::Session(message) => {
                 write!(f, "the worker's session could not be built: {message}")
             }
@@ -341,6 +377,8 @@ impl core::error::Error for StartError {
         match self {
             Self::Name { .. } | Self::Running { .. } | Self::Session(_) => None,
             Self::Worktree(error) => Some(error),
+            Self::Token(error) => Some(error),
+            Self::Login(error) => Some(error),
             Self::Record(error) | Self::Log(error) => Some(error),
         }
     }
@@ -366,8 +404,9 @@ impl core::error::Error for StartError {
 /// # Errors
 ///
 /// [`StartError`]: the ticket id names nothing, the ticket already has a worker
-/// running, the worktree could not be prepared, the record or the log could not
-/// be written, or the session could not be built.
+/// running, the worktree could not be prepared, the record, the log or the
+/// login could not be written, the token could not be minted, or the session
+/// could not be built.
 pub fn start(
     project: &Project<'_>,
     ticket: &Ticket,
@@ -399,13 +438,15 @@ pub fn start(
     }
 }
 
-/// The worker a held slot begins: its worktree, its sandbox and its session
+/// The worker a held slot begins: its worktree, its credential, its sandbox and
+/// its session
 ///
 /// # Errors
 ///
-/// [`StartError::Worktree`], [`StartError::Log`] or [`StartError::Session`]: the
-/// worktree could not be prepared, the log could not be opened, or the session
-/// could not be built.
+/// [`StartError::Worktree`], [`StartError::Log`], [`StartError::Login`],
+/// [`StartError::Token`] or [`StartError::Session`]: the worktree could not be
+/// prepared, the log could not be opened, the login could not be written, no
+/// token could be minted, or the session could not be built.
 fn begin(
     project: &Project<'_>,
     ticket: &Ticket,
@@ -427,6 +468,8 @@ fn begin(
     )
     .map_err(StartError::Worktree)?;
 
+    let credential = credential(project, &ticket.id, &state_dir)?;
+    let pushes = credential.pushes;
     let log = Log::open(project.paths.log_file(&ticket.id)).map_err(StartError::Log)?;
     let tools = project.tools.map(Tools::session);
     let sessions_root = project.paths.sessions_root();
@@ -457,6 +500,7 @@ fn begin(
         state_dir: &state_dir,
         resume: record.session.clone(),
         tools: tools.clone(),
+        env: credential.env,
         sandbox: &sandbox,
     })
     .map_err(StartError::Session)?;
@@ -471,7 +515,7 @@ fn begin(
                 &worktree,
                 vec![worktree.clone(), state_dir.clone()],
             ))
-            .with_instructions(instructions(project, &ticket.id))
+            .with_instructions(instructions(project, &ticket.id, pushes))
             .with_log(log),
     );
     session.send(ticket.text.clone(), kept(project, &ticket.id, events));
@@ -481,6 +525,104 @@ fn begin(
         worktree,
         state_dir,
     })
+}
+
+/// What a worker is given to push with
+struct Credential {
+    /// Whether it holds a token for the repo, which is what lets it push
+    pushes: bool,
+
+    /// The variables its harness and every command it runs carry
+    env: Vec<(String, String)>,
+}
+
+/// Mint the worker a token for its one repo, write it into the `gh` folder of its
+/// own, and build the environment that points git at it
+///
+/// The token is minted fresh for this turn and kept nowhere else, so no refresh
+/// timer runs and the turn has the token's whole hour to run in. Nothing in the
+/// environment is the token: it names the folder and git's helper
+/// ([`login`], `docs/design/workers.md`, Pushing and the pull request).
+///
+/// A repo kelpie's App does not cover, and a repo that is not GitHub at all,
+/// leave the worker with no credential. It is told so in its instructions, and
+/// git is pointed at no helper at all, so nothing the maintainer logged into is
+/// asked. A token kelpie would not hand a worker, or a GitHub that cannot be
+/// reached, fails the start instead: the maintainer sees why, and the worker
+/// never runs as them.
+///
+/// # Errors
+///
+/// [`StartError::Login`]: the login folder could not be written.
+/// [`StartError::Token`]: no token could be minted for the worker.
+fn credential(
+    project: &Project<'_>,
+    ticket: &str,
+    state_dir: &Path,
+) -> Result<Credential, StartError> {
+    let build = project.paths.build_dir(ticket);
+    let mut env = vec![("CARGO_TARGET_DIR".to_owned(), text(&build))];
+    let worker = match (project.tokens, origin(project.tree, project.folder)) {
+        (Some(tokens), Some(repo)) => match tokens.worker(&repo) {
+            Ok(worker) => Some(worker),
+            // No App for the owner, or one the repo does not cover: the worker
+            // has no credential, and says so.
+            Err(
+                error @ (TokenError::Owner(_)
+                | TokenError::NoApp(_)
+                | TokenError::NotInstalled { .. }),
+            ) => {
+                eprintln!("kelpie: ticket {ticket} cannot push: {error}");
+                None
+            }
+            Err(error) => return Err(StartError::Token(error)),
+        },
+        _ => None,
+    };
+    env.extend(login::env(state_dir));
+    let pushes = worker.is_some();
+    env.push((
+        "GIT_CONFIG_PARAMETERS".to_owned(),
+        match worker {
+            Some(worker) => {
+                login::write(state_dir, &worker.token).map_err(StartError::Login)?;
+                login::GIT_CONFIG.to_owned()
+            }
+            None => login::NO_HELPER.to_owned(),
+        },
+    ));
+    Ok(Credential { pushes, env })
+}
+
+/// The project's repo as GitHub sees it, from the `origin` of its checkout,
+/// which is what each ticket's clone pushes to
+///
+/// Read in process where gix can say, as [`clone`] reads the same key when it
+/// copies it, and asked of git where that read cannot answer. A checkout with no
+/// `origin`, or one that is not GitHub, names no repo.
+fn origin(tree: &ProcessTree, folder: &Path) -> Option<ForgeSlug> {
+    const URL: &str = "remote.origin.url";
+    let url = worktree::local_config(folder, |key| key == URL)
+        .and_then(|found| {
+            found
+                .into_iter()
+                .find(|(key, _)| key == URL)
+                .map(|(_, url)| url)
+        })
+        .or_else(|| {
+            let mut git = Command::new("git");
+            git.current_dir(folder).args(["config", "--get", URL]);
+            let asked = tree.output(&mut git).ok()?;
+            asked
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&asked.stdout).trim().to_owned())
+        })?;
+    forge_of(&url)
+}
+
+fn text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 /// Put `ticket`'s worker in the project's slots, and keep its record
@@ -610,7 +752,11 @@ fn lost(ticket: &str, kept: io::Result<()>, what: &str) {
 /// hand-over file it writes a pull request's title and body in
 /// (`docs/design/workers.md`, Pushing and the pull request). A project's own
 /// agent file that names none of them is sent as it is.
-fn instructions(project: &Project<'_>, ticket: &str) -> String {
+///
+/// A worker with no credential is told so outright, whatever its agent file
+/// says about pushing: it has no way to get its work out, and saying so is the
+/// most the maintainer can do about it until an App is registered for the repo.
+fn instructions(project: &Project<'_>, ticket: &str, pushes: bool) -> String {
     let kelpie = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("kelpie"))
         .display()
@@ -620,7 +766,7 @@ fn instructions(project: &Project<'_>, ticket: &str) -> String {
         .pull_request_file(ticket)
         .display()
         .to_string();
-    project
+    let body = project
         .binding
         .body
         .value
@@ -628,8 +774,15 @@ fn instructions(project: &Project<'_>, ticket: &str) -> String {
         .unwrap_or_default()
         .replace("{kelpie}", &kelpie)
         .replace("{base}", project.base)
-        .replace("{pull_request}", &hand_over)
+        .replace("{pull_request}", &hand_over);
+    if pushes {
+        return body;
+    }
+    format!("{body}{NO_CREDENTIAL}")
 }
+
+/// What a worker with no credential is told, after every other instruction
+const NO_CREDENTIAL: &str = "\nYou have no credential for this repo: kelpie has no GitHub App installed on it, so `git push` is refused and every instruction above that says to push means to commit. Commit your work, and say in your final message that the branch is not pushed and why, so the maintainer can get it out by hand.\n";
 
 /// The model and effort the session asks the harness for
 fn choice(binding: &Binding) -> Choice {
