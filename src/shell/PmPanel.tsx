@@ -3,7 +3,7 @@ import { ChatBox } from "@/chat/ChatBox";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Panel, type PanelControls } from "./Panel";
-import { PM_TAB, tabBody, useTabs } from "./tabs";
+import { PM_TAB, TabBody, useTabs } from "./tabs";
 
 /**
  * The PM panel: the PM's chat in its own tab, and a tab for each worker
@@ -75,7 +75,7 @@ export function PmPanel({
               value={tab.id}
               className="flex min-h-0 flex-col"
             >
-              {tabBody(tab.id)}
+              <TabBody id={tab.id} />
             </TabsContent>
           ))}
       </Tabs>

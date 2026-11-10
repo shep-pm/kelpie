@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ComponentType } from "react";
 import { create } from "zustand";
 
 export type Tab = { id: string; title: string };
@@ -49,21 +49,29 @@ export const useTabs = create<Tabs>()((set) => ({
   reset: () => set(initial),
 }));
 
-const bodies = new Map<string, () => ReactNode>();
+type Bodies = { bodies: Readonly<Record<string, ComponentType>> };
+
+const useBodies = create<Bodies>()(() => ({ bodies: {} }));
 
 /**
  * Say what the tab `id` shows. Returns the call that takes it back.
  *
- * A tab nothing is registered for shows an empty body.
+ * `Body` renders as a component of its own, so it can use hooks. A tab
+ * nothing is registered for shows an empty body, and shows `Body` as soon as
+ * it is registered, whether or not the tab is open yet.
  */
-export function registerTabBody(id: string, body: () => ReactNode) {
-  bodies.set(id, body);
-  return () => {
-    if (bodies.get(id) === body) bodies.delete(id);
-  };
+export function registerTabBody(id: string, Body: ComponentType) {
+  useBodies.setState((s) => ({ bodies: { ...s.bodies, [id]: Body } }));
+  return () =>
+    useBodies.setState((s) => {
+      if (s.bodies[id] !== Body) return s;
+      const { [id]: _taken, ...rest } = s.bodies;
+      return { bodies: rest };
+    });
 }
 
-/** What the tab `id` shows, `null` when nothing is registered for it. */
-export function tabBody(id: string): ReactNode {
-  return bodies.get(id)?.() ?? null;
+/** The body of the tab `id`: what is registered for it, and nothing before. */
+export function TabBody({ id }: { id: string }) {
+  const Body = useBodies((s) => s.bodies[id]);
+  return Body ? <Body /> : null;
 }

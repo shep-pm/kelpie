@@ -5,6 +5,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/bindings", () => ({
@@ -13,6 +14,15 @@ vi.mock("@/bindings", () => ({
 
 import { PmPanel } from "./PmPanel";
 import { registerTabBody, useTabs } from "./tabs";
+
+function CountingBody() {
+  const [n, setN] = useState(0);
+  return (
+    <button type="button" onClick={() => setN(n + 1)}>
+      clicked {n}
+    </button>
+  );
+}
 
 const controls = {
   maximised: false,
@@ -80,5 +90,35 @@ describe("the PM panel", () => {
       (screen.getByPlaceholderText("Message the PM") as HTMLTextAreaElement)
         .value,
     ).toBe("half a thought");
+  });
+
+  it("keeps working when a body that uses hooks is open beside more tabs", async () => {
+    const unregister = registerTabBody("w4", CountingBody);
+    render(<PmPanel {...controls} onSettings={() => {}} />);
+    act(() => useTabs.getState().open({ id: "w4", title: "#123" }));
+    fireEvent.click(screen.getByRole("button", { name: "clicked 0" }));
+    expect(screen.getByRole("button", { name: "clicked 1" })).toBeTruthy();
+
+    act(() => useTabs.getState().open({ id: "w5", title: "#124" }));
+    act(() => useTabs.getState().close("w5"));
+    act(() => useTabs.getState().select("w4"));
+    // A tab that is not shown is unmounted, so its own state starts again.
+    expect(screen.getByRole("button", { name: "clicked 0" })).toBeTruthy();
+    unregister();
+  });
+
+  it("shows a body registered after its tab opened, and drops it when taken back", async () => {
+    render(<PmPanel {...controls} onSettings={() => {}} />);
+    act(() => useTabs.getState().open({ id: "w6", title: "#125" }));
+    expect(screen.queryByText("Late body")).toBeNull();
+
+    let unregister = () => {};
+    act(() => {
+      unregister = registerTabBody("w6", () => <p>Late body</p>);
+    });
+    expect(screen.getByText("Late body")).toBeTruthy();
+
+    act(() => unregister());
+    expect(screen.queryByText("Late body")).toBeNull();
   });
 });
