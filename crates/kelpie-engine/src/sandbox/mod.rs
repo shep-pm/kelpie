@@ -2,8 +2,9 @@
 //!
 //! Every agent session kelpie starts runs inside crabpot (shep-pm/crabpot), the
 //! PM and its workers alike. [`Sandbox::start`] builds the session's
-//! [`policy`] and starts crabpot's sandbox from it, and [`Sandbox::command`]
-//! wraps the harness's command into one that runs inside it. The process tree
+//! [`policy`] (a worker's is [`worker::policy`], through [`Sandbox::start_worker`])
+//! and starts crabpot's sandbox from it, and [`Sandbox::command`] wraps the
+//! harness's command into one that runs inside it. The process tree
 //! spawns the wrapped command as it spawns anything else, so the run's mark
 //! reaches it and the sweep finds it (ADR 0001). A project whose folder is the
 //! home folder or a folder above it, by name or through a link, is refused at
@@ -54,8 +55,10 @@ use crate::tools::Door;
 
 pub mod fence;
 mod policy;
+pub mod worker;
 
 pub use policy::{Project, Reads, denied, policy, policy_with_door};
+pub use worker::Worker;
 
 /// Takes over the process when crabpot ran it again as its helper
 ///
@@ -184,6 +187,27 @@ impl Sandbox {
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
+        let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
+        Ok(Self { inner })
+    }
+
+    /// Start the sandbox of a worker on `harness`, in `project`
+    ///
+    /// Makes the worker's state folder when it is missing, since the sandbox may
+    /// write there, in its worktree and in its clone's git dir, and nowhere else.
+    /// See [`worker::policy`] for what the worker may reach.
+    ///
+    /// # Errors
+    ///
+    /// [`SandboxError`]: the settings are refused, the state folder cannot be made,
+    /// or crabpot cannot start.
+    pub fn start_worker(
+        harness: &Harness,
+        project: &Project<'_>,
+        worker: &Worker<'_>,
+    ) -> Result<Self, SandboxError> {
+        let config = worker::policy(harness, project, worker).map_err(SandboxError::Policy)?;
+        fs::create_dir_all(worker.state_dir).map_err(SandboxError::StateDir)?;
         let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
         Ok(Self { inner })
     }
