@@ -3,8 +3,11 @@
 //! A slot bounds a worker's turns. A worker takes one when it starts and gives
 //! it back while it is Paused, waiting on the maintainer, or ended (SK ADR
 //! 0007), so an unanswered ask never stalls the project. A worker that gave one
-//! back waits in line for a freed slot, ahead of any worker not started yet, so
-//! no turn runs past the project's cap.
+//! back waits in line for a freed slot, ahead of any worker not started yet.
+//! Where the cap has come down, the newest holders give their slots back and
+//! wait for it to rise again, so no worker holds a slot past the cap. A turn
+//! already running is never interrupted: [`seat`] bounds which workers may start
+//! the next one.
 
 use super::Worker;
 
@@ -24,7 +27,8 @@ pub enum Seat {
 /// Give each worker in `workers` its seat under `max`, oldest first
 ///
 /// `workers` is in the order the project started them, which is the order freed
-/// slots go out in. A worker holding a slot keeps it while it needs one.
+/// slots go out in. A worker holding a slot keeps it while it needs one, and
+/// where `max` has come down since, the newest holders give theirs back.
 /// Returns whether any seat changed.
 pub fn seat(workers: &mut [Worker], max: usize) -> bool {
     let was: Vec<Seat> = workers.iter().map(|worker| worker.seat).collect();
@@ -37,14 +41,23 @@ pub fn seat(workers: &mut [Worker], max: usize) -> bool {
             Seat::Waiting
         };
     }
-    let held = workers
+    let mut held = workers
         .iter()
         .filter(|worker| worker.seat == Seat::Held)
         .count();
+    for worker in workers.iter_mut().rev() {
+        if held <= max {
+            break;
+        }
+        if worker.seat == Seat::Held {
+            worker.seat = Seat::Waiting;
+            held -= 1;
+        }
+    }
     for worker in workers
         .iter_mut()
         .filter(|worker| worker.seat == Seat::Waiting)
-        .take(max.saturating_sub(held))
+        .take(max - held)
     {
         worker.seat = Seat::Held;
     }
@@ -119,6 +132,31 @@ mod tests {
             seats(&workers),
             [Seat::Held, Seat::Held, Seat::Waiting],
             "the resumed worker takes the freed slot ahead of the newer one"
+        );
+    }
+
+    #[test]
+    fn a_lowered_cap_takes_slots_back_from_the_newest_workers() {
+        let mut workers = [
+            Worker::new(Status::Running),
+            Worker::new(Status::Running),
+            Worker::new(Status::Running),
+        ];
+        assert!(seat(&mut workers, 3), "three slots for three workers");
+        assert_eq!(seats(&workers), [Seat::Held; 3]);
+
+        assert!(seat(&mut workers, 1), "the maintainer lowered the cap");
+        assert_eq!(
+            seats(&workers),
+            [Seat::Held, Seat::Waiting, Seat::Waiting],
+            "the newest holders give their slots back, and the oldest keeps its own"
+        );
+
+        assert!(seat(&mut workers, 0), "the cap goes to none at all");
+        assert_eq!(
+            seats(&workers),
+            [Seat::Waiting, Seat::Waiting, Seat::Waiting],
+            "no worker holds a slot past the cap"
         );
     }
 
