@@ -37,6 +37,136 @@
       }
     },
     {
+      "id": "goose",
+      "name": "goose",
+      "version": "1.2.0",
+      "description": "An agent run with a subcommand, as the live index's goose entry does",
+      "distribution": {
+        "binary": {
+          "darwin-aarch64": {
+            "archive": "{{base}}/goose.zip",
+            "args": ["acp"],
+            "cmd": "./goose",
+            "env": { "GOOSE_PROVIDER": "ollama" },
+            "sha256": "98d56cc7d5a8860a7775040a612a89966c53d6a192157931c9a98736a82719e9"
+          },
+          "darwin-x86_64": {
+            "archive": "{{base}}/goose.zip",
+            "args": ["acp"],
+            "cmd": "./goose",
+            "env": { "GOOSE_PROVIDER": "ollama" },
+            "sha256": "98d56cc7d5a8860a7775040a612a89966c53d6a192157931c9a98736a82719e9"
+          },
+          "linux-aarch64": {
+            "archive": "{{base}}/goose.tar.gz",
+            "args": ["acp"],
+            "cmd": "./goose",
+            "env": { "GOOSE_PROVIDER": "ollama" },
+            "sha256": "f9bdbda588ed2882ff6dcd03762f2396ce1a09e27c1e0ba3a22d309a540def78"
+          },
+          "linux-x86_64": {
+            "archive": "{{base}}/goose.tar.gz",
+            "args": ["acp"],
+            "cmd": "./goose",
+            "env": { "GOOSE_PROVIDER": "ollama" },
+            "sha256": "f9bdbda588ed2882ff6dcd03762f2396ce1a09e27c1e0ba3a22d309a540def78"
+          },
+          "windows-x86_64": {
+            "archive": "{{base}}/goose.zip",
+            "args": ["acp"],
+            "cmd": "./goose.exe",
+            "env": { "GOOSE_PROVIDER": "ollama" },
+            "sha256": "98d56cc7d5a8860a7775040a612a89966c53d6a192157931c9a98736a82719e9"
+          }
+        }
+      }
+    },
+    {
+      "id": "malformed-args",
+      "name": "Args that are not a list",
+      "version": "9.9.9",
+      "description": "An entry kelpie leaves out, with an archive for every platform kelpie ships on",
+      "distribution": {
+        "binary": {
+          "darwin-aarch64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": "acp",
+            "cmd": "./claude-code-acp",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "darwin-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": "acp",
+            "cmd": "./claude-code-acp",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "linux-aarch64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "args": "acp",
+            "cmd": "./claude-code-acp",
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "linux-x86_64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "args": "acp",
+            "cmd": "./claude-code-acp",
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "windows-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": "acp",
+            "cmd": "./claude-code-acp.exe",
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          }
+        }
+      }
+    },
+    {
+      "id": "malformed-env",
+      "name": "Env that is not a map",
+      "version": "9.9.9",
+      "description": "An entry kelpie leaves out, with an archive for every platform kelpie ships on",
+      "distribution": {
+        "binary": {
+          "darwin-aarch64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": ["acp"],
+            "cmd": "./claude-code-acp",
+            "env": ["GOOSE_PROVIDER"],
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "darwin-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": ["acp"],
+            "cmd": "./claude-code-acp",
+            "env": ["GOOSE_PROVIDER"],
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          },
+          "linux-aarch64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "args": ["acp"],
+            "cmd": "./claude-code-acp",
+            "env": ["GOOSE_PROVIDER"],
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "linux-x86_64": {
+            "archive": "{{base}}/bridge.tar.gz",
+            "args": ["acp"],
+            "cmd": "./claude-code-acp",
+            "env": ["GOOSE_PROVIDER"],
+            "sha256": "364290bc6e2a2aaac37854865a3c1dc640a7501b76daa5df17bbf26ad22ac308"
+          },
+          "windows-x86_64": {
+            "archive": "{{base}}/bridge.zip",
+            "args": ["acp"],
+            "cmd": "./claude-code-acp.exe",
+            "env": ["GOOSE_PROVIDER"],
+            "sha256": "9aec198a0f98faee45ba0607e5040f93bf3b43355908af32dc2583b1271d70f2"
+          }
+        }
+      }
+    },
+    {
       "id": "codex-acp",
       "name": "Codex CLI",
       "version": "2.6.0",
