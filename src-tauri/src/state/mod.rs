@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use kelpie_engine::bridge::{self, CheckOutcome, Pin};
+use kelpie_engine::bridge::{self, CheckOutcome, Pin, Versions};
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
@@ -27,6 +27,7 @@ use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::pm::{self, PmPlan};
@@ -239,6 +240,9 @@ pub struct Opening<'a> {
     /// Where the person's harness logins are kept
     pub logins: &'a Store,
 
+    /// The folder settings are read from, which says how each bridge is updated
+    pub config: &'a ConfigDir,
+
     /// What the PM runs on, resolved from the settings when this send began
     pub pm: &'a PmPlan,
 }
@@ -260,6 +264,12 @@ pub struct Ran {
     pub model: Option<String>,
 }
 
+/// The PM session the app holds open, with what it was opened on
+///
+/// `None` until the first send. Held only for a look or a swap, never while the
+/// opener runs.
+type Held = Arc<Mutex<Option<(Ran, Arc<Session>)>>>;
+
 /// What Tauri manages: the process tree, the projects and the PM's session
 pub struct AppState {
     data_dir: PathBuf,
@@ -268,8 +278,9 @@ pub struct AppState {
     config: ConfigDir,
     projects: Arc<Mutex<Projects>>,
     /// The first project's PM and the harness it was opened on, `None` until
-    /// the first send. Held only for a look or a swap, never while the opener runs.
-    session: Mutex<Option<(Ran, Arc<Session>)>>,
+    /// the first send. Shared with the bridge checks, which prune what no
+    /// session runs on.
+    session: Held,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -333,7 +344,7 @@ impl AppState {
             logins,
             config,
             projects: Arc::new(Mutex::new(projects)),
-            session: Mutex::new(None),
+            session: Arc::new(Mutex::new(None)),
             opening: Mutex::new(()),
             opener,
             picker,
@@ -355,19 +366,36 @@ impl AppState {
         let (stop, quit) = mpsc::channel();
         *held = Some(stop);
         let (data_dir, config, tree) = (self.data_dir.clone(), self.config.clone(), self.tree());
-        let check = move |pin: &Pin<'_>| {
-            let policy = Settings::load_global(&config)
-                .map_err(|error| error.to_string())?
-                .bridge_updates_for(pin.id);
-            Ok(bridge::check(
-                &data_dir,
-                &tree,
-                pin,
-                policy,
-                claude::REQUIRES,
-            ))
+        let check = {
+            let data_dir = data_dir.clone();
+            move |pin: &Pin<'_>| {
+                let policy = Settings::load_global(&config)
+                    .map_err(|error| error.to_string())?
+                    .bridge_updates_for(pin.id);
+                Ok(bridge::check(
+                    &data_dir,
+                    &tree,
+                    pin,
+                    policy,
+                    claude::REQUIRES,
+                ))
+            }
         };
-        let data_dir = self.data_dir.clone();
+        let prune = {
+            let data_dir = data_dir.clone();
+            let sessions = Arc::clone(&self.session);
+            move |pin: &Pin<'_>| {
+                // A version a session is still running on is never removed
+                let running: Vec<Version> = lock(&sessions)
+                    .iter()
+                    .filter_map(|(_, session)| session.bridge_version())
+                    .collect();
+                let versions = Versions::load(&data_dir, pin).map_err(|error| error.to_string())?;
+                versions
+                    .prune(&data_dir, pin, &running)
+                    .map_err(|error| error.to_string())
+            }
+        };
         thread::spawn(move || {
             run_bridge_checks(
                 &[claude::pin()],
@@ -375,6 +403,7 @@ impl AppState {
                 BRIDGE_CHECK_EVERY,
                 &quit,
                 &check,
+                &prune,
             );
         });
     }
@@ -519,6 +548,7 @@ impl AppState {
             project: &on,
             state_dir: &state_dir,
             logins: &self.logins,
+            config: &self.config,
             pm: &plan,
         })?
         .with_log(log.clone());
@@ -619,16 +649,18 @@ impl AppState {
     }
 }
 
-/// Check each installed bridge in `pins`, then wait `every` and do it again
+/// Check each installed bridge in `pins`, prune what nothing needs, then wait
+/// `every` and do it again
 ///
 /// Ends when `quit`'s sender is dropped, whether it is waiting or about to check.
-/// A failed check is logged and the next one runs on schedule.
+/// A failed check or prune is logged and the next one runs on schedule.
 fn run_bridge_checks(
     pins: &[&Pin<'_>],
     data_dir: &Path,
     every: Duration,
     quit: &Receiver<()>,
     check: &dyn Fn(&Pin<'_>) -> Result<CheckOutcome, String>,
+    prune: &dyn Fn(&Pin<'_>) -> Result<(), String>,
 ) {
     loop {
         for pin in pins {
@@ -655,6 +687,9 @@ fn run_bridge_checks(
                     eprintln!("kelpie: {} {version} is held back: {reason}", pin.id);
                 }
                 Ok(_) => {}
+            }
+            if let Err(reason) = prune(pin) {
+                eprintln!("kelpie: could not prune {} versions: {reason}", pin.id);
             }
         }
         if !matches!(quit.recv_timeout(every), Err(RecvTimeoutError::Timeout)) {

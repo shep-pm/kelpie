@@ -20,14 +20,19 @@
 //! [`SessionEvent::Failed`], like a failure mid-turn.
 
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
-use kelpie_engine::bridge;
+use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
-use kelpie_engine::session::log;
-use kelpie_engine::session::{Choice, LogEntry, Session, SessionEvent};
-use kelpie_engine::settings::{ConfigDir, Harness, Settings};
+use kelpie_engine::login::Store;
+use kelpie_engine::session::{
+    Bridge, Choice, LogEntry, Session, SessionEvent, Started, launcher, log,
+};
+use kelpie_engine::settings::{BridgeUpdates, ConfigDir, Harness, Settings};
+use kelpie_engine::tree::ProcessTree;
+use semver::Version;
 use tauri::State;
 use tauri::ipc::Channel;
 
@@ -179,7 +184,9 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 
 /// The app's [`Opener`](crate::state::Opener): the PM on what `opening.pm` says
 ///
-/// Installs the bridge if it is not yet, and builds the session on it.
+/// Installs the bridge if it is not yet, and builds the session on it, so the
+/// harness is built from the version [`Versions::current`] names at each send
+/// rather than from kelpie's pinned path.
 ///
 /// # Errors
 ///
@@ -193,29 +200,136 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         state_dir,
         logins,
         pm,
+        config,
     } = *opening;
     // parity: harness.pm
-    let harness = match pm.harness {
+    let session = match pm.harness {
         Harness::ClaudeCode => {
             fs::create_dir_all(state_dir)
                 .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
-            let bridge = bridge::ensure(data_dir, claude::pin()).map_err(|e| e.to_string())?;
-            claude::harness(bridge, state_dir, logins).map_err(|e| e.to_string())?
+            // kelpie's own pin is always there to fall back to
+            bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
+            Session::on_bridge(
+                claude_bridge(
+                    tree,
+                    data_dir,
+                    config,
+                    &project.id,
+                    state_dir,
+                    logins,
+                    &project.path,
+                ),
+                project.path.clone(),
+                project.pm_session.clone(),
+                pm.choice.clone(),
+            )
         }
         // `Harness` grows with each harness's slice, and none but Claude Code is built here
         other => return Err(format!("{other:?} is not wired to the PM yet")),
     };
-    let session = Session::new(
-        Arc::clone(tree),
-        harness,
-        project.path.clone(),
-        project.pm_session.clone(),
-        pm.choice.clone(),
-    );
     Ok(match &pm.instructions {
         Some(instructions) => session.with_instructions(instructions.clone()),
         None => session,
     })
+}
+
+/// The `claude-acp` bridge a PM session runs on, which it can move to a newer
+/// version of between turns
+///
+/// Every look at which version to run reads `versions.json` and the settings, so
+/// a newer version a bridge check installed and probed takes over at the
+/// session's next idle point, and a version that fails a session is marked bad
+/// there and the one before it is used again (`docs/design/bridge-updates.md`,
+/// Swapping).
+fn claude_bridge(
+    tree: &Arc<ProcessTree>,
+    data_dir: &Path,
+    config: &ConfigDir,
+    project_id: &str,
+    state_dir: &Path,
+    logins: &Store,
+    project: &Path,
+) -> Bridge {
+    let pin = claude::pin();
+    let (config, project_id, state_dir, project) = (
+        config.clone(),
+        project_id.to_owned(),
+        state_dir.to_path_buf(),
+        project.to_path_buf(),
+    );
+    let (logins, tree) = (logins.clone(), Arc::clone(tree));
+    // Each closure holds its own copy of the folder, since a closure owns what it captures
+    let (current_dir, start_dir, failed_dir) = (
+        data_dir.to_path_buf(),
+        data_dir.to_path_buf(),
+        data_dir.to_path_buf(),
+    );
+    Bridge {
+        id: claude::CMD.to_owned(),
+        current: Box::new(move || {
+            let mut now = versions(&current_dir, pin);
+            let before = now.clone();
+            let taken = now.current(policy(&config, &project_id, pin.id));
+            if now != before {
+                keep(&current_dir, pin.id, &now);
+            }
+            taken
+        }),
+        start: Box::new(move |version| {
+            let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
+                .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
+            let harness =
+                claude::harness(cmd, &state_dir, &logins).map_err(|error| error.to_string())?;
+            Ok(Started {
+                launch: launcher(Arc::clone(&tree), harness.clone(), project.clone()),
+                harness,
+            })
+        }),
+        failed: Box::new(move |version, reason| {
+            let mut versions = versions(&failed_dir, pin);
+            let back = versions.failed(version, reason);
+            keep(&failed_dir, pin.id, &versions);
+            back
+        }),
+    }
+}
+
+/// The bridge-updates policy for `bridge`, from the project's own settings
+///
+/// Settings that cannot be read leave the default, which is *Registry, automatic*.
+fn policy(config: &ConfigDir, project_id: &str, bridge: &str) -> BridgeUpdates {
+    Settings::load(config, project_id).map_or_else(
+        |error| {
+            eprintln!("kelpie: could not read the settings for {bridge}: {error}");
+            BridgeUpdates::default()
+        },
+        |settings| settings.bridge_updates_for(bridge),
+    )
+}
+
+/// The versions of `pin`'s bridge, or kelpie's own pin when its file cannot be read
+fn versions(data_dir: &Path, pin: &Pin<'_>) -> Versions {
+    Versions::load(data_dir, pin).unwrap_or_else(|error| {
+        eprintln!("kelpie: {error}");
+        Versions {
+            // A pin that will not parse is kelpie's own bug. 0.0.0 installs
+            // nothing, so the session says the version is missing rather than
+            // running some other binary.
+            in_use: Version::parse(pin.version).unwrap_or(Version::new(0, 0, 0)),
+            previous: None,
+            ready: None,
+            approved: None,
+            held_back: Vec::new(),
+            bad: Vec::new(),
+        }
+    })
+}
+
+/// Write `versions` back, saying so on stderr when it cannot be written
+fn keep(data_dir: &Path, id: &str, versions: &Versions) {
+    if let Err(error) = versions.save(data_dir, id) {
+        eprintln!("kelpie: {error}");
+    }
 }
 
 /// The folder of the project the maintainer picked, `None` before they pick one
