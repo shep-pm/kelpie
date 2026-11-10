@@ -201,9 +201,10 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
@@ -248,9 +249,10 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
