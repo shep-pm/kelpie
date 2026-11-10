@@ -29,8 +29,11 @@ serde.workspace = true
 serde-saphyr.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
+rmcp.workspace = true
 shep-tree.workspace = true
 sysinfo.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
 # The worktree reads made in this process instead of starting git
 gix.workspace = true
 
