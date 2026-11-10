@@ -2194,6 +2194,7 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

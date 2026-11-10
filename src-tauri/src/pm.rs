@@ -350,7 +350,7 @@ mod tests {
             }
             let config = ConfigDir::at(dir.join("config"));
             let state =
-                AppState::open(dir.clone(), config, Store::memory(), opener, picker).unwrap();
+                AppState::open(dir.clone(), config, Store::memory(), opener, picker, None).unwrap();
             let app = mock_builder()
                 .manage(state)
                 .build(mock_context(noop_assets()))
