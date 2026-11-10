@@ -13,6 +13,8 @@
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
 //! - Notes mid-turn and fork are not here yet.
+//! - [`options`] asks a harness what it offers, on a start that sends no prompt
+//!   and stops the harness again.
 //!
 //! # Quick start
 //!
@@ -50,11 +52,15 @@ use crate::tree::{Child, ProcessTree};
 mod acp;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
+pub mod options;
 mod raw;
 mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
 const EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a stopped harness's stderr is given to be read to its end
+const TAIL_SETTLE: Duration = Duration::from_millis(200);
 const EXIT_POLL: Duration = Duration::from_millis(10);
 
 /// What starts a harness's ACP agent
@@ -140,6 +146,94 @@ pub struct Choice {
     pub effort: Option<String>,
 }
 
+/// Why kelpie could not learn what a harness offers
+// kelpie-engine is a library: an out-of-tree match would break on a new variant
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SessionError {
+    /// The harness process could not be started
+    Start(io::Error),
+    /// The harness ended the connection before it listed its options, with what it left behind
+    Ended {
+        /// The harness's own end, as the tree and its stderr can say it
+        message: String,
+    },
+    /// The harness did not answer within the time kelpie waits, and was stopped
+    TimedOut {
+        /// How long kelpie waited
+        after: Duration,
+        /// How the harness ended once it was stopped, with what it last wrote
+        message: String,
+    },
+    /// The harness answered with an error instead of its options
+    Refused {
+        /// The error the harness answered with
+        message: String,
+    },
+    /// The harness id is not one file name, so no answer can be kept under it
+    Name {
+        /// The harness id kelpie was asked about
+        name: String,
+    },
+    /// The answer could not be written to the data folder
+    Cache {
+        /// The file kelpie could not write
+        path: PathBuf,
+        /// What the OS said
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start(error) => write!(f, "kelpie could not start the harness: {error}"),
+            Self::Ended { message } => {
+                write!(
+                    f,
+                    "the harness ended the connection before it answered: {message}"
+                )
+            }
+            Self::TimedOut { after, message } => {
+                write!(
+                    f,
+                    "the harness did not answer within {} s and was stopped",
+                    after.as_secs_f32().ceil()
+                )?;
+                if message.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, ": {message}")
+                }
+            }
+            Self::Refused { message } => {
+                write!(f, "the harness would not list its options: {message}")
+            }
+            Self::Name { name } => {
+                write!(
+                    f,
+                    "{name} is not a name kelpie can keep a harness's answers under"
+                )
+            }
+            Self::Cache { path, source } => {
+                write!(f, "kelpie could not read or write {path:?}: {source}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for SessionError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Start(error) | Self::Cache { source: error, .. } => Some(error),
+            Self::Ended { .. }
+            | Self::TimedOut { .. }
+            | Self::Refused { .. }
+            | Self::Name { .. } => None,
+        }
+    }
+}
+
 /// Where a turn's events go
 type Sink = Box<dyn FnMut(SessionEvent) + Send>;
 
@@ -156,6 +250,9 @@ pub(crate) struct Link {
     pub(crate) transport: DynConnectTo<Client>,
     /// What the harness left behind when it ended, if it can be known
     pub(crate) explain: Box<dyn FnMut() -> Option<String> + Send>,
+    /// Stop the harness for certain, waiting `grace` for it to exit on its own,
+    /// and say how it ended
+    pub(crate) stop: Box<dyn FnOnce(Duration) -> Option<String> + Send>,
 }
 
 /// How a session gets an agent to talk to
@@ -367,10 +464,42 @@ impl Launch for ProcessLauncher {
             blocking::Unblock::new(stdin),
             blocking::Unblock::new(stdout),
         );
+        // Both closures reach the same child: a session only asks how it ended,
+        // an ask only stops it
+        let ended = Arc::new(Mutex::new(Ended { child, tail }));
+        let shared = Arc::clone(&ended);
         Ok(Link {
             transport: DynConnectTo::new(transport),
-            explain: Box::new(move || explain_exit(&mut child, &tail)),
+            explain: Box::new(move || lock(&shared).explain()),
+            stop: Box::new(move |grace| lock(&ended).stop(grace)),
         })
+    }
+}
+
+/// The harness process kelpie started, and what it wrote to stderr
+struct Ended {
+    child: Child,
+    tail: stderr::Tail,
+}
+
+impl Ended {
+    /// How the harness ended, if it can be known
+    fn explain(&mut self) -> Option<String> {
+        explain_exit(&mut self.child, &self.tail)
+    }
+
+    /// Stop the harness's group, and say how it ended and what it last wrote
+    fn stop(&mut self, grace: Duration) -> Option<String> {
+        match self.child.stop(grace) {
+            Ok(status) => {
+                self.tail.settle(TAIL_SETTLE);
+                Some(with_stderr(
+                    format!("the harness exited with {status}"),
+                    &self.tail,
+                ))
+            }
+            Err(error) => Some(format!("kelpie could not stop the harness: {error}")),
+        }
     }
 }
 
@@ -388,16 +517,21 @@ fn explain_exit(child: &mut Child, tail: &stderr::Tail) -> Option<String> {
             Ok(None) | Err(_) => break None,
         }
     };
-    let lines = tail.lines();
-    let mut text = match status {
+    let text = match status {
         Some(status) => format!("the harness exited with {status}"),
         None => "the harness closed its output but is still running".to_owned(),
     };
+    Some(with_stderr(text, tail))
+}
+
+/// `text`, followed by the last of what the harness wrote to stderr, if it wrote any
+fn with_stderr(mut text: String, tail: &stderr::Tail) -> String {
+    let lines = tail.lines();
     if !lines.is_empty() {
         text.push_str("; it last wrote: ");
         text.push_str(&lines);
     }
-    Some(text)
+    text
 }
 
 #[cfg(test)]

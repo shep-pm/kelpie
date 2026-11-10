@@ -63,6 +63,21 @@ export const commands = {
 	 *  The text of why the keychain refused it.
 	 */
 	loginClear: (harness: string) => typedError<null, string>(__TAURI_INVOKE("login_clear", { harness })),
+	/**
+	 *  What `harness` offers: the models and efforts it lists for itself
+	 * 
+	 *  Kelpie asks a harness once and keeps its answer in the data folder, so
+	 *  opening the settings page starts nothing. `refresh` asks it again. The list
+	 *  is the harness's own, so kelpie names no model outside the default
+	 *  (`docs/design/settings.md`).
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why kelpie could not ask: the harness has no harness in kelpie
+	 *  yet, its bridge could not be installed, it has no login, it could not be
+	 *  started, or it did not answer.
+	 */
+	harnessOptions: (harness: string, refresh: boolean) => typedError<Options, string>(__TAURI_INVOKE("harness_options", { harness, refresh })),
 };
 
 /* Types */
@@ -72,6 +87,29 @@ export type CacheLifetime =
 "five_minutes" | 
 /**  One hour */
 "one_hour";
+
+/**  One model or effort a harness lists */
+export type Choice = {
+	/**  The value kelpie sends back to the harness to pick this one */
+	id: string,
+	/**  The label the harness gives it */
+	name: string,
+	/**  What the harness says about it, `None` when it says nothing */
+	description: string | null,
+};
+
+/**
+ *  What a harness says it offers, listed by the harness itself
+ * 
+ *  A harness names its own models and efforts, so kelpie holds no model list of
+ *  its own (ADR 0006). A harness that offers no effort leaves `efforts` empty.
+ */
+export type Options = {
+	/**  The models the harness lists, in the order it lists them */
+	models: Choice[],
+	/**  The efforts the harness lists, empty when it offers none */
+	efforts: Choice[],
+};
 
 /**  One thing a session did, in the order it happened */
 export type SessionEvent = 
