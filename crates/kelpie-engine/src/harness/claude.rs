@@ -20,12 +20,14 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use agent_client_protocol::v1::schema::ToolCallUpdate;
 use serde_json::json;
 
 use crate::bridge::{Capability, Download, Pin, Platform};
 use crate::session::{Extension, Harness, Outdated};
 
 use crate::login::Store;
+use crate::permission::{Call, ReadCall, read_acp};
 use crate::sandbox::fence::OwnFiles;
 
 use super::{HarnessError, install_folders, on_path};
@@ -74,6 +76,10 @@ const MODEL_HOST: &str = "api.anthropic.com";
 /// sandboxed session sets
 const UNPROMPTED: &str = "bypassPermissions";
 
+/// The bridge's `mode` that asks before each tool call, which a judged session
+/// sets so every call reaches the permission handler
+const PROMPTING: &str = "default";
+
 /// What the sandbox's fence keeps a worker from changing of Claude Code's, and
 /// from reading of its login
 pub const OWN_FILES: OwnFiles = OwnFiles {
@@ -85,6 +91,20 @@ pub const OWN_FILES: OwnFiles = OwnFiles {
     credentials: &["~/.claude/.credentials.json", "~/.claude.json"],
     program: CLAUDE,
 };
+
+/// The fields of Claude Code's tool input that name the file it writes: `Write`,
+/// `Edit` and `MultiEdit` take `file_path`, and `NotebookEdit` `notebook_path`
+const PATH_FIELDS: [&str; 2] = ["file_path", "notebook_path"];
+
+/// What a permission request's tool call does, in Claude Code's words
+///
+/// The bridge gives each file tool the kind edit and its input as `rawInput`,
+/// and `Bash` the kind execute with a `command`.
+#[must_use]
+pub fn read_call(tool_call: &ToolCallUpdate) -> Call {
+    // parity: harness.permission
+    read_acp(tool_call, &PATH_FIELDS)
+}
 
 /// The command that makes the login token
 const SETUP: &str = "claude setup-token";
@@ -229,6 +249,8 @@ pub(super) fn harness_on_path(
         hosts: vec![MODEL_HOST.to_owned()],
         installs,
         unprompted: Some(UNPROMPTED.to_owned()),
+        prompting: Some(PROMPTING.to_owned()),
+        read_call: ReadCall::new(read_call),
         outdated: Some(OUTDATED.clone()),
     })
 }

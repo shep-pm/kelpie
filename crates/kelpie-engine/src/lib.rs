@@ -52,6 +52,7 @@
 
 pub mod agents;
 pub mod bridge;
+pub mod confine;
 pub mod guard;
 pub mod harness;
 pub mod local_paths;
@@ -59,6 +60,7 @@ pub mod login;
 pub mod pacer;
 #[cfg(test)]
 mod parity;
+pub mod permission;
 pub mod run;
 pub mod sandbox;
 pub mod session;

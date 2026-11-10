@@ -97,6 +97,11 @@ pub enum SessionEvent {
         title: String,
         /// How far the call got
         status: ToolStatus,
+        /// Why kelpie refused the call, on a refused step
+        ///
+        /// Absent on every other step, and on a call refused with no reason given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// The turn is over
     TurnEnded {
@@ -258,8 +263,18 @@ mod tests {
                     id: "t1".to_owned(),
                     title: "Read".to_owned(),
                     status: ToolStatus::Refused,
+                    reason: None,
                 },
                 r#"{"kind":"tool_step","id":"t1","title":"Read","status":"refused"}"#,
+            ),
+            (
+                SessionEvent::ToolStep {
+                    id: "t2".to_owned(),
+                    title: "Write /etc/hosts".to_owned(),
+                    status: ToolStatus::Refused,
+                    reason: Some("outside the worktree".to_owned()),
+                },
+                r#"{"kind":"tool_step","id":"t2","title":"Write /etc/hosts","status":"refused","reason":"outside the worktree"}"#,
             ),
             (
                 SessionEvent::TurnEnded {

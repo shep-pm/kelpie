@@ -48,18 +48,20 @@ use agent_client_protocol::v1::schema::{
     AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,
     ContentChunk, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
     NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-    PromptResponse, ReadTextFileRequest, RequestPermissionRequest, ResumeSessionRequest,
-    ResumeSessionResponse, SessionCapabilities, SessionCloseCapabilities, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelectOption, SessionNotification,
-    SessionResumeCapabilities, SessionSystemPromptCapabilities, SessionUpdate,
+    PromptResponse, ReadTextFileRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionCloseCapabilities,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    SessionNotification, SessionResumeCapabilities, SessionSystemPromptCapabilities, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, Usage,
+    ToolCall, ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    Usage,
 };
 use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error, UntypedMessage};
 use futures::channel::oneshot;
 use futures::future::select;
 use serde::Serialize;
 
+use crate::permission::ReadCall;
 // Only the unix step uses them: a harness's command, and the run it carries
 #[cfg(unix)]
 use crate::run::{ENV, RunId};
@@ -101,6 +103,10 @@ enum Step {
     Permission {
         id: String,
         title: String,
+        /// What the call is, which a judge reads
+        kind: Option<ToolKind>,
+        locations: Vec<PathBuf>,
+        raw_input: Option<serde_json::Value>,
     },
     Extension {
         method: String,
@@ -200,6 +206,35 @@ impl Turn {
         self.steps.push(Step::Permission {
             id: id.to_owned(),
             title: title.to_owned(),
+            kind: None,
+            locations: Vec::new(),
+            raw_input: None,
+        });
+        self
+    }
+
+    /// As [`Turn::permission`], for a call that writes the file at `path`
+    #[must_use]
+    pub fn permission_to_write(mut self, id: &str, title: &str, path: &str) -> Self {
+        self.steps.push(Step::Permission {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            kind: Some(ToolKind::Edit),
+            locations: vec![PathBuf::from(path)],
+            raw_input: None,
+        });
+        self
+    }
+
+    /// As [`Turn::permission`], for a call that runs `command` in a shell
+    #[must_use]
+    pub fn permission_to_run(mut self, id: &str, title: &str, command: &str) -> Self {
+        self.steps.push(Step::Permission {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            kind: Some(ToolKind::Execute),
+            locations: Vec::new(),
+            raw_input: Some(serde_json::json!({ "command": command })),
         });
         self
     }
@@ -309,6 +344,8 @@ struct Script {
     /// The mode its harness names to stop its own prompts, and that it runs in
     /// a sandbox, as a sandboxed launcher says
     sandboxed: Option<String>,
+    /// The mode its harness names to ask before each tool call
+    prompting: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -462,6 +499,13 @@ impl FakeAgent {
         self
     }
 
+    /// Say its harness asks before each tool call when it is in `mode`
+    #[must_use]
+    pub fn prompting(mut self, mode: &str) -> Self {
+        self.script.prompting = Some(mode.to_owned());
+        self
+    }
+
     /// Say the harness this agent stands for is reported too old with `says`,
     /// and that `update` updates it, as a bridge's harness does
     #[must_use]
@@ -486,6 +530,8 @@ impl FakeAgent {
             hosts: Vec::new(),
             installs: Vec::new(),
             unprompted: self.script.sandboxed.clone(),
+            prompting: self.script.prompting.clone(),
+            read_call: ReadCall::standard(),
             outdated: self.script.outdated.clone(),
         }
     }
@@ -812,9 +858,20 @@ impl FakeAgent {
                 Step::ToolUpdate { id, status } => update(SessionUpdate::ToolCallUpdate(
                     ToolCallUpdate::new(id, ToolCallUpdateFields::new().status(status)),
                 ))?,
-                Step::Permission { id, title } => {
-                    let call =
-                        ToolCallUpdate::new(id.clone(), ToolCallUpdateFields::new().title(title));
+                Step::Permission {
+                    id,
+                    title,
+                    kind,
+                    locations,
+                    raw_input,
+                } => {
+                    let mut fields = ToolCallUpdateFields::new().title(title).kind(kind);
+                    if !locations.is_empty() {
+                        fields.locations =
+                            Some(locations.into_iter().map(ToolCallLocation::new).collect());
+                    }
+                    fields.raw_input = raw_input;
+                    let call = ToolCallUpdate::new(id.clone(), fields);
                     let options = vec![
                         PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
                         PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
@@ -828,9 +885,20 @@ impl FakeAgent {
                         .block_task()
                         .await?;
                     self.record("session/request_permission", &answer);
+                    // A call that was allowed runs, and one that was not fails
+                    let allowed = matches!(
+                        &answer.outcome,
+                        RequestPermissionOutcome::Selected(chosen)
+                            if chosen.option_id.0.as_ref() == "allow"
+                    );
+                    let status = if allowed {
+                        ToolCallStatus::Completed
+                    } else {
+                        ToolCallStatus::Failed
+                    };
                     update(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
                         id,
-                        ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+                        ToolCallUpdateFields::new().status(status),
                     )))?;
                 }
                 Step::Extension { method, params } => {
