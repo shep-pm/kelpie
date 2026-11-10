@@ -112,7 +112,7 @@ A worker cannot open kelpie's window inside its sandbox (`docs/lessons/2026-11-0
 | The board | Phase 3's dispatch calls the same start function |
 | Attention (`docs/design/ux.md`) | A Paused worker, a fence refusal or a sandbox request adds to the count |
 
-What it would duplicate: SK's runner, while SK still builds kelpie. Both building the same repo would race for the same tickets, so kelpie's workers run only on tickets SK does not hold until Phase 3 archives SK.
+What it would duplicate: nothing in practice. SK's runner builds kelpie until Phase 3, while kelpie's Phase 2 workers start only by hand, and the maintainer trials them on a project SK never touches.
 
 ## Open for the maintainer
 
@@ -120,6 +120,5 @@ What it would duplicate: SK's runner, while SK still builds kelpie. Both buildin
 2. **Default slot cap.** Recommended: 1 per project, SK's default (`concurrency.active_items`, `core/settings/ci.rs:119`), raised in the project's settings. kelpie-app runs SK with 4.
 3. **How `kelpie lease run` reaches kelpie from inside the sandbox.** Kelpie tools go over stdio MCP, but a lease must live exactly as long as the command it wraps. Recommended: a socket in the worker's state folder that the policy allows, one per session.
 4. **An ADR for "kelpie pushes, workers hold no credential"?** Recommended: yes, since a forge adapter built around it is hard to undo.
-5. **Which tickets kelpie's workers may take while SK runs.** Recommended: a per-project setting, off for kelpie's own repo until Phase 3.
 
 Terms to add to `GLOSSARY.md` once confirmed: Worktree, Slot, Lease, Note, Stop and tell.
