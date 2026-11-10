@@ -15,8 +15,10 @@
 //! Kelpie ships no harness and no login of its own (ADR 0006). Each slice points
 //! the harness at the person's own install and gives the session a config folder
 //! of kelpie's own, which keeps the person's global folder out until they turn
-//! it on. A harness that speaks ACP itself, such as goose, is run directly; one
-//! that does not is run through its bridge from the registry.
+//! it on, and each takes the resolved *Harness global folder* so that
+//! [`global::link`] can bring it in. A harness that speaks ACP itself, such as
+//! goose, is run directly; one that does not is run through its bridge from the
+//! registry.
 //!
 //! # Quick start
 //!
@@ -26,14 +28,16 @@
 //! use kelpie_engine::harness::{claude, goose};
 //! use kelpie_engine::login::Store;
 //!
-//! let harness = claude::harness("claude-agent-acp".into(), Path::new("pm"), &Store::keychain())?;
+//! let logins = Store::keychain();
+//! // `false`: the person has not let Claude Code read their own `~/.claude`
+//! let harness = claude::harness("claude-agent-acp".into(), Path::new("pm"), &logins, false)?;
 //! println!("run {}", harness.program.display());
 //!
 //! let ollama = goose::Provider {
 //!     name: "ollama".to_owned(),
 //!     host: None,
 //! };
-//! let local = goose::harness(Path::new("pm"), ollama)?;
+//! let local = goose::harness(Path::new("pm"), ollama, false)?;
 //! let acp = local.args.first().expect("goose is run with its subcommand");
 //! println!("or run {} {}", local.program.display(), acp.to_string_lossy());
 //! # Ok::<(), kelpie_engine::harness::HarnessError>(())
@@ -49,7 +53,10 @@ use std::path::{Path, PathBuf};
 use crate::login::LoginError;
 use crate::sandbox::fence::OwnFiles;
 
+use self::global::GlobalError;
+
 pub mod claude;
+pub mod global;
 pub mod goose;
 
 /// Each harness's own files, as each adapter supplies them to the sandbox's
@@ -98,6 +105,9 @@ pub enum HarnessError {
         /// The command the person runs to update the harness, such as `claude update`
         update: String,
     },
+
+    /// The session's config folder could not be linked to the person's global folder
+    Global(GlobalError),
 }
 
 impl fmt::Display for HarnessError {
@@ -115,6 +125,12 @@ impl fmt::Display for HarnessError {
                  {harness}'s login on kelpie's settings page."
             ),
             Self::Login(error) => write!(f, "kelpie could not read the login: {error}"),
+            Self::Global(error) => {
+                write!(
+                    f,
+                    "kelpie could not link the person's global config into the session: {error}"
+                )
+            }
             Self::TooOld {
                 harness,
                 bridge,
@@ -134,10 +150,17 @@ impl From<LoginError> for HarnessError {
     }
 }
 
+impl From<GlobalError> for HarnessError {
+    fn from(error: GlobalError) -> Self {
+        Self::Global(error)
+    }
+}
+
 impl core::error::Error for HarnessError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Login(error) => Some(error),
+            Self::Global(error) => Some(error),
             Self::NotInstalled { .. } | Self::NoLogin { .. } | Self::TooOld { .. } => None,
         }
     }

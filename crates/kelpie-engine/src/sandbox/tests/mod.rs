@@ -8,8 +8,12 @@ use crabpot::Config;
 use serde_json::json;
 
 use super::*;
+use crate::sandbox::policy::text;
 use crate::session::Harness;
 use crate::tools::Door;
+
+// The Harness global folder setting, in its own file to stay under the 1000-line cap
+mod global_folder;
 
 const PROJECT: &str = "/work/kelpie";
 const BESIDE: &str = "/work";

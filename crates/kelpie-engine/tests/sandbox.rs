@@ -36,6 +36,10 @@ use serde_json::{Value, json};
 #[path = "sandbox/escapes.rs"]
 mod escapes;
 
+// The Harness global folder setting, tried against a real sandbox, in its own file
+#[path = "sandbox/global_folder.rs"]
+mod global_folder;
+
 /// The argument that makes this binary the sandboxed process the sweep looks for
 const SLEEP: &str = "--sleep-in-the-sandbox";
 
@@ -61,6 +65,15 @@ fn main() {
         _ => {}
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|word| word == global_folder::IN_HOME)
+    {
+        let root = args
+            .get(1)
+            .expect("the scratch folder follows --in-the-persons-home");
+        std::process::exit(global_folder::in_the_persons_home(Path::new(root)));
+    }
     let selection = Selection::of(&args);
     let mut failed = false;
     let (mut ran, mut filtered) = (0_usize, 0_usize);
@@ -170,6 +183,10 @@ const TESTS: &[(&str, fn())] = &[
     (
         "a_real_read_outside_the_project_follows_the_setting",
         a_real_read_outside_the_project_follows_the_setting,
+    ),
+    (
+        "the_global_folder_is_read_only_when_on",
+        global_folder::the_global_folder_is_read_only_when_on,
     ),
     (
         "the_sweep_finds_a_sandboxed_process",
@@ -285,26 +302,25 @@ impl Scratch {
         self.root.join("outside")
     }
 
+    /// A folder of this scratch, made when it is asked for
+    fn folder(&self, name: &str) -> PathBuf {
+        let path = self.root.join(name);
+        fs::create_dir_all(&path).expect("the scratch folder is made");
+        path
+    }
+
     /// A sandbox for a session in the project that reads as `reads`, on `program`,
     /// with kelpie's tools `door` named in its policy when it has one
     fn sandbox(&self, program: &Path, reads: Reads, door: Option<&Door>) -> Sandbox {
-        let mut harness = Harness::new(program);
-        // The harness's own install is read, as a real one's is
-        harness.installs = program
-            .parent()
-            .map(Path::to_path_buf)
-            .into_iter()
-            .collect();
-        let (folder, state, sessions_root) = (self.project(), self.state(), self.sessions_root());
-        let allowlist: Vec<String> = Vec::new();
-        let project = Project {
-            folder: &folder,
-            network_allowlist: &allowlist,
+        sandbox_in(
+            program,
+            &self.project(),
+            &self.state(),
+            &self.sessions_root(),
             reads,
-            sessions_root: &sessions_root,
-        };
-        Sandbox::start_with_door(&harness, &project, &state, door)
-            .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
+            &[],
+            door,
+        )
     }
 }
 
@@ -312,6 +328,45 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+/// A sandbox for a session whose harness is `program`, working in `project`, keeping
+/// its files in `state` under `sessions_root`, reading as `reads`, reading
+/// `global_reads` of the person's own global folder, and reaching kelpie's tools
+/// `door` when it has one
+fn sandbox_in(
+    program: &Path,
+    project: &Path,
+    state: &Path,
+    sessions_root: &Path,
+    reads: Reads,
+    global_reads: &[PathBuf],
+    door: Option<&Door>,
+) -> Sandbox {
+    let harness = harness_in(program, global_reads);
+    let allowlist: Vec<String> = Vec::new();
+    let confined = Project {
+        folder: project,
+        network_allowlist: &allowlist,
+        reads,
+        sessions_root,
+    };
+    Sandbox::start_with_door(&harness, &confined, state, door)
+        .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
+}
+
+/// The harness of a test's session: `program`, whose own install the session reads,
+/// reading `global_reads` of the person's own global folder
+fn harness_in(program: &Path, global_reads: &[PathBuf]) -> Harness {
+    let mut harness = Harness::new(program);
+    // The harness's own install is read, as a real one's is
+    harness.installs = program
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect();
+    harness.global_reads = global_reads.to_vec();
+    harness
 }
 
 /// A folder under the home folder, removed when it drops
@@ -383,14 +438,20 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
     cfg!(target_os = "linux") && stderr.starts_with("bwrap:")
 }
 
-/// A sandbox for `program` that is known to run commands, or `None` when this
-/// host cannot run one at all.
+/// `sandbox`, once it is known to run commands, or `None` when this host cannot
+/// run one at all
 ///
 /// A refusal test that ran in a sandbox which never started would pass, as a
 /// command that did not run leaves no file and exits non-zero. So each test
 /// asks for a sandbox that has run a command first, and a host that cannot
 /// fails the test. `KELPIE_SKIP_SANDBOX_TESTS` skips it instead, shown as
 /// `SKIPPED`, for a host known not to run one.
+fn working(sandbox: Sandbox, test: &str) -> Option<Sandbox> {
+    host_can_run(test, &sh(&sandbox, "true")).then_some(sandbox)
+}
+
+/// [`working`], on a sandbox for a session in the scratch that reads as `reads`,
+/// whose harness is `program`
 fn working_sandbox(scratch: &Scratch, test: &str, program: &Path, reads: Reads) -> Option<Sandbox> {
     working_sandbox_with_door(scratch, test, program, reads, None)
 }
@@ -403,8 +464,7 @@ fn working_sandbox_with_door(
     reads: Reads,
     door: Option<&Door>,
 ) -> Option<Sandbox> {
-    let sandbox = scratch.sandbox(program, reads, door);
-    host_can_run(test, &sh(&sandbox, "true")).then_some(sandbox)
+    working(scratch.sandbox(program, reads, door), test)
 }
 
 /// Whether `probe`, `true` run in a sandbox, shows this host runs one

@@ -262,7 +262,10 @@ mod tests {
             |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&crashing, opening)) };
         let (sink, heard) = events();
         let mut short = rig.project(&binding, &open, 2);
-        short.turn_timeout = Duration::from_millis(400);
+        // Long enough that the worktree's preparation, which counts, is not
+        // what ends the turn
+        short.turn_timeout = Duration::from_secs(2);
+        let first_start = Instant::now();
         start(&short, &ticket("74", "Build the thing"), sink).unwrap();
         loop {
             let event = heard
@@ -292,7 +295,9 @@ mod tests {
         }
 
         // Well past the first turn's ceiling
-        std::thread::sleep(Duration::from_millis(900));
+        std::thread::sleep(
+            (first_start + Duration::from_millis(2500)).saturating_duration_since(Instant::now()),
+        );
 
         let records = kept(&rig);
         assert_eq!(

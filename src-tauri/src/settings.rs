@@ -103,7 +103,10 @@ pub fn harness_options(
     let bridge = bridge::ensure(data, claude::pin()).map_err(|error| error.to_string())?;
     let asked = data.join(ASKS_FOLDER).join(&harness);
     fs::create_dir_all(&asked).map_err(|error| error.to_string())?;
-    let harness = claude::harness(bridge, &asked, &logins).map_err(|error| error.to_string())?;
+    // The ask is kelpie's own, not a project's session: the person's global
+    // folder stays out of it (`harness-global-folder` is a project setting)
+    let harness =
+        claude::harness(bridge, &asked, &logins, false).map_err(|error| error.to_string())?;
     // The ask sends no prompt, but kelpie starts no harness outside a sandbox
     // (ADR 0005): it reads and writes its own `asked` folder, reaches no host,
     // and the sandbox drops when the ask returns. One that cannot start fails

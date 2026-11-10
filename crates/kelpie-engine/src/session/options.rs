@@ -36,7 +36,8 @@ use crate::sandbox::Sandbox;
 use crate::tree::ProcessTree;
 
 use super::acp::{describe, is_gone, new_session};
-use super::{Harness, Launch, Link, ProcessLauncher, SessionError};
+use super::launch::ProcessLauncher;
+use super::{Harness, Launch, Link, SessionError};
 
 /// The folder under the data dir that holds what each harness was last asked
 const OPTIONS_FOLDER: &str = "options";
