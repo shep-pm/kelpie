@@ -25,9 +25,18 @@ function ScrollAnchor() {
 
 function Turns() {
   const ids = useChat(useShallow((s) => s.turns.map((t) => t.id)));
+  const historyError = useChat((s) => s.historyError);
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-4">
+        {historyError && (
+          <p
+            role="alert"
+            className="rounded-md bg-status-failed-soft px-3 py-1.5 text-sm text-status-failed-fg"
+          >
+            {historyError}
+          </p>
+        )}
         {ids.map((id) => (
           <Turn key={id} id={id} />
         ))}
@@ -120,6 +129,11 @@ export function ChatBox() {
       live = false;
     };
   }, []);
+
+  // History is read once the project is known, before anything is sent.
+  useEffect(() => {
+    if (project) void useChat.getState().load();
+  }, [project]);
 
   if (project === undefined) return <main className="h-screen" />;
   if (project === null) {

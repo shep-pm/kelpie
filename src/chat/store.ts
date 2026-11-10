@@ -2,6 +2,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
   commands,
+  type LogEntry,
   type SessionEvent,
   type ToolStatus,
   type Usage,
@@ -9,7 +10,13 @@ import {
 
 export type Step = { id: string; title: string; status: ToolStatus };
 
-export type TurnState = "running" | "done" | "failed" | "cancelled";
+/** `interrupted`: the log has the message and no end, because kelpie quit mid-turn. */
+export type TurnState =
+  | "running"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
 
 export type Turn = {
   id: number;
@@ -23,8 +30,17 @@ export type Turn = {
 
 type Chat = {
   turns: Turn[];
+  /** Why the history could not be read, `null` when it could. */
+  historyError: string | null;
+  /**
+   * Read the PM's history from kelpie's log, once. Every call returns the same
+   * load, and `send` waits for it, so history always comes before a new turn.
+   */
+  load: () => Promise<void>;
   /** Send `text` to the PM. Does nothing while a turn runs. */
   send: (text: string) => Promise<void>;
+  /** Send the interrupted last message again, in place of the interrupted turn. */
+  retry: () => Promise<void>;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
   /** Forget every turn. For tests. */
@@ -75,27 +91,54 @@ function apply(turn: Turn, event: SessionEvent): Turn {
 
 let nextId = 1;
 
-export const useChat = create<Chat>()((set, get) => ({
-  turns: [],
+function begin(user: string): Turn {
+  return {
+    id: nextId++,
+    user,
+    reply: "",
+    steps: [],
+    usage: null,
+    state: "running",
+  };
+}
 
-  async send(text) {
-    if (get().turns.some((turn) => turn.state === "running")) return;
-    const id = nextId++;
-    const turn: Turn = {
-      id,
-      user: text,
-      reply: "",
-      steps: [],
-      usage: null,
-      state: "running",
-    };
+/**
+ * Fold a log into turns: a user entry starts one, the events after it fill it
+ * in. A turn the log never ends was cut off, so it is `interrupted`, and a turn
+ * the maintainer retried shows once, as the retry.
+ */
+export function fold(entries: LogEntry[]): Turn[] {
+  const turns: Turn[] = [];
+  for (const entry of entries) {
+    const last = turns.at(-1);
+    if (entry.entry === "user") {
+      if (last?.state === "running" && last.user === entry.text) turns.pop();
+      turns.push(begin(entry.text));
+    } else if (last) {
+      turns[turns.length - 1] = apply(last, entry);
+    }
+  }
+  return turns.map((turn) =>
+    turn.state === "running" ? { ...turn, state: "interrupted" } : turn,
+  );
+}
+
+let loading: Promise<void> | null = null;
+
+export const useChat = create<Chat>()((set, get) => {
+  /** Show `turn` as the last turn, and stream what `call` sends into it. */
+  async function run(
+    turn: Turn,
+    call: (channel: Channel<SessionEvent>) => Promise<void>,
+  ) {
+    const { id } = turn;
     set((s) => ({ turns: [...s.turns, turn] }));
 
     const channel = new Channel<SessionEvent>();
     channel.onmessage = (event) =>
       set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
     try {
-      await commands.pmSend(text, channel);
+      await call(channel);
     } catch (error) {
       set((s) => ({
         turns: patch(s.turns, id, (t) => ({
@@ -105,13 +148,50 @@ export const useChat = create<Chat>()((set, get) => ({
         })),
       }));
     }
-  },
+  }
 
-  async cancel() {
-    await commands.pmCancel();
-  },
+  return {
+    turns: [],
+    historyError: null,
 
-  reset() {
-    set({ turns: [] });
-  },
-}));
+    load() {
+      loading ??= (async () => {
+        try {
+          const history = await commands.pmHistory();
+          if (history.status === "error") {
+            set({ historyError: history.error });
+            return;
+          }
+          const past = fold(history.data);
+          set((s) => ({ turns: [...past, ...s.turns], historyError: null }));
+        } catch (error) {
+          set({ historyError: String(error) });
+        }
+      })();
+      return loading;
+    },
+
+    async send(text) {
+      await get().load();
+      if (get().turns.some((turn) => turn.state === "running")) return;
+      await run(begin(text), (channel) => commands.pmSend(text, channel));
+    },
+
+    async retry() {
+      await get().load();
+      const last = get().turns.at(-1);
+      if (last?.state !== "interrupted") return;
+      set((s) => ({ turns: s.turns.slice(0, -1) }));
+      await run(begin(last.user), (channel) => commands.pmRetry(channel));
+    },
+
+    async cancel() {
+      await commands.pmCancel();
+    },
+
+    reset() {
+      loading = null;
+      set({ turns: [], historyError: null });
+    },
+  };
+});
