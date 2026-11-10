@@ -441,3 +441,36 @@ fn a_redirect_or_a_rate_limit_is_told_from_a_refusal() {
         KELPIE_KOJI
     );
 }
+
+#[test]
+fn origin_of_reads_a_clones_origin_as_a_forge_slug() {
+    use crate::worktree::tests::{Dir, git, process_tree};
+
+    let dir = Dir::new("origin-of");
+    let tree = process_tree(dir.path());
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "-b", "main"]);
+
+    assert_eq!(origin_of(&tree, &repo), None, "no remote names no repo");
+
+    git(
+        &repo,
+        &[
+            "config",
+            "remote.origin.url",
+            "https://example.com/shep-pm/koji.git",
+        ],
+    );
+    assert_eq!(origin_of(&tree, &repo), None, "a remote that is not GitHub");
+
+    git(
+        &repo,
+        &[
+            "config",
+            "remote.origin.url",
+            "git@github.com:shep-pm/koji.git",
+        ],
+    );
+    assert_eq!(origin_of(&tree, &repo), Some(slug("shep-pm/koji")));
+}
