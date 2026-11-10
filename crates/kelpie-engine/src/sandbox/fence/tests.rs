@@ -397,6 +397,20 @@ fn a_link_or_a_new_exec_bit_differs() {
     assert_eq!(w.differ(None), [SETTINGS]);
 }
 
+// Git records 100755 when the owner's execute bit is set, and no other bit counts
+#[cfg(unix)]
+#[test]
+fn only_the_owners_execute_bit_makes_a_file_executable_as_git_sees_it() {
+    let w = World::new();
+    let path = w.wt().join(SETTINGS);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o654)).unwrap();
+    assert_eq!(w.differ(None), Vec::<String>::new(), "group execute only");
+    assert!(matches_main(&w.tree, &w.repo(), &w.wt(), "main"));
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o744)).unwrap();
+    assert_eq!(w.differ(None), [SETTINGS], "owner execute");
+}
+
 #[test]
 fn a_path_on_disk_is_spelled_with_slashes_as_git_spells_it() {
     let nested = Path::new(".claude").join("hooks").join("a.sh");

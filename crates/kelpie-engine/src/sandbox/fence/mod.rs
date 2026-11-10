@@ -401,10 +401,11 @@ fn git_path(relative: &Path) -> String {
     parts.join("/")
 }
 
-// Whether a file on disk is executable, as git records it.
+// Whether a file on disk is executable, as git records it: git reads the
+// owner's execute bit alone, so a group or other bit leaves the mode 100644.
 #[cfg(unix)]
 fn executable_bit(meta: &fs::Metadata) -> Option<bool> {
-    Some(meta.permissions().mode() & 0o111 != 0)
+    Some(meta.permissions().mode() & 0o100 != 0)
 }
 
 // Windows keeps no executable bit on a file, and git there sets
