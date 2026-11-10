@@ -34,6 +34,10 @@ pub fn loose_head(own: &Path, common: &Path) -> Option<String> {
     }
 }
 
+// The refs git keeps in each worktree's own git dir, so the common dir holds
+// another worktree's answer for them.
+const PER_WORKTREE: [&str; 3] = ["refs/bisect/", "refs/worktree/", "refs/rewritten/"];
+
 // What the regular file at `path` holds, none for a link or a file that is not there.
 fn file_text(path: &Path) -> Option<String> {
     if !std::fs::symlink_metadata(path).ok()?.is_file() {
@@ -52,8 +56,12 @@ fn full_id(text: &str) -> Option<String> {
 
 /// The commit a worktree's `full_ref` names in `repo`, from its loose file in
 /// the common dir its branches and remote-tracking refs are kept in, none
-/// where there is no such file or the common dir is one git must name
+/// where there is no such file, the ref is one git keeps in each worktree's
+/// own git dir, or the common dir is one git must name
 pub fn loose_commit_in(repo: &Path, full_ref: &str) -> Option<String> {
+    if PER_WORKTREE.iter().any(|own| full_ref.starts_with(own)) {
+        return None;
+    }
     loose_commit(&in_process::common_dir(repo)?, full_ref)
 }
 
@@ -75,11 +83,26 @@ pub fn commit_of(tree: &ProcessTree, repo: &Path, full_ref: &str) -> Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worktree::tests::{Dir, git, process_tree};
+    use crate::worktree::tests::{Dir, git, git_code, process_tree};
 
     fn repo() -> (Dir, String) {
         let dir = Dir::new("loose");
         git(dir.path(), &["init", "--quiet", "-b", "main"]);
+        git(
+            dir.path(),
+            &["commit", "--quiet", "--allow-empty", "-m", "first"],
+        );
+        let head = git(dir.path(), &["rev-parse", "HEAD"]);
+        (dir, head)
+    }
+
+    // A repo gix cannot read, so a ref read there has to come from git.
+    fn sha256_repo() -> (Dir, String) {
+        let dir = Dir::new("loose-sha256");
+        git(
+            dir.path(),
+            &["init", "--quiet", "-b", "main", "--object-format=sha256"],
+        );
         git(
             dir.path(),
             &["commit", "--quiet", "--allow-empty", "-m", "first"],
@@ -157,5 +180,85 @@ mod tests {
 
         assert_eq!(loose_commit_in(dir.path(), "refs/../outside"), None);
         assert_eq!(loose_commit_in(dir.path(), "HEAD"), None);
+    }
+
+    #[test]
+    fn a_ref_git_keeps_in_each_worktrees_own_dir_is_left_to_git() {
+        let (dir, head) = repo();
+        let linked = dir.path().join("linked");
+        git(
+            dir.path(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                linked.to_str().unwrap(),
+            ],
+        );
+        git(dir.path(), &["update-ref", "refs/bisect/bad", &head]);
+
+        // git reads the linked worktree's own ref, which it does not have.
+        assert_eq!(
+            git_code(
+                &linked,
+                &["rev-parse", "--verify", "--quiet", "refs/bisect/bad"]
+            ),
+            Some(1),
+            "git answers for its own worktree"
+        );
+        for name in [
+            "refs/bisect/bad",
+            "refs/worktree/keep",
+            "refs/rewritten/main",
+        ] {
+            assert_eq!(loose_commit_in(&linked, name), None, "{name}");
+            assert_eq!(loose_commit_in(dir.path(), name), None, "{name}");
+        }
+        assert_eq!(loose_commit_in(dir.path(), "refs/heads/main"), Some(head));
+    }
+
+    #[test]
+    fn a_git_dir_left_in_kelpies_own_environment_is_not_read() {
+        let (dir, head) = sha256_repo();
+        let (other, other_head) = repo();
+        assert_ne!(head, other_head);
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "worktree::loose::tests::child_reads_a_ref_with_a_foreign_git_dir",
+                "--nocapture",
+            ])
+            .env(CHILD_REPO, dir.path())
+            .env("GIT_DIR", other.path().join(".git"))
+            .env("GIT_WORK_TREE", other.path())
+            .env("GIT_COMMON_DIR", other.path().join(".git"))
+            .env("GIT_NAMESPACE", "ns")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(stdout.contains(&format!("child read {head}")), "{stdout}");
+        assert!(
+            !stdout.contains(&other_head),
+            "git read the other repo: {stdout}"
+        );
+    }
+
+    // The repo a child reads with another repo's git dirs in its environment.
+    const CHILD_REPO: &str = "KELPIE_LOOSE_CHILD_REPO";
+
+    // Run by `a_git_dir_left_in_kelpies_own_environment_is_not_read` in a process
+    // of its own, and a no-op anywhere else.
+    #[test]
+    fn child_reads_a_ref_with_a_foreign_git_dir() {
+        let Some(repo) = std::env::var_os(CHILD_REPO) else {
+            return;
+        };
+        let repo = Path::new(&repo);
+        let tree = process_tree(repo);
+        let read = crate::worktree::commit_of(&tree, repo, "refs/heads/main");
+        println!("child read {}", read.expect("git answers the ref"));
     }
 }

@@ -53,13 +53,36 @@ impl fmt::Display for WorktreeError {
 
 impl core::error::Error for WorktreeError {}
 
+/// The variables that choose which repo a git call reads, which git dirs and
+/// objects it uses, what namespace its refs sit in and which config it reads
+const GIT_ENV: [&str; 11] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_COUNT",
+];
+
 /// `git -C cwd`, waiting its turn for a ref another git holds
 ///
 /// The open tickets' worktrees share one repo's refs, and their calls run at
 /// once, so a ref or `packed-refs` lock one git holds makes another wait for it
 /// rather than fail at once.
+///
+/// `cwd` is the only thing that says which repo git reads: kelpie's own
+/// environment is stripped of [`GIT_ENV`], which a shell or a hook could leave
+/// pointing at another repo, and which the in-process reads already ignore.
 fn in_repo(cwd: &Path) -> Command {
     let mut git = Command::new("git");
+    for name in GIT_ENV {
+        git.env_remove(name);
+    }
     git.args(["-c", "core.filesRefLockTimeout=2000"])
         .args(["-c", "core.packedRefsTimeout=5000"])
         .arg("-C")
