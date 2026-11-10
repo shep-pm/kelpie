@@ -3,6 +3,7 @@ import type { RJSFSchema, UiSchema } from "@rjsf/utils";
 import validator from "@rjsf/validator-ajv8";
 import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentsTab } from "@/agents/AgentsTab";
 import type { FieldView, Target, Value } from "@/bindings";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -251,12 +252,16 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
             <TabsList>
               <TabsTrigger value="global">Global</TabsTrigger>
               <TabsTrigger value="project">Project</TabsTrigger>
+              <TabsTrigger value="agents">Agents</TabsTrigger>
             </TabsList>
             <TabsContent value="global">
               <Fields tab="global" />
             </TabsContent>
             <TabsContent value="project">
               <Fields tab="project" />
+            </TabsContent>
+            <TabsContent value="agents">
+              <AgentsTab />
             </TabsContent>
           </Tabs>
         </div>
