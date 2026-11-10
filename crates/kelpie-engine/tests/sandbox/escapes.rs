@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::Ordering;
 
-use kelpie_engine::sandbox::{Project, Sandbox};
+use kelpie_engine::sandbox::{Project, Reads, Sandbox};
 use kelpie_engine::session::Harness;
 
 use super::{SKIPPED, host_can_run};
@@ -49,8 +49,9 @@ const LOGINS: [&str; 4] = [
 ];
 
 /// The folders of a PM's world, in the home folder, which the sandbox closes: a
-/// project and a sibling repo that the PM reads, a state folder it writes,
-/// another repo that it reads none of, and the logins of Claude Code and goose
+/// project and a sibling repo that the PM reads, the state folder it writes
+/// under the folder holding every session's state, another repo that it reads
+/// none of, and the logins of Claude Code and goose
 ///
 /// The policy reads the project and the folders beside it with `~` denied under
 /// them, so the world is the home folder itself, which [`in_own_home`] makes.
@@ -64,7 +65,7 @@ impl World {
         for folder in [
             "work/kelpie/src",
             "work/sibling/src",
-            "state",
+            "projects/pm",
             "other-repo/src",
             "other-repo/.git",
         ] {
@@ -74,7 +75,7 @@ impl World {
         let files = [
             ("work/kelpie/src/lib.rs", "the project's own\n"),
             ("work/sibling/src/lib.rs", "a sibling's own\n"),
-            ("state/notes.md", "the PM's own\n"),
+            ("projects/pm/notes.md", "the PM's own\n"),
             ("other-repo/.env", "SECRET=1\n"),
             ("other-repo/src/lib.rs", "private work\n"),
             ("other-repo/.git/config", "[remote]\n"),
@@ -98,8 +99,14 @@ impl World {
         self.path("work/kelpie")
     }
 
+    /// The folder holding every session's state, as kelpie's data folder holds
+    /// one per session
+    fn sessions_root(&self) -> PathBuf {
+        self.path("projects")
+    }
+
     fn state(&self) -> PathBuf {
-        self.path("state")
+        self.sessions_root().join("pm")
     }
 
     fn harness() -> Harness {
@@ -112,9 +119,13 @@ impl World {
     /// The PM's sandbox, known to run commands, or `None` on a host that cannot
     /// run one (`KELPIE_SKIP_SANDBOX_TESTS`)
     fn sandbox(&self, test: &str) -> Option<Sandbox> {
-        let folder = self.project();
-        let sandbox = Sandbox::start(&Self::harness(), &project_in(&folder), &self.state())
-            .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"));
+        let (folder, sessions_root, state) = (self.project(), self.sessions_root(), self.state());
+        let sandbox = Sandbox::start(
+            &Self::harness(),
+            &project_in(&folder, &sessions_root),
+            &state,
+        )
+        .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"));
         host_can_run(test, &self.run(&sandbox, "true")).then_some(sandbox)
     }
 
@@ -186,12 +197,14 @@ impl World {
 /// What every login of the world holds
 const SECRET: &str = "kelpie-escapes-secret\n";
 
-/// A project in `folder`, with the PM's own settings
-fn project_in(folder: &Path) -> Project<'_> {
+/// A project in `folder`, with the PM's own settings: reads closed to the
+/// project, and `sessions_root` holding every session's state
+fn project_in<'a>(folder: &'a Path, sessions_root: &'a Path) -> Project<'a> {
     Project {
         folder,
         network_allowlist: &[],
-        read_anywhere: false,
+        reads: Reads::Project,
+        sessions_root,
     }
 }
 
@@ -319,7 +332,7 @@ fn the_pm_reads() {
     for (path, text) in [
         ("work/kelpie/src/lib.rs", "the project's own\n"),
         ("work/sibling/src/lib.rs", "a sibling's own\n"),
-        ("state/notes.md", "the PM's own\n"),
+        ("projects/pm/notes.md", "the PM's own\n"),
     ] {
         let out = world.run(&sandbox, &format!("cat {}", world.path(path).display()));
         assert_eq!(
@@ -420,10 +433,13 @@ fn a_listed_socket() {
     let world = World::new();
     let socket = world.project().join("s.sock");
     let _listener = UnixListener::bind(&socket).unwrap();
-    let folder = world.project();
-    let mut config =
-        kelpie_engine::sandbox::policy(&World::harness(), &project_in(&folder), &world.state())
-            .expect("the policy is built");
+    let (folder, state, sessions_root) = (world.project(), world.state(), world.sessions_root());
+    let mut config = kelpie_engine::sandbox::policy(
+        &World::harness(),
+        &project_in(&folder, &sessions_root),
+        &state,
+    )
+    .expect("the policy is built");
     let listed = vec![socket.display().to_string()];
     config.network.allow_unix_sockets = Some(listed.clone());
     assert_eq!(

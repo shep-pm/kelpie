@@ -25,7 +25,9 @@ use serde_json::json;
 
 use self::toolchain::{Env, ProcessEnv, cargo_credentials, toolchain_homes};
 use super::fence;
-use super::policy::{KEYCHAIN_SERVICES, Project, denied, home, hosts, reads, text};
+use super::policy::{
+    KEYCHAIN_SERVICES, Project, Reads, TOOL_LOGS, denied, home, hosts, reads, text,
+};
 use crate::session::Harness;
 use crate::tools::Door;
 
@@ -109,20 +111,24 @@ fn compose(
     // are named with it: `SECRETS` spells the default home alone, and `CARGO_HOME`
     // may point anywhere the maintainer keeps it.
     let tools = home.map_or_else(Vec::new, |home| toolchain_homes(home, env));
-    // Kelpie's data folder holds every project's state and settings, so it is
-    // closed whatever the project reads, and the home folder with it unless the
-    // project reads anywhere. What the worker works in is allowed back below.
-    let closed_home = home.filter(|_| !project.read_anywhere);
+    let closed = project.reads == Reads::Project;
+    // Kelpie's data folder holds every project's state and settings, and the
+    // sessions' folder every session's login, so both are closed whatever the
+    // project reads, and the home folder with them unless the project reads
+    // anywhere. What the worker works in is allowed back below.
+    let closed_home = home.filter(|_| closed);
     let mut deny_read: Vec<String> = denied()
         .into_iter()
         .chain(SK_FILES)
         .map(str::to_owned)
         .chain(cargo_credentials(&tools))
         .chain(home_denials(
-            closed_home.into_iter().chain([worker.kelpie_home]),
+            closed_home
+                .into_iter()
+                .chain([worker.kelpie_home, project.sessions_root]),
         ))
         .collect();
-    if !project.read_anywhere && home.is_none() {
+    if closed && home.is_none() {
         // crabpot refuses `~` where no home folder is set, rather than leave it open
         deny_read.push("~".to_owned());
     }
@@ -130,10 +136,8 @@ fn compose(
         .into_iter()
         .map(text)
         .collect();
-    if project.read_anywhere {
-        allow_read.push(text(worker.state_dir));
-    } else {
-        allow_read.extend(reads(harness, project, worker.state_dir));
+    allow_read.extend(reads(harness, project, worker.state_dir));
+    if closed {
         allow_read.extend(env::current_exe().ok().map(|kelpie| text(&kelpie)));
         allow_read.extend(tools.iter().map(|tool| text(tool)));
     }
@@ -150,6 +154,8 @@ fn compose(
                 .iter()
                 .map(|path| text(path)),
         )
+        // crabpot makes two tools' log folders writable under a home it does not close
+        .chain(TOOL_LOGS.iter().map(|path| (*path).to_owned()))
         .collect();
 
     let mut hosts = hosts(harness, project);

@@ -12,6 +12,7 @@ const GIT_DIR: &str = "/data/kelpie/worktrees/74.git";
 const COMMON_DIR: &str = "/work/kelpie/.git";
 const STATE: &str = "/data/kelpie/state/74";
 const KELPIE_HOME: &str = "/data/kelpie";
+const SESSIONS: &str = "/data/kelpie/projects";
 const LEASE_ADDRESS: &str = "127.0.0.1:41998";
 
 /// A harness whose model answers on `hosts`
@@ -25,7 +26,12 @@ fn project<'a>(allowlist: &'a [String], read_anywhere: bool) -> Project<'a> {
     Project {
         folder: Path::new(PROJECT),
         network_allowlist: allowlist,
-        read_anywhere,
+        reads: if read_anywhere {
+            Reads::Anywhere
+        } else {
+            Reads::Project
+        },
+        sessions_root: Path::new(SESSIONS),
     }
 }
 
