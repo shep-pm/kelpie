@@ -44,9 +44,9 @@ Kelpie's engine and chat see one stream of harness-neutral events, shaped after 
 What the interface carries, with each harness saying which it supports in ACP's capabilities:
 
 - send a message, and stream the reply as text, tool steps and an end of turn
-- a note while a turn runs, and an interrupt. A harness that cannot take a note mid-turn holds it until the turn ends, and the chat says so
+- an interrupt, and after Phase 1 a note while a turn runs. A harness that cannot take a note mid-turn holds it until the turn ends, and the chat says so
 - resume a saved session after its process stopped
-- fork a session, for threads later
+- fork a session, after Phase 1, for threads
 - pick model and effort
 - usage per turn, including what the prompt cache read and wrote
 
@@ -83,7 +83,7 @@ The PM is an agent file: a built-in `kelpie:pm`, which the maintainer extends in
 
 ### Threads
 
-Not in Phase 1. One fork is tested by hand, and its footer shows what a fork costs, which decides whether threads are forks or start from a brief (`ux.md`, The PM and threads). Threads arrive with the board, since most are tied to a ticket.
+Not in Phase 1. Before threads are built, one fork is tested by hand, and its footer shows what a fork costs, which decides whether threads are forks or start from a brief (`ux.md`, The PM and threads). Threads arrive with the board, since most are tied to a ticket.
 
 ## Synergy
 

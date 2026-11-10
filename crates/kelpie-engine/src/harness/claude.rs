@@ -14,9 +14,8 @@
 //! between the one-hour and the five-minute prompt cache, which ACP's own usage
 //! counts do not (`docs/acp.md`, Checked by hand).
 
-use std::env::{self, consts::EXE_SUFFIX};
+use std::env;
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -27,7 +26,7 @@ use crate::session::{Extension, Harness};
 
 use crate::login::Store;
 
-use super::HarnessError;
+use super::{HarnessError, on_path};
 
 /// The registry id of the bridge kelpie installs
 const ID: &str = "claude-acp";
@@ -167,34 +166,4 @@ pub(super) fn harness_on_path(
         new_session_meta: Some(json!({ "claudeCode": { "emitRawSDKMessages": true } })),
         extensions: vec![Extension::ClaudeSdkMessage],
     })
-}
-
-/// The first `cmd` on the `PATH` text `path`, as an absolute path
-fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
-    let name = format!("{cmd}{EXE_SUFFIX}");
-    env::split_paths(path).find_map(|dir| {
-        let found = dir.join(&name);
-        is_program(&found).then(|| std::path::absolute(&found).unwrap_or(found))
-    })
-}
-
-/// Whether `path` is a file this OS can run
-fn is_program(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    metadata.is_file() && runnable(&metadata)
-}
-
-/// Whether the OS says a file may be run
-#[cfg(unix)]
-fn runnable(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    metadata.permissions().mode() & 0o111 != 0
-}
-
-/// Windows runs a file by its extension, which `name` already carries
-#[cfg(not(unix))]
-fn runnable(_metadata: &fs::Metadata) -> bool {
-    true
 }

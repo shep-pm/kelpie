@@ -10,8 +10,14 @@ describe("the app window", () => {
     expect(handles).toHaveLength(1);
   });
 
-  it("shows the Kelpie heading", async () => {
-    await expect($("h1")).toHaveText("Kelpie");
+  it("shows the PM's chat box", async () => {
+    // A fresh data folder has no project yet, so the box offers the picker;
+    // one that has a project offers the composer.
+    await browser.waitUntil(
+      async () =>
+        (await $("button=Pick a folder").isExisting()) ||
+        (await $("textarea").isExisting()),
+    );
   });
 
   it("saves a screenshot of the page", async () => {
