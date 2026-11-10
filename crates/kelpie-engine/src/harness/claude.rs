@@ -26,6 +26,7 @@ use crate::bridge::{Capability, Download, Pin, Platform};
 use crate::session::{Extension, Harness, Outdated};
 
 use crate::login::Store;
+use crate::sandbox::fence::OwnFiles;
 
 use super::{HarnessError, install_folders, on_path};
 
@@ -72,6 +73,18 @@ const MODEL_HOST: &str = "api.anthropic.com";
 /// The bridge's `mode` that stops Claude Code's own permission prompts, which a
 /// sandboxed session sets
 const UNPROMPTED: &str = "bypassPermissions";
+
+/// What the sandbox's fence keeps a worker from changing of Claude Code's, and
+/// from reading of its login
+pub const OWN_FILES: OwnFiles = OwnFiles {
+    harness: NAME,
+    folders: &[".claude"],
+    nested: &[],
+    root_files: &[".mcp.json"],
+    // Linux keeps the login in the file; `.claude.json` holds MCP servers' secrets
+    credentials: &["~/.claude/.credentials.json", "~/.claude.json"],
+    program: CLAUDE,
+};
 
 /// The command that makes the login token
 const SETUP: &str = "claude setup-token";

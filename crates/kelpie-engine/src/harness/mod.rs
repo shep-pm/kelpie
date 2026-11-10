@@ -7,6 +7,8 @@
 //! Each also says what a sandbox needs to know of it (ADR 0005): the hosts its
 //! model answers on, the folders its install is read from, and the mode that
 //! turns its own permission prompts off.
+//! Each also supplies the files of its own a worker may not change, which the
+//! sandbox's fence names ([`OWN_FILES`]).
 //! Nothing here starts a process: [`session`](crate::session) does that through
 //! the process tree (ADR 0001).
 //!
@@ -45,9 +47,17 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use crate::login::LoginError;
+use crate::sandbox::fence::OwnFiles;
 
 pub mod claude;
 pub mod goose;
+
+/// Each harness's own files, as each adapter supplies them to the sandbox's
+/// fence, which names the files a worker may not change
+///
+/// A harness with no adapter yet has its row in [`crate::sandbox::fence`]
+/// until it has one.
+pub const OWN_FILES: [OwnFiles; 2] = [claude::OWN_FILES, goose::OWN_FILES];
 
 /// Why a harness could not be built
 // kelpie-engine is a library: an out-of-tree match would break on a new variant
