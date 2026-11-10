@@ -53,6 +53,7 @@ use semver::Version;
 pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
 use crate::sandbox::Sandbox;
+use crate::tools::SessionTools;
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
@@ -480,6 +481,7 @@ struct Setup {
     /// What [`Session::choose`] last set, read before each turn
     wanted: Arc<Mutex<Choice>>,
     instructions: Option<String>,
+    tools: Option<SessionTools>,
     mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
@@ -515,6 +517,8 @@ pub struct Session {
     /// The choice the next message runs on, which [`Session::choose`] changes
     choice: Arc<Mutex<Choice>>,
     instructions: Option<String>,
+    /// The kelpie tools the session's harness is handed as an MCP server
+    tools: Option<SessionTools>,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
     log: Option<log::Log>,
@@ -630,6 +634,7 @@ impl Session {
             project,
             choice: Arc::new(Mutex::new(choice)),
             instructions: None,
+            tools: None,
             mode: None,
             log: None,
             seed: None,
@@ -657,6 +662,19 @@ impl Session {
     pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
         let instructions = instructions.into();
         self.instructions = (!instructions.trim().is_empty()).then_some(instructions);
+        self
+    }
+
+    /// Hand the harness kelpie's tools as an MCP server
+    ///
+    /// The server is `kelpie tools`, given as a stdio server in `mcpServers` on
+    /// `session/new`, `session/load` and `session/resume`, since stdio is the one
+    /// transport every ACP agent takes. Its environment carries the door and
+    /// the session's token. The tools end with the session: the token goes when
+    /// the session and its worker drop it. Call this before the first send.
+    #[must_use]
+    pub fn with_tools(mut self, tools: SessionTools) -> Self {
+        self.tools = Some(tools);
         self
     }
 
@@ -786,6 +804,7 @@ impl Session {
             choice: lock(&self.choice).clone(),
             wanted: Arc::clone(&self.choice),
             instructions: self.instructions.clone(),
+            tools: self.tools.clone(),
             mode: self.mode.clone(),
             log: self.log.clone(),
             seed: self.seed.clone(),

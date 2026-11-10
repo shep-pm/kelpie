@@ -12,6 +12,10 @@ fn main() {
     // Linux and Windows (ADR 0005), and a `main` that skipped this would run
     // there in place of the command.
     kelpie_engine::sandbox::run_from_args();
+    // Next, for the same reason: a harness starts this binary as `kelpie tools`,
+    // the relay that carries its MCP to kelpie, and that run must not open a
+    // window.
+    kelpie_engine::tools::run_from_args();
     if let Err(error) = kelpie_app::run() {
         sys::failure(&error.to_string());
         std::process::exit(1);
