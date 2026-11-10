@@ -57,6 +57,10 @@ mod relay;
 #[cfg(test)]
 mod tests;
 
+/// How long a harness has to start the conversation (`initialize`) once its
+/// relay is through, before kelpie lets the connection go
+const HELLO_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The name the server goes by in a harness's `mcpServers`
 pub const SERVER_NAME: &str = "kelpie";
 
@@ -71,13 +75,15 @@ impl fmt::Display for SessionKey {
 }
 
 /// What the door and the sessions share
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Shared {
     /// The live tokens, and whose each is
     live: Mutex<HashMap<String, Live>>,
     /// The sessions with a connection being served, one entry per connection
     connected: Mutex<Vec<SessionKey>>,
     next: AtomicU64,
+    /// How long a connection has to open the MCP conversation
+    hello_within: std::time::Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -129,8 +135,23 @@ impl Tools {
     /// platform has no door yet (Windows, ADR 0005).
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn start(data_dir: &Path) -> io::Result<Self> {
+        Self::start_within(data_dir, HELLO_WITHIN)
+    }
+
+    /// [`Tools::start`], letting a connection go when its harness has not opened
+    /// the MCP conversation within `hello_within`
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn start_within(
+        data_dir: &Path,
+        hello_within: std::time::Duration,
+    ) -> io::Result<Self> {
         let (open, listener) = door::open(data_dir)?;
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            live: Mutex::default(),
+            connected: Mutex::default(),
+            next: AtomicU64::new(0),
+            hello_within,
+        });
         let stop = CancellationToken::new();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
@@ -327,11 +348,15 @@ mod serve {
             key: live.key,
         };
         let ended = live.ended;
-        let Ok(running) = (Server { key: live.key })
-            .serve_with_ct((read, write), ended.child_token())
-            .await
-        else {
-            return;
+        // A harness that connects and never says hello holds nothing open: the
+        // handshake ends with the session's tools, and with its deadline
+        let hello = (Server { key: live.key }).serve_with_ct((read, write), ended.child_token());
+        let running = tokio::select! {
+            () = ended.cancelled() => return,
+            started = tokio::time::timeout(shared.hello_within, hello) => match started {
+                Ok(Ok(running)) => running,
+                _ => return,
+            },
         };
         tokio::select! {
             () = ended.cancelled() => {}

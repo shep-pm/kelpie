@@ -250,6 +250,46 @@ fn dropping_a_sessions_tools_ends_its_connection() {
 }
 
 #[test]
+fn a_session_dropped_before_its_harness_says_hello_is_no_longer_served() {
+    let scratch = Scratch::new();
+    let tools = started(&scratch);
+    let session = tools.session();
+    let key = session.key();
+    // The relay is connected with a live token, and its harness says nothing
+    let silent = relayed(session.door(), session.token());
+    until("the connection was never counted", || {
+        tools.connected() == [key]
+    });
+
+    drop(session);
+
+    until("a dropped session was still reported as served", || {
+        tools.connected().is_empty()
+    });
+    drop(silent);
+}
+
+#[test]
+fn a_harness_that_never_says_hello_is_let_go() {
+    let scratch = Scratch::new();
+    let tools = Tools::start_within(&scratch.0, Duration::from_millis(200)).unwrap();
+    let session = tools.session();
+    let silent = relayed(session.door(), session.token());
+    until("the connection was never counted", || {
+        !tools.connected().is_empty()
+    });
+
+    // Nothing is sent, and the session's tools stay live
+    until("a connection that never said hello was kept", || {
+        tools.connected().is_empty()
+    });
+
+    let ended = silent.ended;
+    until("the relay outlived the deadline", || ended.is_finished());
+    drop(session);
+}
+
+#[test]
 fn dropping_the_tools_closes_the_door() {
     let scratch = Scratch::new();
     let tools = started(&scratch);

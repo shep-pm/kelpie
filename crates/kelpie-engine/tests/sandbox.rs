@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use kelpie_engine::run::RunId;
 use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
-use kelpie_engine::tools::{self, DOOR_VAR, Door, TOKEN_VAR, Tools};
+use kelpie_engine::tools::{self, DOOR_VAR, Door, SessionKey, SessionTools, TOKEN_VAR, Tools};
 use kelpie_engine::tree::{ProcessTree, sweep_marked};
 use serde_json::{Value, json};
 
@@ -455,7 +455,17 @@ fn the_value_of_a_libtest_option_is_not_a_filter() {
 }
 
 /// The agent's end of an MCP conversation with the relay running in a sandbox
-fn mcp_through_the_sandbox(sandbox: &Sandbox, exe: &Path, door: &Door, token: &str) -> Vec<Value> {
+///
+/// Returns what the server said, and the sessions kelpie was serving while the
+/// relay was still up: once the relay is stopped its connection ends, so that
+/// is read before.
+fn mcp_through_the_sandbox(
+    sandbox: &Sandbox,
+    exe: &Path,
+    tools: &Tools,
+    session: &SessionTools,
+) -> (Vec<Value>, Vec<SessionKey>) {
+    let (door, token) = (session.door(), session.token());
     let mut relay = Command::new(exe);
     relay
         .arg("tools")
@@ -498,10 +508,11 @@ fn mcp_through_the_sandbox(sandbox: &Sandbox, exe: &Path, door: &Door, token: &s
     say(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     say(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
     let listed = hear();
+    let connected = tools.connected();
     drop(to_relay);
     let _ = child.kill();
     let _ = child.wait();
-    vec![initialized, listed]
+    (vec![initialized, listed], connected)
 }
 
 fn the_relay_reaches_kelpie_from_inside_the_sandbox() {
@@ -518,14 +529,14 @@ fn the_relay_reaches_kelpie_from_inside_the_sandbox() {
         return;
     };
 
-    let heard = mcp_through_the_sandbox(&sandbox, &exe, session.door(), session.token());
+    let (heard, connected) = mcp_through_the_sandbox(&sandbox, &exe, &tools, &session);
 
     assert_eq!(heard[0]["id"], 1, "{}", heard[0]);
     assert!(heard[0]["result"]["capabilities"]["tools"].is_object());
     assert_eq!(heard[1]["id"], 2);
     assert_eq!(heard[1]["result"]["tools"], json!([]), "{}", heard[1]);
     assert_eq!(
-        tools.connected(),
+        connected,
         [session.key()],
         "the connection is the session's, by its token"
     );

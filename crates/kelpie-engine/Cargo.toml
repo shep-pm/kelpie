@@ -45,7 +45,7 @@ flate2.workspace = true
 tar.workspace = true
 zip.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
 # These run a real command inside crabpot. On Linux crabpot runs the test's own
@@ -59,3 +59,5 @@ harness = false
 [dev-dependencies]
 # The parity check reads `docs/parity.toml`
 toml.workspace = true
+# The folders `worker_folder`'s tests build
+tempfile.workspace = true
