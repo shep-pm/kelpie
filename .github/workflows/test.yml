@@ -60,7 +60,8 @@ jobs:
   # refuses the namespace, AppArmor refuses the mounts, and Docker's masked
   # `/proc` refuses a fresh proc mount.
   test:
-    runs-on: [self-hosted]
+    # ARM64 only: those hosts are Ubuntu 22.04, and the x86 one is 24.04, whose AppArmor gives bwrap's user namespace no capabilities
+    runs-on: [self-hosted, ARM64]
     # No rust-cache here: it keys on the user that runs it, and the build is
     # the user's, not root's. So the build is cold, which the ceiling allows for.
     timeout-minutes: 45
