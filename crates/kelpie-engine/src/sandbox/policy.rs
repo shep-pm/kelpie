@@ -15,7 +15,10 @@
 //!   nothing else gets through: a host off the list is refused, not asked about.
 //!
 //! The logins and secrets are closed whatever else is read, and every
-//! harness's login is closed to every other harness's session (ADR 0006).
+//! harness's login is closed to every other harness's session (ADR 0006). A
+//! project whose folder is the home folder or a folder above it holds them all,
+//! so [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses it before the
+//! session starts.
 
 use std::collections::HashSet;
 use std::env;
@@ -185,11 +188,26 @@ pub fn policy(
     Config::from_json(&settings.to_string())
 }
 
+/// The project folder when it is the home folder or a folder above it
+///
+/// Such a folder holds the logins and secrets the policy denies under the home
+/// folder, so a sandbox over it would read them along with the project.
+/// [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses one before the
+/// session starts, and the guard in `reads` keeps any other allow off the home
+/// folder.
+#[must_use]
+pub fn holds_home(project: &Project<'_>) -> Option<PathBuf> {
+    home()
+        .filter(|home| home.starts_with(project.folder))
+        .map(|_| project.folder.to_path_buf())
+}
+
 /// The folders opened back inside what the session's reads close
 ///
 /// crabpot lands every allow after every deny, so a folder at or above a closed
 /// one would open what it hides: the logins under the home folder, or the state
-/// of every other session.
+/// of every other session. This is the second line: [`holds_home`] refuses the
+/// project folder itself when it holds the home folder.
 fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let closed = closed(project);
     let mut folders = vec![project.folder];

@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crabpot::Config;
@@ -207,28 +208,133 @@ fn every_other_sessions_state_stays_out_of_reach() {
     }
 }
 
-/// A project at the home folder is the one shape where an allow would open back
-/// the logins the policy denies under it
+/// The guard, which is the second line: no allow lands on the home folder
+///
+/// `Sandbox::start` refuses a project there outright, so what the guard has left
+/// to catch is every other folder an allow could name.
 #[test]
-fn a_project_at_the_home_folder_keeps_the_logins_under_it_closed() {
+fn no_allow_lands_on_the_home_folder() {
     let home = home();
     let text = home.to_string_lossy().into_owned();
+    let harness = installed(on(&[]), &[text.as_str()]);
+
+    let inside = home.join("kelpie");
 
     for reads in [Reads::Project, Reads::Anywhere] {
-        let project = Project {
+        // The project at the home folder, beside it at the home folder, and a
+        // harness installed there
+        let at_home = Project {
             folder: &home,
             network_allowlist: &[],
             reads,
             sessions_root: Path::new(SESSIONS),
         };
+        let beside_home = Project {
+            folder: &inside,
+            network_allowlist: &[],
+            reads,
+            sessions_root: Path::new(SESSIONS),
+        };
+        let installed_at_home = Project {
+            folder: Path::new(PROJECT),
+            network_allowlist: &[],
+            reads,
+            sessions_root: Path::new(SESSIONS),
+        };
 
-        let config = policy(&on(&[]), &project, Path::new(STATE)).unwrap();
+        for project in [&at_home, &beside_home, &installed_at_home] {
+            let config = policy(&harness, project, Path::new(STATE)).unwrap();
 
-        assert!(
-            !allows(&config, &text),
-            "the home folder is opened back with {reads:?}"
-        );
-        assert!(denies(&config, "~/.ssh/**"), "{reads:?}");
+            assert!(
+                !allows(&config, &text),
+                "the home folder is opened back with {reads:?}"
+            );
+            assert!(denies(&config, "~/.ssh/**"), "{reads:?}");
+        }
+    }
+}
+
+/// The folder holding the home folder, such as `/Users`
+fn above_home() -> PathBuf {
+    home()
+        .parent()
+        .expect("the OS puts the home folder in one")
+        .to_path_buf()
+}
+
+/// The topmost folder holding the home folder, which is `/` on macOS and Linux
+fn root_of_home() -> PathBuf {
+    let mut folder = home();
+    while let Some(parent) = folder.parent() {
+        folder = parent.to_path_buf();
+    }
+    folder
+}
+
+/// A session whose project folder is `wanted` is refused, naming it
+///
+/// Its state folder is under the machine's temp folder, so a refusal that came
+/// too late would leave it behind.
+fn refuses(name: &str, wanted: &Path, reads: Reads) {
+    let scratch = std::env::temp_dir()
+        .join("kelpie-sandbox-refused")
+        .join(name);
+    let _ = fs::remove_dir_all(&scratch);
+    let (sessions_root, state) = (scratch.join("projects"), scratch.join("projects/pm"));
+    let allowlist: Vec<String> = Vec::new();
+    let project = Project {
+        folder: wanted,
+        network_allowlist: &allowlist,
+        reads,
+        sessions_root: &sessions_root,
+    };
+
+    let error = Sandbox::start(&on(&[]), &project, &state)
+        .expect_err("a project that holds the home folder is refused");
+    let (wanted, message) = (wanted.to_string_lossy().into_owned(), error.to_string());
+
+    let SandboxError::ProjectAtHome { folder } = &error else {
+        panic!("the refusal is not the project folder's, with {reads:?}: {error}");
+    };
+    assert_eq!(folder.to_string_lossy(), wanted, "{reads:?}");
+    assert!(
+        message.contains(&wanted) && message.contains("move the project into a folder of its own"),
+        "the refusal names neither the folder nor what to do: {message}"
+    );
+    assert!(
+        !state.exists(),
+        "the state folder was made, so the session started with {reads:?}: {state:?}"
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn a_project_at_the_home_folder_is_refused() {
+    let home = home();
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses("at-home", &home, reads);
+    }
+}
+
+#[test]
+fn a_project_above_the_home_folder_is_refused() {
+    let above = above_home();
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses("above-home", &above, reads);
+    }
+}
+
+#[test]
+fn a_project_at_the_root_is_refused() {
+    let root = root_of_home();
+    if cfg!(unix) {
+        assert_eq!(root, PathBuf::from("/"), "the root the refusal names");
+    }
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses("at-root", &root, reads);
     }
 }
 
