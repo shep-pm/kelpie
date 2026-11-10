@@ -4,8 +4,9 @@
 //! (`docs/design/workers.md`). What kelpie decides about the set of them is
 //! here: a project runs at most its `worker-slots` of them at once, and one
 //! that is Paused or waiting on the maintainer gives its slot back (SK ADR
-//! 0007). The session, the worktree and the ticket come with the code that
-//! starts a worker.
+//! 0007). [`start()`] is the one function that begins a worker, for the Start
+//! button, the PM's `start_worker` and the board's dispatch alike, and
+//! [`record`] keeps what each one is doing, outside every folder it writes.
 //!
 //! # Quick start
 //!
@@ -25,14 +26,23 @@
 //! );
 //! ```
 
-pub mod slots;
+use serde::{Deserialize, Serialize};
 
+pub mod record;
+pub mod slots;
+pub mod start;
+
+pub use record::{Record, Records};
 pub use slots::{Seat, seat};
+pub use start::{Opening, Paths, Project, StartError, Started, Ticket, start};
+
+#[cfg(test)]
+mod tests;
 
 /// One of a project's workers, as the slots see it
 ///
-/// The session, the worktree and the ticket come with the code that starts a
-/// worker; these are the two facts the slot count reads.
+/// These are the two facts the slot count reads. [`Record`] carries them with
+/// the ticket, the branch and the session that go with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Worker {
     /// What it is doing
@@ -54,7 +64,10 @@ impl Worker {
 }
 
 /// What one of a project's workers is doing
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// wire format: `workers.json` holds these states
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // kelpie grows these states as its workers do
 pub enum Status {
     /// Its turn is running, or is next to start: it needs a slot
     Running,
