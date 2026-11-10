@@ -54,7 +54,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Login | Global | Per harness, in the keychain. The field says *set* or *not set* and never shows the value. For Claude Code it is pasted, beside the command that makes it (`claude setup-token`). Kelpie running that command itself waits for the drawer's terminal |
 | Reply style | Global, project | Kelpie's Concise-plus style by default (`ux.md`, item 4) |
 | Network allowlist | Project | Domains a sandbox request saved with *Allow for this project* (ADR 0005) |
-| Read anywhere by default | Project | Off (`ux.md`, Sandbox) |
+| Read anywhere by default | Project | Off (`ux.md`, Sandbox). On, it opens the whole file system and keeps every harness's login, every secret and every other session's state folder closed |
 | Harness global folder | Project | Off. Reads `~/.claude` or goose's own config when on (ADR 0006) |
 | Bridge updates | Global | Per bridge: *Registry, automatic* by default, *Registry, ask first*, or *Kelpie's pin* (`bridge-updates.md`) |
 | Lease capacity | Global | How many commands hold each lease at once, keyed by the lease's name, with `cargo-test` at 3. Each count is 1 to 64: a lease with no place can never be taken, and every command queued behind one waits forever. A lease no layer names holds one at a time. A lease is the machine's, so its capacity is one value for every project. The form has no row for the map yet, so the file is the way in (`workers.md`, Slots, pacing and leases) |
@@ -68,6 +68,8 @@ The editor: the frontmatter as the layered form, the body in an MDX editor (chel
 ### When a change applies
 
 From the next message, as `pm-chat.md` settles for switching. A model change keeps the session. A harness change starts a new one behind a divider.
+
+Read anywhere by default is the exception: it lands at the session's next start, a relaunch or a harness switch, since crabpot widens only the network lists of a sandbox that is already running.
 
 ## Synergy
 
