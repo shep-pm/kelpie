@@ -5,6 +5,8 @@
 //! idempotent, so a resumed worker finds the worktree it left. Kelpie's git
 //! reads of a worktree go through [`trusted`], which names the git dirs
 //! instead of finding them, since the worker can write its worktree's `.git`.
+//! [`remove`] takes a ticket's worktree, its clone's git dir, its branch and its
+//! build folder away, ending whatever still runs from the build folder first.
 //!
 //! `main` and `origin/main` in these docs are the project's base branch, which
 //! each function takes as `base`.
@@ -26,6 +28,7 @@ use std::time::SystemTime;
 
 use crate::tree::ProcessTree;
 
+mod cache;
 pub mod clone;
 mod common;
 mod in_process;
@@ -34,15 +37,19 @@ mod line_endings_tests;
 mod loose;
 mod remote;
 mod stale_lock;
+mod stray;
+mod writable;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
 // `is_ancestor` and `local_config` are public here, where SK keeps them to its
 // crate: their callers are outside this one.
+pub use cache::{Pruned, TurnMark, prune};
 pub use in_process::{TreeFile, blobs, is_ancestor, local_config, tree_files};
 pub use loose::{commit_of, loose_commit, loose_commit_in, loose_head};
 pub use remote::Remote;
+pub use writable::remove_tree;
 
 /// Where a new worktree's branch starts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,6 +373,152 @@ fn exit_zero_or_one<const N: usize>(
             stderr: String::from_utf8_lossy(&output.stderr).into(),
         }),
     }
+}
+
+/// Removes a ticket's worktree, its branch and its build folder
+///
+/// A clone's worktree and git dir are removed whole, a linked one through git.
+/// Whatever still runs from the build folder is ended before it is deleted.
+/// `remote` also deletes the branch on that [`Remote`]. Whatever is already
+/// gone, a branch the forge deleted first included, is skipped, so a removal
+/// cut short can run again.
+///
+/// # Errors
+///
+/// [`WorktreeError`] naming the git command or folder that failed.
+pub fn remove(
+    tree: &ProcessTree,
+    repo: &Path,
+    worktree: &Path,
+    branch: &str,
+    build: &Path,
+    remote: Option<&Remote>,
+) -> Result<(), WorktreeError> {
+    let git_dir = clone::git_dir_of(worktree);
+    if git_dir.exists() {
+        // The worktree goes first, so a removal cut short between the two
+        // still finds the git dir and takes it.
+        remove_tree_of(worktree)?;
+        remove_tree_of(&git_dir)?;
+    } else if worktree.exists() {
+        git(
+            tree,
+            repo,
+            [
+                "worktree".as_ref(),
+                "remove".as_ref(),
+                "--force".as_ref(),
+                worktree.as_os_str(),
+            ],
+        )?;
+    }
+    git(tree, repo, ["worktree", "prune"])?;
+    let full_ref = format!("refs/heads/{branch}");
+    if commit_of(tree, repo, &full_ref).is_ok() {
+        git(tree, repo, ["branch", "--quiet", "-D", branch])?;
+    }
+    if let Some(remote) = remote {
+        remote.delete(tree, repo, branch)?;
+    }
+    stray::end_running_from(tree, build);
+    remove_tree_of(build)
+}
+
+// Removes the tree at `path` when it is there.
+fn remove_tree_of(path: &Path) -> Result<(), WorktreeError> {
+    match writable::remove_tree(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(WorktreeError::Remove {
+            path: path.to_owned(),
+            kind: e.kind(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// The worktree other than `own` that has `branch` checked out, if one has:
+/// the project's checkout and a maintainer's own worktree included
+///
+/// # Errors
+///
+/// [`WorktreeError`] naming the git command that failed.
+pub fn holder_of(
+    tree: &ProcessTree,
+    repo: &Path,
+    branch: &str,
+    own: &Path,
+) -> Result<Option<PathBuf>, WorktreeError> {
+    let list = git(tree, repo, ["worktree", "list", "--porcelain"])?;
+    let (own, want) = (canonical(own), format!("refs/heads/{branch}"));
+    let mut at = None;
+    for line in list.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            at = Some(PathBuf::from(path));
+        } else if line.strip_prefix("branch ") == Some(want.as_str())
+            && let Some(path) = at.take().filter(|path| canonical(path) != own)
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether a ticket's branch or worktree holds work `origin/main` lacks: a
+/// commit on `branch` or at the worktree's head, or a file not committed
+///
+/// Fetches `origin/main` first. A branch or worktree that is not there holds
+/// none.
+///
+/// # Errors
+///
+/// [`WorktreeError`] naming the git command that failed.
+pub fn holds_work(
+    tree: &ProcessTree,
+    repo: &Path,
+    worktree: &Path,
+    branch: &str,
+    base: &str,
+) -> Result<bool, WorktreeError> {
+    git(tree, repo, ["fetch", "--quiet", "origin", base])?;
+    // Read from the checkout: a clone's own `origin/main` is the worker's.
+    let main = commit_of(tree, repo, &format!("refs/remotes/origin/{base}"))?;
+    let mut tips = Vec::new();
+    let full_ref = format!("refs/heads/{branch}");
+    // A git that cannot answer is an error, not a branch that is not there.
+    match loose_commit_in(repo, &full_ref) {
+        Some(tip) => tips.push(tip),
+        None if has_ref(tree, repo, &full_ref)? => tips.push(commit_of(tree, repo, &full_ref)?),
+        None => {}
+    }
+    if worktree.exists() {
+        if !uncommitted(tree, repo, worktree)?.is_empty() {
+            return Ok(true);
+        }
+        let in_worktree = trusted(tree, repo, worktree)?;
+        tips.push(in_worktree(&["rev-parse", "HEAD"])?);
+        tips.extend(in_worktree(&["rev-parse", "--verify", "--quiet", &full_ref]).ok());
+    }
+    // A worktree folder gone leaves the clone's git dir and its commits.
+    let left = if worktree.exists() {
+        None
+    } else {
+        clone::leftover(tree, repo, worktree, branch)?
+    };
+    tips.extend(left.clone());
+    if tips.is_empty() {
+        return Ok(false);
+    }
+    let behind = format!("^{main}");
+    let mut args = vec!["rev-list", "--count", behind.as_str()];
+    args.extend(tips.iter().map(String::as_str));
+    // A clone's commits are not in the checkout.
+    let count = if worktree.exists() {
+        trusted(tree, repo, worktree)?(&args)?
+    } else if left.is_some() {
+        clone::in_clone(tree, &clone::git_dir_of(worktree), &args)?
+    } else {
+        git(tree, repo, args)?
+    };
+    Ok(count != "0")
 }
 
 /// Where a pull request's head stands against `origin/main`, just fetched
