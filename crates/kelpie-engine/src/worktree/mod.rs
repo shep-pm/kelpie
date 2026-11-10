@@ -573,6 +573,11 @@ pub fn trust_git_of(
     worktree: &Path,
 ) -> Result<(), WorktreeError> {
     let (own, common) = git_dirs(tree, repo, worktree)?;
+    // The caller built `program` from kelpie's environment, which a hook could
+    // have left naming another index, object store or namespace.
+    for name in GIT_ENV {
+        program.env_remove(name);
+    }
     program
         .env_remove("GIT_CONFIG_PARAMETERS")
         .env("GIT_DIR", own)

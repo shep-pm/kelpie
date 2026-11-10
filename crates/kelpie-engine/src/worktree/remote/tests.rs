@@ -462,6 +462,65 @@ fn prepare_completes_a_clone_whose_checkout_never_ran() {
 }
 
 #[test]
+fn prepare_links_a_clone_whose_folder_was_made_and_never_linked() {
+    let rig = Rig::new();
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+    // What a kill inside `clone::link` leaves: an empty folder, no `.git`.
+    std::fs::remove_dir_all(rig.worktree()).unwrap();
+    std::fs::create_dir(rig.worktree()).unwrap();
+    std::fs::remove_file(clone::git_dir_of(&rig.worktree()).join("index")).unwrap();
+
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+
+    assert!(rig.worktree().join(".git").is_file());
+    assert_eq!(rig.at_worktree(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn prepare_starts_over_a_git_dir_cut_short_between_init_and_alternates() {
+    let rig = Rig::new();
+    // What a kill inside `clone::skeleton` leaves: `git init --bare` and no alternates.
+    git(
+        &rig.root,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            clone::git_dir_of(&rig.worktree()).to_str().unwrap(),
+        ],
+    );
+
+    rig.prepare("kelpie/7", Start::Main, &Remote::Origin);
+
+    assert_eq!(rig.at_worktree(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn prepare_refuses_a_git_dir_without_alternates_that_holds_a_ref() {
+    let rig = Rig::new();
+    let own = clone::git_dir_of(&rig.worktree());
+    git(
+        &rig.root,
+        &["init", "--quiet", "--bare", own.to_str().unwrap()],
+    );
+    std::fs::write(own.join("refs/heads/mine"), "0".repeat(40) + "\n").unwrap();
+
+    let err = prepare(
+        &rig.tree,
+        &rig.repo(),
+        &rig.worktree(),
+        "kelpie/7",
+        Start::Main,
+        "main",
+        &Remote::Origin,
+        &rig.build(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err, WorktreeError::Foreign(rig.worktree()));
+}
+
+#[test]
 fn prepare_refuses_a_clone_without_an_index_whose_folder_holds_files() {
     let rig = Rig::new();
     rig.prepare("kelpie/7", Start::Main, &Remote::Origin);

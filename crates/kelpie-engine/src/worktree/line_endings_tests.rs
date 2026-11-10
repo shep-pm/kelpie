@@ -92,3 +92,35 @@ fn a_program_given_the_trusted_git_runs_with_core_autocrlf_off_and_core_eol_lf()
     assert_eq!(config("core.autocrlf"), "false");
     assert_eq!(config("core.eol"), "lf");
 }
+
+#[test]
+fn a_program_given_the_trusted_git_loses_the_variables_that_pick_another_index_or_objects() {
+    let rig = Rig::new();
+    rig.prepared();
+
+    let mut program = std::process::Command::new("git");
+    for name in [
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        program.env(name, "/elsewhere");
+    }
+    trust_git_of(&rig.tree, &mut program, &rig.repo, &rig.worktree).unwrap();
+
+    let set: Vec<_> = program
+        .get_envs()
+        .filter(|(name, value)| name.to_string_lossy().starts_with("GIT_") && value.is_some())
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    for name in [
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        assert!(!set.iter().any(|set| set == name), "{name} is still set");
+    }
+    assert!(set.iter().any(|set| set == "GIT_DIR"));
+}

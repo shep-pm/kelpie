@@ -36,8 +36,15 @@ pub(super) fn dirs(
     if !own.join("HEAD").is_file() {
         return Ok(None);
     }
-    let borrowed = std::fs::read_to_string(own.join("objects/info/alternates"))
-        .map_err(|_| WorktreeError::Foreign(worktree.to_owned()))?;
+    let borrowed = match std::fs::read_to_string(own.join("objects/info/alternates")) {
+        Ok(borrowed) => borrowed,
+        // A kill between `git init` and the alternates leaves a git dir that
+        // holds nothing and has no worktree: `make` starts it over.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && half_made(&own, worktree) => {
+            return Ok(None);
+        }
+        Err(_) => return Err(WorktreeError::Foreign(worktree.to_owned())),
+    };
     let want = canonical(&common.join("objects"));
     let objects = own.join("objects");
     let mut lines = borrowed
@@ -50,6 +57,25 @@ pub(super) fn dirs(
     }
     let own = canonical(&own);
     Ok(Some((own.clone(), own)))
+}
+
+// A git dir `git init` made and `skeleton` never finished: no worktree folder,
+// no ref, no packed refs and no object of its own. Anything else at the path
+// is not kelpie's to start over.
+fn half_made(own: &Path, worktree: &Path) -> bool {
+    let empty =
+        |dir: &Path| std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none());
+    let no_objects = std::fs::read_dir(own.join("objects")).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .all(|entry| matches!(entry.file_name().to_str(), Some("info" | "pack")))
+    });
+    !worktree.exists()
+        && !own.join("packed-refs").exists()
+        && !own.join("index").exists()
+        && empty(&own.join("refs/heads"))
+        && empty(&own.join("refs/tags"))
+        && no_objects
 }
 
 /// The commit `refs/heads/<branch>` is at in the git dir `worktree` left behind, when it left one
@@ -127,6 +153,9 @@ pub(super) fn complete(
     if !only_the_link {
         return Err(WorktreeError::Foreign(worktree.to_owned()));
     }
+    // A kill between the folder and its link leaves the folder empty: git
+    // run in it would find no repo, or a parent's.
+    link(worktree, &git_dir_of(worktree))?;
     trusted(tree, repo, worktree)?(&["reset", "--quiet", "--hard", "HEAD"]).map(drop)
 }
 
