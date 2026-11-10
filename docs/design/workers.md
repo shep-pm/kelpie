@@ -2,7 +2,7 @@
 
 Phase 2's worker sessions (`docs/process-and-sk.md`, Order of work): an agent that builds one ticket in its own worktree, inside its own sandbox, while the maintainer watches and steers it from the same chat view the PM uses. It places itself in `docs/design/ux.md` (Workers, Sandbox, Attention) and lifts most of its parts from SK, row by row from `docs/lift-plan.md` (Phase 2). Terms are in `GLOSSARY.md`.
 
-**Status:** draft, with every question answered by the maintainer on 2026-11-09. Waiting on the maintainer to confirm it; no issue is filed from it until then.
+**Status:** confirmed by the maintainer on 2026-11-09.
 
 ## Use case
 
@@ -120,5 +120,3 @@ A worker cannot open kelpie's window inside its sandbox (`docs/lessons/2026-11-0
 | Attention (`docs/design/ux.md`) | A Paused worker, a fence refusal or a sandbox request adds to the count |
 
 What it would duplicate: nothing in practice. SK's runner builds kelpie until Phase 3, while the maintainer trials kelpie's Phase 2 workers on a project SK never touches.
-
-Terms to add to `GLOSSARY.md` once confirmed: Worktree, Slot, Lease, Note, Stop and tell.
