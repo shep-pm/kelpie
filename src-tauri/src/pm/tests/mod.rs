@@ -909,4 +909,36 @@ fn allow_for_this_project_saves_the_host() {
     assert_eq!(plan.network_allowlist, ["docs.rs"]);
 }
 
+#[test]
+fn a_project_answer_the_sandbox_could_not_take_says_so_and_saves_nothing() {
+    let network = FakeNetwork::gone();
+    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
+    let chat = Chat::with_tools(&agent, &network);
+    let events = chat.send("Fetch docs.rs");
+    let mut asked = chat.asking();
+
+    asked.ask("docs.rs", "to read the crate's docs").unwrap();
+    let (id, ..) = events.until_request();
+
+    assert_eq!(
+        pm_answer(chat.state(), id, SandboxAnswer::Project),
+        Err(
+            "docs.rs is not through this session's sandbox, so kelpie saved nothing for it"
+                .to_owned()
+        ),
+    );
+    assert_eq!(
+        asked.answered().unwrap().0,
+        "docs.rs was allowed, but the sandbox could not take it, so it is still refused"
+    );
+
+    let project = chat.state().project_id(None).unwrap();
+    let plan = plan(chat.state().config(), &project).unwrap();
+    assert!(
+        plan.network_allowlist.is_empty(),
+        "the project was not told"
+    );
+    assert!(network.allowed().is_empty(), "the sandbox took nothing");
+}
+
 mod plan;

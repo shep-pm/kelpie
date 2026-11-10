@@ -71,6 +71,33 @@ enum Reply {
     NotWidened,
 }
 
+/// What an answer did, which is what the maintainer is told back
+///
+/// [`SandboxOutcome::NotWidened`] is the case no one may gloss over: the
+/// maintainer said yes, the running sandbox could not take the host, and the
+/// agent was told it is still refused. Nothing was widened, so nothing should be
+/// saved for it either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxOutcome {
+    /// The host is through the running sandbox, for as long as it runs
+    Allowed {
+        /// The host the request asked for
+        host: String,
+    },
+
+    /// The maintainer turned it down, which changes nothing
+    Denied {
+        /// The host the maintainer turned down
+        host: String,
+    },
+
+    /// The maintainer allowed it, and the sandbox is gone or cannot list the host
+    NotWidened {
+        /// The host the sandbox could not take
+        host: String,
+    },
+}
+
 impl fmt::Debug for Asks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Asks")
@@ -101,31 +128,36 @@ impl Asks {
         self.state().turn = turn;
     }
 
-    /// Answer the request `id`, and give the host it asked for, `None` when none was waiting
+    /// Answer the request `id`, and say what it did, `None` when none was waiting
     ///
     /// `Once` and `Project` let its host through the sandbox first, so the agent
     /// can use it as soon as it hears. Saving a `Project` answer to the
-    /// project's allowlist is the app's part, and the host is what it saves.
-    pub(crate) fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<String> {
+    /// project's allowlist is the app's part, and it has a host to save only
+    /// when the sandbox took it ([`SandboxOutcome::Allowed`]).
+    pub(crate) fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<SandboxOutcome> {
         let mut state = self.state();
         let waiting = state.waiting.remove(id)?;
-        let widened = !matches!(answer, SandboxAnswer::Once | SandboxAnswer::Project)
-            || state
-                .reach
-                .as_ref()
-                .is_some_and(|reach| reach.allow(&waiting.host));
-        let reply = if widened {
-            if !matches!(answer, SandboxAnswer::Deny) {
-                state.granted.push(waiting.host.clone());
+        let host = waiting.host.clone();
+        let outcome = match answer {
+            SandboxAnswer::Deny => SandboxOutcome::Denied { host },
+            // `Once` and `Project`, and anything a later `SandboxAnswer` adds
+            _ => {
+                if state.reach.as_ref().is_some_and(|reach| reach.allow(&host)) {
+                    state.granted.push(host.clone());
+                    SandboxOutcome::Allowed { host }
+                } else {
+                    SandboxOutcome::NotWidened { host }
+                }
             }
-            Reply::Answered(answer)
-        } else {
-            Reply::NotWidened
+        };
+        let reply = match outcome {
+            SandboxOutcome::NotWidened { .. } => Reply::NotWidened,
+            _ => Reply::Answered(answer),
         };
         drop(state);
         // The agent gave up on the call in the meantime, which no one hears of
         let _ = waiting.answer.send(reply);
-        Some(waiting.host)
+        Some(outcome)
     }
 
     /// Answer every waiting request denied

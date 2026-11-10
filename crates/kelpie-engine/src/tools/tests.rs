@@ -540,6 +540,25 @@ impl Reach for Hosts {
     }
 }
 
+/// What an answer gives back, spelled short for the assertions
+fn widened(host: &str) -> Option<SandboxOutcome> {
+    Some(SandboxOutcome::Allowed {
+        host: host.to_owned(),
+    })
+}
+
+fn denied(host: &str) -> Option<SandboxOutcome> {
+    Some(SandboxOutcome::Denied {
+        host: host.to_owned(),
+    })
+}
+
+fn not_widened(host: &str) -> Option<SandboxOutcome> {
+    Some(SandboxOutcome::NotWidened {
+        host: host.to_owned(),
+    })
+}
+
 /// A session's agent calling kelpie's `request_network`, with the turn's sink and
 /// the sandbox standing by
 struct Asking {
@@ -623,12 +642,8 @@ fn request_network_waits_for_the_answer() {
     // Nothing is said until the maintainer answers
     assert!(agent.relayed.lines.try_recv().is_err());
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Once)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Once),
+        widened("docs.rs"),
     );
     assert_eq!(
         agent.heard(),
@@ -644,12 +659,8 @@ fn allow_for_the_project_tells_the_agent_it_was_saved() {
     let (id, ..) = agent.shown();
 
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Project)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Project),
+        widened("docs.rs"),
     );
 
     assert_eq!(
@@ -666,12 +677,8 @@ fn deny_changes_nothing() {
     let (id, ..) = agent.shown();
 
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Deny)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Deny),
+        denied("docs.rs"),
     );
 
     assert_eq!(
@@ -839,8 +846,8 @@ fn an_answer_through_the_session_widens_the_sandbox() {
     );
 
     assert_eq!(
-        turn.session.answer(&id, SandboxAnswer::Once).as_deref(),
-        Some("docs.rs"),
+        turn.session.answer(&id, SandboxAnswer::Once),
+        widened("docs.rs"),
     );
 
     assert_eq!(turn.asking.heard().0, "docs.rs is allowed for this session");
@@ -869,12 +876,8 @@ fn allow_once_widens_the_running_sandbox() {
     let (id, ..) = agent.shown();
     assert!(!network.allows("docs.rs"), "refused while it is asked");
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Once)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Once),
+        widened("docs.rs"),
     );
 
     assert_eq!(agent.heard().0, "docs.rs is allowed for this session");
@@ -893,23 +896,15 @@ fn a_sandbox_that_replaces_the_one_before_gets_what_was_allowed() {
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Once)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Once),
+        widened("docs.rs"),
     );
     agent.heard();
     agent.asks_for("example.com", "to fetch a file");
     let (id, ..) = agent.shown();
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Deny)
-            .as_deref(),
-        Some("example.com"),
+        agent.session.asks().answer(&id, SandboxAnswer::Deny),
+        denied("example.com"),
     );
     agent.heard();
 
@@ -942,16 +937,18 @@ fn an_allow_the_sandbox_could_not_take_is_not_told_as_allowed() {
     let (id, ..) = agent.shown();
 
     assert_eq!(
-        agent
-            .session
-            .asks()
-            .answer(&id, SandboxAnswer::Once)
-            .as_deref(),
-        Some("docs.rs"),
+        agent.session.asks().answer(&id, SandboxAnswer::Once),
+        not_widened("docs.rs"),
     );
 
     let (line, failed) = agent.heard();
     assert!(!failed);
     assert!(line.contains("still refused"), "{line}");
     assert!(!line.contains("is allowed"), "{line}");
+
+    // Nothing was granted, so a sandbox replacing the gone one is not handed a
+    // host no session ever reached
+    let replacement = Hosts::allowing(&[]);
+    agent.session.asks().bind(replacement.clone());
+    assert!(replacement.list().is_empty(), "{:?}", replacement.list());
 }

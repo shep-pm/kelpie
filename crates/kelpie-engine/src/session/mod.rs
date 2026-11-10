@@ -52,6 +52,7 @@ use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use semver::Version;
 
+pub use crate::tools::SandboxOutcome;
 pub use kelpie_protocol::{LogEntry, SandboxAnswer, SessionEvent, SessionId};
 
 use crate::permission::{Judge, ReadCall};
@@ -810,15 +811,16 @@ impl Session {
         }
     }
 
-    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and give the host it asked
-    /// for, `None` when none was waiting
+    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and say what it did,
+    /// `None` when none was waiting
     ///
     /// `Once` and `Project` let the request's host through the running sandbox
     /// for as long as the session runs, and the agent hears so. `Project` is
-    /// also saved to the project's allowlist, which is the app's part, and the
-    /// host is what it saves. `Deny` changes nothing. A request the turn's end
-    /// or a cancel already answered is gone, and this says `None`.
-    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<String> {
+    /// also saved to the project's allowlist, which is the app's part, and it
+    /// has a host to save only on [`SandboxOutcome::Allowed`]. `Deny` changes
+    /// nothing. A request the turn's end or a cancel already answered is gone,
+    /// and this says `None`.
+    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<SandboxOutcome> {
         self.asks.answer(id, answer)
     }
 }

@@ -42,8 +42,8 @@ use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
 use kelpie_engine::sandbox::{self, Reads, Sandbox};
 use kelpie_engine::session::{
-    Bridge, Choice, LogEntry, SandboxAnswer, Session, SessionEvent, Started, Swap, log,
-    sandboxed_launcher,
+    Bridge, Choice, LogEntry, SandboxAnswer, SandboxOutcome, Session, SessionEvent, Started, Swap,
+    log, sandboxed_launcher,
 };
 use kelpie_engine::settings::{
     BridgeUpdates, ConfigDir, Field, Harness, LayerFile, Settings, SettingsError,
@@ -547,9 +547,10 @@ pub fn pm_cancel(state: State<'_, AppState>) {
 ///
 /// # Errors
 ///
-/// No request is waiting for `id`, or the host could not be kept to the
-/// project, in which case it stays allowed for the session alone. The text is
-/// for the maintainer to read.
+/// No request is waiting for `id`; the running sandbox could not take the host,
+/// which saves nothing; or the host could not be kept to the project, in which
+/// case it stays allowed for the session alone. The text is for the maintainer
+/// to read.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn pm_answer(
@@ -557,16 +558,23 @@ pub fn pm_answer(
     id: String,
     answer: SandboxAnswer,
 ) -> Result<(), String> {
-    let Some(host) = state
+    let Some(outcome) = state
         .held_session()
         .and_then(|session| session.answer(&id, answer))
     else {
         return Err("That request is over.".to_owned());
     };
-    match answer {
-        SandboxAnswer::Project => allow_for_the_project(&state, &host),
-        // Every other answer reaches the running sandbox alone
-        _ => Ok(()),
+    match outcome {
+        SandboxOutcome::Allowed { host } => match answer {
+            // Only a kept answer has a place outside the session running now
+            SandboxAnswer::Project => allow_for_the_project(&state, &host),
+            _ => Ok(()),
+        },
+        // A denial has nothing to keep
+        SandboxOutcome::Denied { .. } => Ok(()),
+        // The maintainer said yes and the sandbox could not take it, so nothing
+        // was widened: the project is not told a host its sessions cannot reach
+        SandboxOutcome::NotWidened { host } => Err(not_through(&host)),
     }
 }
 
@@ -592,6 +600,14 @@ fn allow_for_the_project(state: &AppState, host: &str) -> Result<(), String> {
         &Value::Array(hosts.into_iter().map(Value::String).collect()),
     )
     .map_err(|error| not_saved(host, error))
+}
+
+/// Why `host` never reached the sandbox at all, said to the maintainer
+///
+/// The agent was told the same in its own line. Nothing is saved for the project,
+/// so the settings page never lists a host its sessions cannot reach.
+fn not_through(host: &str) -> String {
+    format!("{host} is not through this session's sandbox, so kelpie saved nothing for it")
 }
 
 /// Why `host` could not be kept, said to the maintainer

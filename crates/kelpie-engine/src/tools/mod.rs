@@ -51,7 +51,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 pub use door::Door;
 pub(crate) use network::Asks;
-pub use network::Reach;
+pub use network::{Reach, SandboxOutcome};
 pub use relay::{DOOR_VAR, TOKEN_VAR, run_from_args};
 use tokio_util::sync::CancellationToken;
 
