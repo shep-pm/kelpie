@@ -12,12 +12,14 @@
 //! ticket is started, so a ticket waiting for a slot is listed before it runs,
 //! and a launch that ended mid-turn finds who held a slot.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::ceiling::Watch;
 use super::{Seat, Status, Worker, slots};
 use crate::session::SessionId;
 
@@ -74,6 +76,9 @@ impl Record {
 pub struct Records {
     file: PathBuf,
     list: Vec<Record>,
+    /// The clock of each ticket's latest turn, which is never written: a launch
+    /// has no turn running
+    watches: HashMap<String, Watch>,
 }
 
 impl Records {
@@ -93,7 +98,11 @@ impl Records {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(error),
         };
-        Ok(Self { file, list })
+        Ok(Self {
+            file,
+            list,
+            watches: HashMap::new(),
+        })
     }
 
     /// The file the records are kept in
@@ -112,6 +121,23 @@ impl Records {
     #[must_use]
     pub fn get(&self, ticket: &str) -> Option<&Record> {
         self.list.iter().find(|record| record.ticket == ticket)
+    }
+
+    /// Retire `ticket`'s last turn clock, so its ceiling never acts on a record
+    /// a later start of the ticket owns
+    ///
+    /// A turn whose harness exited ends with no `TurnEnded`, so its clock would
+    /// otherwise run on and pause the worker a new start began.
+    pub(super) fn retire_watch(&mut self, ticket: &str) {
+        if let Some(watch) = self.watches.remove(ticket) {
+            watch.turn_ended();
+        }
+    }
+
+    /// Keep `watch` as the clock of `ticket`'s running turn, retiring the last one
+    pub(super) fn keep_watch(&mut self, ticket: &str, watch: Watch) {
+        self.retire_watch(ticket);
+        self.watches.insert(ticket.to_owned(), watch);
     }
 
     /// Keep `record`, in its place when its ticket is already listed and at the

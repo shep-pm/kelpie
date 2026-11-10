@@ -207,6 +207,16 @@
         "integer",
         "null"
       ]
+    },
+    "worker-turn-timeout": {
+      "default": null,
+      "description": "How many minutes a worker's turn may run before kelpie cancels it and pauses the worker. The count starts when the worker's slot is granted, not when its process launches.",
+      "maximum": 1440,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
     }
   },
   "title": "Settings",

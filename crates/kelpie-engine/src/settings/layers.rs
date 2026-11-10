@@ -97,7 +97,9 @@ impl Field {
             | Self::WorkerModel
             | Self::WorkerEffort
             | Self::WorkerSlots => PROJECT,
-            Self::Provider | Self::Host | Self::ReplyStyle => GLOBAL_AND_PROJECT,
+            Self::Provider | Self::Host | Self::ReplyStyle | Self::WorkerTurnTimeout => {
+                GLOBAL_AND_PROJECT
+            }
             Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
             // A lease is the machine's, so its capacity is one value for every project
             Self::BridgeUpdates | Self::LeaseCapacity => GLOBAL,
@@ -141,6 +143,11 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             BUILT_IN.worker_effort.map(str::to_string),
         )?,
         worker_slots: Field::WorkerSlots.resolve(global, project, BUILT_IN.worker_slots)?,
+        worker_turn_timeout: Field::WorkerTurnTimeout.resolve(
+            global,
+            project,
+            BUILT_IN.worker_turn_timeout,
+        )?,
         provider: Field::Provider.resolve(
             global,
             project,
