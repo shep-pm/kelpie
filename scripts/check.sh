@@ -4,7 +4,7 @@
 #
 #   scripts/check.sh           # every step
 #   scripts/check.sh --rust    # steps 1 to 7: the reaper sidecar, then cargo and the line cap
-#   scripts/check.sh --web     # step 8: the frontend's typecheck, lint and tests
+#   scripts/check.sh --web     # step 8: the frontend's install, typecheck, lint, tests and build
 #
 # Not here: `pnpm tauri build --no-bundle`, the release app build, which stays
 # CI's alone. Iterate with `cargo test --workspace --lib --bins` instead.
@@ -64,7 +64,7 @@ if [ "$rust" -eq 1 ]; then
   python3 -I scripts/file-size.py
 
   step="7. cargo check on 1.93"; echo "==> $step"
-  if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^1\.93'; then
+  if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^1\.93-'; then
     cargo +1.93 check --workspace --all-targets --locked
   else
     echo "skipped: rustup has no 1.93 toolchain (CI runs it)"
@@ -72,14 +72,20 @@ if [ "$rust" -eq 1 ]; then
 fi
 
 if [ "$web" -eq 1 ]; then
-  step="8a. pnpm typecheck"; echo "==> $step"
+  step="8a. pnpm install"; echo "==> $step"
+  pnpm install --frozen-lockfile
+
+  step="8b. pnpm typecheck"; echo "==> $step"
   pnpm typecheck
 
-  step="8b. pnpm lint"; echo "==> $step"
+  step="8c. pnpm lint"; echo "==> $step"
   pnpm lint
 
-  step="8c. pnpm test"; echo "==> $step"
+  step="8d. pnpm test"; echo "==> $step"
   pnpm test
+
+  step="8e. pnpm build"; echo "==> $step"
+  pnpm build
 fi
 
 step="done"
