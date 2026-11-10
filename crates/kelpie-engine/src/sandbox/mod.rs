@@ -12,6 +12,10 @@
 //! [`Sandbox::start_worker`], since such a folder holds the logins and secrets
 //! the policy denies.
 //!
+//! [`Sandbox::ready`] runs `sh -c true` in a sandbox and tells bwrap's two
+//! refusals apart by its own words ([`Refusal`]), and [`check_project`] asks
+//! the project-folder question without starting a sandbox.
+//!
 //! crabpot's proxy lives in kelpie until the [`Sandbox`] drops, so it stops with
 //! the session, and with kelpie. On Linux and Windows crabpot runs the host's
 //! own binary again as its helper, so the host's `main` calls
@@ -55,12 +59,15 @@ use serde_json::json;
 
 use crate::session::Harness;
 use crate::tools::{Door, Reach};
+use crate::tree::ProcessTree;
 
 pub mod fence;
 mod policy;
+pub mod refusal;
 pub mod worker;
 
 pub use policy::{Project, Reads, denied, policy, policy_with_door};
+pub use refusal::Refusal;
 pub use worker::Worker;
 
 /// Takes over the process when crabpot ran it again as its helper
@@ -108,6 +115,13 @@ pub enum SandboxError {
 
     /// crabpot could not put the command inside the sandbox
     Wrap(WrapError),
+
+    /// bwrap refused to start the sandbox, for the reason the [`Refusal`] names
+    Refused(Refusal),
+
+    /// The probe command could not run in the sandbox, or failed for a reason
+    /// that is no [`Refusal`]: the error is its stderr, or the spawn error
+    Probe(String),
 }
 
 impl fmt::Display for SandboxError {
@@ -133,6 +147,8 @@ impl fmt::Display for SandboxError {
             }
             Self::Start(error) => write!(f, "the sandbox could not start: {error}"),
             Self::Wrap(error) => write!(f, "the command could not go in the sandbox: {error}"),
+            Self::Refused(refusal) => write!(f, "the sandbox cannot start: {refusal}"),
+            Self::Probe(detail) => write!(f, "the sandbox's probe command failed: {detail}"),
         }
     }
 }
@@ -145,6 +161,8 @@ impl core::error::Error for SandboxError {
             Self::StateDir(error) => Some(error),
             Self::Start(error) => Some(error),
             Self::Wrap(error) => Some(error),
+            Self::Refused(refusal) => Some(refusal),
+            Self::Probe(_) => None,
         }
     }
 }
@@ -205,7 +223,7 @@ impl Sandbox {
         state_dir: &Path,
         door: Option<&Door>,
     ) -> Result<Self, SandboxError> {
-        refused_project(project)?;
+        check_project(project)?;
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
@@ -251,7 +269,7 @@ impl Sandbox {
         project: &Project<'_>,
         worker: &Worker<'_>,
     ) -> Result<Self, SandboxError> {
-        refused_project(project)?;
+        check_project(project)?;
         let config = worker::policy(harness, project, worker).map_err(SandboxError::Policy)?;
         fs::create_dir_all(worker.state_dir).map_err(SandboxError::StateDir)?;
         Self::from_config(config)
@@ -269,6 +287,25 @@ impl Sandbox {
     pub fn command(&self, command: &Command) -> Result<Command, SandboxError> {
         self.inner.command(command).map_err(SandboxError::Wrap)
     }
+
+    /// Run `sh -c true` in this sandbox, to learn whether it can start a command
+    ///
+    /// Runs through `tree` (ADR 0001), so a stop of the tree ends it.
+    ///
+    /// # Errors
+    ///
+    /// [`SandboxError::Refused`] when bwrap names one of its [`Refusal`]s, and
+    /// [`SandboxError::Probe`] when the command cannot be wrapped or spawned, or
+    /// fails for any other reason.
+    pub fn ready(&self, tree: &ProcessTree) -> Result<(), SandboxError> {
+        let mut probe = Command::new("sh");
+        probe.args(["-c", "true"]);
+        let mut wrapped = self.command(&probe)?;
+        let output = tree
+            .output(&mut wrapped)
+            .map_err(|error| SandboxError::Probe(error.to_string()))?;
+        refusal::judge(&output)
+    }
 }
 
 /// Refuse a project whose own folder would bring a denied folder into the
@@ -277,7 +314,14 @@ impl Sandbox {
 /// The home folder or a folder above it holds every login and secret, and a
 /// folder at or inside one of them is that folder to its own sandbox, since the
 /// folder beside it is opened back for the project.
-fn refused_project(project: &Project<'_>) -> Result<(), SandboxError> {
+///
+/// [`Sandbox::start`] and [`Sandbox::start_worker`] call it first, so a caller
+/// can ask the same question without starting a sandbox.
+///
+/// # Errors
+///
+/// [`SandboxError::ProjectAtHome`] or [`SandboxError::ProjectInDenied`].
+pub fn check_project(project: &Project<'_>) -> Result<(), SandboxError> {
     if let Some(folder) = policy::holds_home(project) {
         return Err(SandboxError::ProjectAtHome { folder });
     }
