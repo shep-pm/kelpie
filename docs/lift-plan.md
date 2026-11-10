@@ -66,7 +66,7 @@ Most rows lift once a few seams are cut. Each is already a trait or a type in SK
 
 | SK source | Verdict | Into | Cut, and what comes with it |
 |---|---|---|---|
-| `crates/process/src/worktree/` | lift | a `worktree` module | A leaf crate with no shep edge. Drop `workflows.rs` and the `refs/pull/<n>/head` fetch (`contribution.rs:186`), and keep `Remote` to `Origin` until repos the maintainer doesn't own arrive. Keep the trust checks, `clone.rs`, `loose.rs`, `stale_lock.rs`, `stray.rs` and the cache. SK ADR 0019 |
+| `crates/process/src/worktree/` | lift, part landed (#70) | a `worktree` module | A leaf crate with no shep edge. Drop `workflows.rs` and the `refs/pull/<n>/head` fetch (`contribution.rs:186`), and keep `Remote` to `Origin` until repos the maintainer doesn't own arrive. Keep the trust checks, `clone.rs`, `loose.rs`, `stale_lock.rs`, `stray.rs` and the cache. SK ADR 0019. The reads landed first, as `crates/kelpie-engine/src/worktree/` (`in_process.rs`, `loose.rs`, `WorktreeError` and the runner): `docs/lifted.md` |
 | `crates/worker_folder/` | lift | a `worker_folder` module | Link-safe reads and writes in a folder a hostile writer owns. No shep edge |
 | `core/profile/mod.rs` (`WorkerProfile::reach` `:278-363`) | adapt | `sandbox/policy.rs`, a worker's policy | The composition point: `CLONE_DENY`, `CREDENTIALS`, `GH_DENY`, `PUSH_FLAGS`, `push_to_base` and `home_denials` become the worker's crabpot policy |
 | `core/fence/` | adapt | `sandbox/fence.rs` | Data plus the check against a trusted commit (`differ`, `matches_main` `:273,304`), which catches what the sandbox's globs miss. `HARNESSES` (`:48`) becomes a list each adapter supplies |
