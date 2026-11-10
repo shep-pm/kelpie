@@ -21,7 +21,7 @@ use std::sync::LazyLock;
 
 use serde_json::json;
 
-use crate::bridge::{Download, Pin, Platform};
+use crate::bridge::{Capability, Download, Pin, Platform};
 use crate::session::{Extension, Harness};
 
 use crate::login::Store;
@@ -110,9 +110,18 @@ static PLATFORMS: LazyLock<Vec<(Platform, Download)>> = LazyLock::new(|| {
 /// The pinned bridge, ready for [`bridge::ensure`]
 static PIN: LazyLock<Pin<'static>> = LazyLock::new(|| Pin {
     id: ID,
+    registry_id: ID,
     version: VERSION,
     platforms: PLATFORMS.as_slice(),
 });
+
+/// What the Claude Code adapter uses of a bridge, which a new version must keep to pass the probe
+///
+/// The adapter also sets the model and effort through config options, but ACP
+/// reports those on `session/new`, not on `initialize`, so the probe cannot see
+/// them. A bridge that dropped them fails its first session and goes back to the
+/// previous version.
+pub const REQUIRES: &[Capability] = &[Capability::ResumeSession];
 
 /// The `claude-acp` bridge kelpie installs: one pinned version, one archive per
 /// platform kelpie ships on

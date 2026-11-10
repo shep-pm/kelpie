@@ -132,14 +132,16 @@ pub fn builder_in<R: Runtime>(
                     .map(|folder| folder.into_path().map_err(|error| error.to_string()))
                     .transpose()
             });
-            app.manage(AppState::open(
+            let state = AppState::open(
                 data_dir,
                 config,
                 logins,
                 Box::new(pm::open),
                 picker,
                 reaper.as_deref(),
-            )?);
+            )?;
+            state.start_bridge_checks();
+            app.manage(state);
             Ok(())
         })
 }
