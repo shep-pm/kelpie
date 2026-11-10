@@ -234,6 +234,15 @@ const SKIP: &str = "KELPIE_SKIP_SANDBOX_TESTS";
 /// test's verdict
 static SKIPPED: AtomicUsize = AtomicUsize::new(0);
 
+/// What `bwrap: loopback: Failed RTM_NEWADDR` means, said once
+///
+/// bwrap made its user namespace but the kernel gave it no capabilities in it,
+/// so it cannot set up the namespace's loopback. On Ubuntu 24.04 and later that
+/// is `kernel.apparmor_restrict_unprivileged_userns` = 1 on the host, which no
+/// container option lifts: crabpot's README, Linux setup, gives the AppArmor
+/// profile that does, or the sysctl that turns the restriction off.
+const WITHOUT_CAPABILITIES: &str = "\nbwrap's user namespace has no capabilities, which on Ubuntu 24.04 and later is the host's `kernel.apparmor_restrict_unprivileged_userns` = 1 (see crabpot's README, Linux setup). The host, not the container's options, decides.";
+
 /// What bwrap prints first when the kernel gives it no user namespace, as the
 /// runner's does while `kernel.apparmor_restrict_unprivileged_userns` is on
 fn host_refuses_sandboxes(stderr: &str) -> bool {
@@ -257,7 +266,12 @@ fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sand
     let stderr = String::from_utf8_lossy(&probe.stderr);
     assert!(
         host_refuses_sandboxes(&stderr) && std::env::var_os(SKIP).is_some(),
-        "`true` did not run in the sandbox: {probe:?}\nThis host cannot run a sandbox. Set {SKIP} to skip these tests."
+        "`true` did not run in the sandbox: {probe:?}\nThis host cannot run a sandbox. Set {SKIP} to skip these tests.{}",
+        if stderr.contains("RTM_NEWADDR") {
+            WITHOUT_CAPABILITIES
+        } else {
+            ""
+        }
     );
     SKIPPED.fetch_add(1, Ordering::SeqCst);
     println!(

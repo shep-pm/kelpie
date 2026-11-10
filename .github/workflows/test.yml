@@ -92,6 +92,16 @@ jobs:
       - name: Build the reaper sidecar as that user
         run: |
           runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" scripts/build-reaper.sh --debug
+      # What the sandbox tests depend on and the job's options cannot change,
+      # printed so a red run says which host it ran on and why. It fails nothing.
+      - name: Say what this host does about user namespaces
+        run: |
+          echo "runner: ${RUNNER_NAME:-unknown}"
+          uname -sr
+          for sysctl in kernel/apparmor_restrict_unprivileged_userns kernel/unprivileged_userns_clone user/max_user_namespaces; do
+            echo "$sysctl: $(cat /proc/sys/$sysctl 2>&1)"
+          done
+          runuser -u kelpie -- bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap --unshare-all: ok" || echo "bwrap --unshare-all: failed"
       - name: Test as that user
         run: |
           runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" CARGO_TERM_COLOR=always cargo test --workspace --locked
