@@ -12,7 +12,9 @@
 //! [`harness`] builds what one harness runs on: its bridge, the session's own
 //! state folder, and the person's own login, which [`login`] keeps in the OS
 //! keychain and never shows. [`sandbox`] puts each session's harness inside
-//! crabpot, which confines what it reads, writes and reaches (ADR 0005). The crate
+//! crabpot, which confines what it reads, writes and reaches (ADR 0005). [`guard`]
+//! reads a command a worker runs the way a shell would, and [`local_paths`] finds
+//! what a text names of this machine. The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -33,13 +35,17 @@
 //! bridge once and checks it before it is used; [`agents`] loads the agent files
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
 //! runs on; [`login`] holds those logins; [`sandbox`] builds the policy a
-//! session runs under and starts its sandbox.
+//! session runs under and starts its sandbox; [`guard`] splits a command, takes
+//! off its wrappers and reads its scripts; [`local_paths`] is the one check for
+//! what must not leave this machine.
 
 #![doc(test(attr(deny(warnings))))]
 
 pub mod agents;
 pub mod bridge;
+pub mod guard;
 pub mod harness;
+pub mod local_paths;
 pub mod login;
 #[cfg(test)]
 mod parity;
