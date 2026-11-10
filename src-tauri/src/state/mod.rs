@@ -7,7 +7,7 @@
 //! first process so a crash or a `SIGKILL` still stops what the run started.
 //!
 //! `projects.json` is a list from the start, each entry
-//! `{ "id", "path", "pm_session" }`, so the rail can add projects later without
+//! `{ "id", "path", "pm_session", "pm_ran" }`, so the rail can add projects later without
 //! a migration. Phase 1 has one: the folder the maintainer picks once. Each
 //! project keeps its harness state in `<data_dir>/projects/<id>/pm/`.
 
@@ -24,7 +24,7 @@ use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
-use kelpie_engine::session::{Session, SessionId};
+use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,11 @@ const PM_FOLDER: &str = "pm";
 
 /// The PM's log, by name, in its state folder
 const PM_LOG_FILE: &str = "log.jsonl";
+
+/// The PM's standing-decisions file, by name, in its state folder
+///
+/// The PM's own instructions name it, and a new session is seeded from it.
+const DECISIONS_FILE: &str = "decisions.md";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -96,6 +101,11 @@ pub struct Project {
     /// The id the harness gave the PM's session, kept to resume it. `None`
     /// until the first message.
     pub pm_session: Option<SessionId>,
+
+    /// The harness and model the PM last ran on, which says whose session
+    /// `pm_session` is. `None` in a file from before this was kept.
+    #[serde(default)]
+    pub pm_ran: Option<Ran>,
 }
 
 /// The projects, and the file that keeps them
@@ -165,6 +175,32 @@ impl Projects {
         project.pm_session = Some(session);
         write(&self.file, &self.list)
     }
+
+    /// Keep `ran` as what the project `id`'s PM last ran on, when it is not already
+    ///
+    /// Another harness's session id cannot be resumed, so when the harness is
+    /// not the one kept before, the saved session id is dropped in the same write.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn set_pm_ran(&mut self, id: &str, ran: &Ran) -> io::Result<()> {
+        let Some(project) = self.list.iter_mut().find(|project| project.id == id) else {
+            return Ok(());
+        };
+        if project.pm_ran.as_ref() == Some(ran) {
+            return Ok(());
+        }
+        if project
+            .pm_ran
+            .as_ref()
+            .is_some_and(|before| before.harness != ran.harness)
+        {
+            project.pm_session = None;
+        }
+        project.pm_ran = Some(ran.clone());
+        write(&self.file, &self.list)
+    }
 }
 
 /// Write `list` beside `file` and rename it into place, so a crash leaves the
@@ -213,6 +249,17 @@ pub struct Opening<'a> {
 /// scripted agent. The text of an error is for the maintainer to read.
 pub type Opener = Box<dyn Fn(&Opening<'_>) -> Result<Session, String> + Send + Sync>;
 
+/// What the PM runs on: the harness and the model, kept to say what a switch left
+// wire format: `projects.json` holds this as `pm_ran`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ran {
+    /// The harness the PM runs on
+    pub harness: Harness,
+
+    /// The model it was asked for, `None` for the harness's own default
+    pub model: Option<String>,
+}
+
 /// What Tauri manages: the process tree, the projects and the PM's session
 pub struct AppState {
     data_dir: PathBuf,
@@ -222,7 +269,7 @@ pub struct AppState {
     projects: Arc<Mutex<Projects>>,
     /// The first project's PM and the harness it was opened on, `None` until
     /// the first send. Held only for a look or a swap, never while the opener runs.
-    session: Mutex<Option<(Harness, Arc<Session>)>>,
+    session: Mutex<Option<(Ran, Arc<Session>)>>,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -395,6 +442,7 @@ impl AppState {
             id: new_id()?,
             path,
             pm_session: None,
+            pm_ran: None,
         };
         let _opening = lock(&self.opening);
         lock(&self.projects).replace_all(project)?;
@@ -406,16 +454,20 @@ impl AppState {
     ///
     /// What the PM runs on is resolved from the settings on every call, so a
     /// model or effort changed since the last message applies to this one, on
-    /// the same session. A changed harness does not move a session that is
-    /// open: that is a session of its own (#31), and until then the new one is
-    /// used when the next one is opened.
+    /// the same session. A changed harness cannot move a session: the old
+    /// session's process is stopped, a divider goes into the log, and a new
+    /// session is built that has the seed ahead of its first message
+    /// (`docs/design/pm-chat.md`, Switching harness or model). The divider's
+    /// text is the third thing returned, `None` when nothing was switched.
+    ///
+    /// A new session that cannot be built leaves the old one running.
     ///
     /// # Errors
     ///
     /// No project is picked yet, the settings or the PM's agent file cannot be
-    /// used, or the opener could not build the session. The text is for the
-    /// maintainer to read.
-    pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle), String> {
+    /// used, the opener could not build the session, or the divider could not
+    /// be written. The text is for the maintainer to read.
+    pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
         let project = lock(&self.projects)
             .first()
@@ -426,26 +478,81 @@ impl AppState {
             projects: Arc::clone(&self.projects),
         };
         let plan = pm::plan(&self.config, &project.id)?;
-        if let Some((_, session)) = lock(&self.session).as_ref() {
+        let held = lock(&self.session).clone();
+        let now = Ran {
+            harness: plan.harness,
+            model: plan.choice.model.clone(),
+        };
+        if let Some((was, session)) = &held
+            && was.harness == plan.harness
+        {
             session.choose(plan.choice.clone());
-            return Ok((Arc::clone(session), handle));
+            if *was != now {
+                self.keep_ran(&project.id, &now)?;
+                if let Some((ran, _)) = lock(&self.session).as_mut() {
+                    *ran = now;
+                }
+            }
+            return Ok((Arc::clone(session), handle, None));
         }
+        // What the PM ran on before this send: the open session, or what the
+        // last launch kept. A session id belongs to the harness that gave it.
+        let before = match &held {
+            Some((was, _)) => Some(was.clone()),
+            None => project.pm_ran.clone(),
+        }
+        .filter(|was| was.harness != plan.harness);
         let state_dir = self.pm_dir(&project.id);
         let log = Log::open(state_dir.join(PM_LOG_FILE))
             .map_err(|error| format!("could not open the PM's log: {error}"))?;
-        let session = Arc::new(
-            (self.opener)(&Opening {
-                tree: &self.tree,
-                data_dir: &self.data_dir,
-                project: &project,
-                state_dir: &state_dir,
-                logins: &self.logins,
-                pm: &plan,
-            })?
-            .with_log(log),
-        );
-        *lock(&self.session) = Some((plan.harness, Arc::clone(&session)));
-        Ok((session, handle))
+        let decisions = state_dir.join(DECISIONS_FILE);
+        let on = Project {
+            pm_session: match before {
+                Some(_) => None,
+                None => project.pm_session.clone(),
+            },
+            ..project.clone()
+        };
+        let session = (self.opener)(&Opening {
+            tree: &self.tree,
+            data_dir: &self.data_dir,
+            project: &on,
+            state_dir: &state_dir,
+            logins: &self.logins,
+            pm: &plan,
+        })?
+        .with_log(log.clone());
+        // Kept before the old session stops, so a failed write leaves it running
+        self.keep_ran(&project.id, &now)?;
+        let mut divider = None;
+        let session = match before {
+            None => session.with_seed(decisions),
+            Some(was) => {
+                // The new session is built, so a failure above kept the old one
+                if let Some((_, old)) = &held {
+                    old.stop();
+                }
+                let text = format!(
+                    "Switched from {} to {}",
+                    pm::describe(was.harness, was.model.as_deref()),
+                    pm::describe(now.harness, now.model.as_deref())
+                );
+                log.append(&LogEntry::Divider { text: text.clone() })
+                    .map_err(|error| format!("could not write the PM's log: {error}"))?;
+                divider = Some(text);
+                session.with_seed_at_start(decisions)
+            }
+        };
+        let session = Arc::new(session);
+        *lock(&self.session) = Some((now, Arc::clone(&session)));
+        Ok((session, handle, divider))
+    }
+
+    /// Keep `ran` as what the project `id`'s PM runs on
+    fn keep_ran(&self, id: &str, ran: &Ran) -> Result<(), String> {
+        lock(&self.projects)
+            .set_pm_ran(id, ran)
+            .map_err(|error| format!("could not write projects.json: {error}"))
     }
 
     /// The folder of the PM's harness state and log for the project `id`
@@ -586,303 +693,4 @@ fn new_id() -> io::Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A folder of its own for one test
-    struct Dir(PathBuf);
-
-    impl Dir {
-        fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("kelpie-state-{}", new_id().unwrap()));
-            fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn projects_json_round_trips_a_list() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        let mut projects = Projects::load(file.clone()).unwrap();
-        assert!(projects.list().is_empty(), "no file is no projects");
-
-        let first = Project {
-            id: "p1".to_owned(),
-            path: PathBuf::from("/work/web"),
-            pm_session: None,
-        };
-        projects.replace_all(first.clone()).unwrap();
-        projects
-            .set_pm_session("p1", SessionId::from("s-1"))
-            .unwrap();
-
-        let reloaded = Projects::load(file.clone()).unwrap();
-        assert_eq!(
-            reloaded.list(),
-            [Project {
-                pm_session: Some("s-1".into()),
-                ..first
-            }]
-        );
-
-        // The rail adds more later: a list of two reads back as it was written
-        let two = r#"[
-            {"id":"a","path":"/work/a","pm_session":null},
-            {"id":"b","path":"/work/b","pm_session":"s-2"}
-        ]"#;
-        fs::write(&file, two).unwrap();
-        let reloaded = Projects::load(file).unwrap();
-        assert_eq!(
-            reloaded
-                .list()
-                .iter()
-                .map(|project| project.id.as_str())
-                .collect::<Vec<_>>(),
-            ["a", "b"]
-        );
-        assert_eq!(reloaded.list()[1].pm_session, Some("s-2".into()));
-    }
-
-    #[test]
-    fn a_list_that_cannot_be_written_is_not_kept_in_memory() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        let mut projects = Projects::load(file.clone()).unwrap();
-        let old = Project {
-            id: "old".to_owned(),
-            path: PathBuf::from("/work/old"),
-            pm_session: None,
-        };
-        projects.replace_all(old.clone()).unwrap();
-        // A folder where the partial file goes, so the write fails
-        fs::create_dir(file.with_extension("json.partial")).unwrap();
-
-        let new = Project {
-            id: "new".to_owned(),
-            path: PathBuf::from("/work/new"),
-            pm_session: None,
-        };
-        projects.replace_all(new).unwrap_err();
-
-        assert_eq!(projects.list(), [old]);
-    }
-
-    #[test]
-    fn a_project_that_cannot_be_kept_leaves_the_session_of_the_old_one() {
-        let dir = Dir::new();
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            None,
-        )
-        .unwrap();
-        state.set_project(PathBuf::from("/work/old")).unwrap();
-        fs::create_dir(dir.0.join("projects.json.partial")).unwrap();
-
-        state.set_project(PathBuf::from("/work/new")).unwrap_err();
-
-        assert_eq!(state.project_path(), Some(PathBuf::from("/work/old")));
-    }
-
-    #[test]
-    fn a_file_that_is_not_a_list_is_refused_naming_it() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        fs::write(&file, r#"{"id":"a"}"#).unwrap();
-        let error = Projects::load(file).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("projects.json"), "{error}");
-    }
-
-    #[test]
-    fn a_session_waits_for_a_project() {
-        let dir = Dir::new();
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            None,
-        )
-        .unwrap();
-        assert_eq!(state.project_path(), None);
-        let error = state.pm_session().map(|_| ()).unwrap_err();
-        assert!(error.contains("Pick"), "{error}");
-        assert!(
-            dir.0.join("run.json").exists(),
-            "the tree wrote its run file"
-        );
-    }
-
-    /// Run the checks on a thread, counting what each one is asked, until `quit` drops
-    fn run_checks(
-        dir: &Dir,
-        every: Duration,
-    ) -> (Sender<()>, thread::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
-        let (stop, quit) = mpsc::channel();
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let handle = {
-            let (asked, data_dir) = (Arc::clone(&asked), dir.0.clone());
-            thread::spawn(move || {
-                run_bridge_checks(&[claude::pin()], &data_dir, every, &quit, &|pin| {
-                    lock(&asked).push(pin.id.to_owned());
-                    Ok(CheckOutcome::Current)
-                });
-            })
-        };
-        (stop, handle, asked)
-    }
-
-    /// Wait until `asked` holds `count` entries
-    fn wait_for(asked: &Mutex<Vec<String>>, count: usize) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while lock(asked).len() < count {
-            assert!(std::time::Instant::now() < deadline, "the check never ran");
-            thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    #[test]
-    fn an_installed_bridge_is_checked_at_once_and_again_every_interval() {
-        let dir = Dir::new();
-        fs::create_dir_all(dir.0.join("bridges").join(claude::pin().id)).unwrap();
-
-        let (stop, handle, asked) = run_checks(&dir, Duration::from_millis(20));
-        wait_for(&asked, 3);
-        drop(stop);
-        handle.join().unwrap();
-
-        assert!(lock(&asked).iter().all(|id| id == claude::pin().id));
-    }
-
-    #[test]
-    fn a_bridge_never_installed_is_not_checked_and_a_quit_ends_the_wait() {
-        let dir = Dir::new();
-
-        let (stop, handle, asked) = run_checks(&dir, Duration::from_secs(24 * 60 * 60));
-        drop(stop);
-        handle.join().unwrap();
-
-        assert!(lock(&asked).is_empty(), "{:?}", lock(&asked));
-    }
-
-    #[test]
-    fn the_reaper_is_looked_for_beside_the_executable() {
-        assert_eq!(reaper_path().file_name().unwrap(), REAPER);
-        assert_eq!(
-            reaper_path().parent(),
-            std::env::current_exe().unwrap().parent(),
-            "the app looks for its reaper beside its own executable"
-        );
-    }
-
-    #[test]
-    fn a_run_with_no_reaper_to_start_never_opens() {
-        let dir = Dir::new();
-        let missing = dir.0.join("not-a-reaper");
-        let error = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            Some(&missing),
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("not-a-reaper"), "{error}");
-    }
-
-    /// A stand-in reaper: it blocks on its standard input and exits when it ends
-    ///
-    /// The reaper binary is `kelpie-reaper`'s, and `scripts/build-reaper.sh`
-    /// builds it into the sidecar folder. What these tests hold is the app's
-    /// half: the tree it opens has a reaper running before a session can be built.
-    #[cfg(unix)]
-    fn stand_in_reaper(dir: &Dir) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let path = dir.0.join("reaper");
-        fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    /// Whether the process table still lists `pid` as running
-    #[cfg(unix)]
-    fn running(pid: u32) -> bool {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
-
-        let pid = Pid::from_u32(pid);
-        let mut system = System::new();
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            true,
-            ProcessRefreshKind::nothing().without_tasks(),
-        );
-        system.process(pid).is_some_and(|process| {
-            !matches!(
-                process.status(),
-                ProcessStatus::Zombie | ProcessStatus::Dead
-            )
-        })
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn the_reaper_starts_before_the_pm() {
-        let dir = Dir::new();
-        let reaper = stand_in_reaper(&dir);
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|opening| {
-                let reaper = opening
-                    .tree
-                    .reaper_id()
-                    .expect("the tree should hold a reaper by the time a PM is built");
-                assert!(running(reaper), "the reaper runs while the PM is built");
-                Err("no session here".to_owned())
-            }),
-            Box::new(|| Ok(None)),
-            Some(&reaper),
-        )
-        .unwrap();
-
-        let reaper = state
-            .tree()
-            .reaper_id()
-            .expect("the run has a reaper of its own");
-        assert!(running(reaper), "the reaper runs before any session exists");
-        assert!(state.held_session().is_none(), "no session before a send");
-
-        state.set_project(PathBuf::from("/work/one")).unwrap();
-        // The opener runs on this thread, and asserts from inside the build
-        state.pm_session().map(|_| ()).unwrap_err();
-
-        // Dropping the state closes the reaper's pipe, and the stand-in exits on
-        // the end of it. Waiting for that keeps the folder it lives in until the
-        // shell has read it.
-        drop(state);
-        let deadline = std::time::Instant::now() + STOP_GRACE;
-        while running(reaper) && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            !running(reaper),
-            "the reaper exits when the tree is dropped"
-        );
-    }
-}
+mod tests;
