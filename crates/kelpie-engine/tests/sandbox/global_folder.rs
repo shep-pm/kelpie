@@ -13,7 +13,8 @@ use std::sync::atomic::Ordering;
 use kelpie_engine::harness::global;
 use kelpie_engine::sandbox::{Project, Reads, policy};
 
-use super::{SKIPPED, Scratch, harness_in, sandbox_in, sh, working};
+use super::host::{SKIPPED, working};
+use super::support::{Scratch, harness_in, sandbox_in, sh};
 
 /// The argument that makes this binary run the global folder checks with `HOME` moved
 /// into the scratch folder, which is how a test reaches a path the policy denies
