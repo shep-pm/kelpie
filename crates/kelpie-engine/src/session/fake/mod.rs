@@ -306,6 +306,9 @@ struct Script {
     new_error: Option<String>,
     /// What its harness says when the harness behind its bridge is too old
     outdated: Option<Outdated>,
+    /// The mode its harness names to stop its own prompts, and that it runs in
+    /// a sandbox, as a sandboxed launcher says
+    sandboxed: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -410,6 +413,18 @@ impl FakeAgent {
         self
     }
 
+    /// Offer a `mode` option
+    #[must_use]
+    pub fn offers_modes(mut self, current: &str, values: &[&str]) -> Self {
+        self.script.offers.push(offer(
+            "mode",
+            SessionConfigOptionCategory::Mode,
+            current,
+            values,
+        ));
+        self
+    }
+
     /// Name an extension notification this agent sends that the session should
     /// read, as a harness names its own
     #[must_use]
@@ -439,6 +454,14 @@ impl FakeAgent {
         self
     }
 
+    /// Say this agent runs in a sandbox, and its harness stops its own prompts
+    /// with `mode`, as a sandboxed harness does
+    #[must_use]
+    pub fn sandboxed(mut self, mode: &str) -> Self {
+        self.script.sandboxed = Some(mode.to_owned());
+        self
+    }
+
     /// Say the harness this agent stands for is reported too old with `says`,
     /// and that `update` updates it, as a bridge's harness does
     #[must_use]
@@ -460,6 +483,9 @@ impl FakeAgent {
             env: Vec::new(),
             new_session_meta: self.script.meta.clone(),
             extensions: self.script.extensions.clone(),
+            hosts: Vec::new(),
+            installs: Vec::new(),
+            unprompted: self.script.sandboxed.clone(),
             outdated: self.script.outdated.clone(),
         }
     }
@@ -586,6 +612,10 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Launch for FakeAgent {
+    fn sandboxed(&self) -> bool {
+        self.script.sandboxed.is_some()
+    }
+
     fn launch(&mut self) -> io::Result<Link> {
         self.shared.launches.fetch_add(1, Ordering::SeqCst);
         let (client_side, agent_side) = Channel::duplex();

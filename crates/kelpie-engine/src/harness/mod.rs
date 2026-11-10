@@ -4,6 +4,9 @@
 //! from what that harness asks for (ADR 0007): its bridge from the ACP registry,
 //! the folder the session keeps its state in, and the person's own login, read
 //! from the [`login`](crate::login) store.
+//! Each also says what a sandbox needs to know of it (ADR 0005): the hosts its
+//! model answers on, the folders its install is read from, and the mode that
+//! turns its own permission prompts off.
 //! Nothing here starts a process: [`session`](crate::session) does that through
 //! the process tree (ADR 0001).
 //!
@@ -38,6 +41,7 @@ use std::env::{self, consts::EXE_SUFFIX};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use crate::login::LoginError;
@@ -139,6 +143,58 @@ pub(super) fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
         let found = dir.join(&name);
         is_program(&found).then(|| std::path::absolute(&found).unwrap_or(found))
     })
+}
+
+/// The folders a program is read from: the one it sits in, the one its link
+/// leads to when it is a link, and the same for the interpreter its `#!` line
+/// names
+///
+/// A sandbox that closes the home folder has to leave these open for the
+/// harness to start. Claude Code installed with npm is a script whose first line
+/// is `#!/usr/bin/env node`, and under nvm, fnm, volta or asdf that `node` is in
+/// the home folder too, found on `path`. A script's interpreter may itself be a
+/// script, so the chain is followed a few steps and no further.
+pub(super) fn install_folders(program: &Path, path: &OsStr) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    let mut next = Some(program.to_owned());
+    for _ in 0..=MAX_INTERPRETERS {
+        let Some(file) = next.take() else { break };
+        let real = fs::canonicalize(&file).ok();
+        for found in [Some(file.as_path()), real.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(folder) = found.parent()
+                && !folders.iter().any(|known| known == folder)
+            {
+                folders.push(folder.to_owned());
+            }
+        }
+        next = interpreter(real.as_deref().unwrap_or(&file), path);
+    }
+    folders
+}
+
+/// How many interpreters deep [`install_folders`] follows a script's `#!` line
+const MAX_INTERPRETERS: usize = 3;
+
+/// The program the `#!` line of the script at `file` names, when it has one
+///
+/// `#!/usr/bin/env node` names `node`, found on `path`, and `env -S node --flag`
+/// the same: options and `NAME=value` words before the command are skipped. Any
+/// other line names its first word.
+fn interpreter(file: &Path, path: &OsStr) -> Option<PathBuf> {
+    let mut head = [0_u8; 256];
+    let read = fs::File::open(file).ok()?.read(&mut head).ok()?;
+    let head = String::from_utf8_lossy(&head[..read]);
+    let line = head.strip_prefix("#!")?.lines().next()?;
+    let mut words = line.split_whitespace();
+    let first = Path::new(words.next()?);
+    if first.file_name()? != "env" {
+        return Some(first.to_owned());
+    }
+    let command = words.find(|word| !word.starts_with('-') && !word.contains('='))?;
+    on_path(command, path)
 }
 
 /// Whether `path` is a file this OS can run

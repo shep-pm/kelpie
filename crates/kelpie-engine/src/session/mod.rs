@@ -7,8 +7,10 @@
 //! run, and each harness's own slice builds one (ADR 0007).
 //!
 //! - A send during a turn waits for the turn to end, and then runs.
-//! - Until crabpot sandboxes sessions (ADR 0005), every permission request is
-//!   refused, and the step shows as refused.
+//! - Every permission request is refused, and the step shows as refused. A
+//!   session built with [`Session::sandboxed`] runs inside crabpot (ADR 0005),
+//!   so its harness is set to stop asking, and a command the sandbox refuses
+//!   shows as a failed step.
 //! - When the harness exits, the turn in flight ends with a
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
@@ -50,6 +52,7 @@ use semver::Version;
 
 pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
+use crate::sandbox::Sandbox;
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
@@ -84,6 +87,14 @@ pub struct Harness {
     pub new_session_meta: Option<serde_json::Value>,
     /// The extension notifications this harness sends that kelpie reads
     pub extensions: Vec<Extension>,
+    /// The hosts its model answers on, which a sandbox lets through
+    pub hosts: Vec<String>,
+    /// Folders outside the project that the harness reads to run, such as the
+    /// one its own install sits in
+    pub installs: Vec<PathBuf>,
+    /// The value of the harness's `mode` option that turns its own permission
+    /// prompts off, which a sandboxed session sets
+    pub unprompted: Option<String>,
     /// What its bridge says when the harness behind it is too old, and how the
     /// person updates that harness
     pub outdated: Option<Outdated>,
@@ -99,6 +110,9 @@ impl Harness {
             env: Vec::new(),
             new_session_meta: None,
             extensions: Vec::new(),
+            hosts: Vec::new(),
+            installs: Vec::new(),
+            unprompted: None,
             outdated: None,
         }
     }
@@ -142,6 +156,9 @@ impl fmt::Debug for Harness {
             )
             .field("new_session_meta", &self.new_session_meta.is_some())
             .field("extensions", &self.extensions)
+            .field("hosts", &self.hosts)
+            .field("installs", &self.installs)
+            .field("unprompted", &self.unprompted)
             .field("outdated", &self.outdated)
             .finish()
     }
@@ -285,6 +302,16 @@ pub trait Launch: Send + 'static {
     ///
     /// The agent cannot be started.
     fn launch(&mut self) -> io::Result<Link>;
+
+    /// Whether the agent it starts runs inside a sandbox
+    ///
+    /// A session whose launcher says so sets the harness's
+    /// [`Harness::unprompted`] mode on the version it runs, so a bridge's every
+    /// version is covered by what that version's launcher says, not by what the
+    /// first one did (ADR 0005).
+    fn sandboxed(&self) -> bool {
+        false
+    }
 }
 
 /// The launcher that starts `harness` through `tree`, in `project`
@@ -293,6 +320,26 @@ pub fn launcher(tree: Arc<ProcessTree>, harness: Harness, project: PathBuf) -> B
     Box::new(ProcessLauncher {
         tree,
         harness,
+        sandbox: None,
+        project,
+    })
+}
+
+/// The launcher that starts `harness` through `tree` inside `sandbox`, in `project`
+///
+/// The sandbox wraps the command before the tree spawns it, and lives as long
+/// as the launcher. A [`Bridge`] builds one per version it starts.
+#[must_use]
+pub fn sandboxed_launcher(
+    tree: Arc<ProcessTree>,
+    harness: Harness,
+    sandbox: Sandbox,
+    project: PathBuf,
+) -> Box<dyn Launch> {
+    Box::new(ProcessLauncher {
+        tree,
+        harness,
+        sandbox: Some(sandbox),
         project,
     })
 }
@@ -433,6 +480,7 @@ struct Setup {
     /// What [`Session::choose`] last set, read before each turn
     wanted: Arc<Mutex<Choice>>,
     instructions: Option<String>,
+    mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
     /// The bridge version the session's process runs on, shared with [`Session::bridge_version`]
@@ -467,6 +515,8 @@ pub struct Session {
     /// The choice the next message runs on, which [`Session::choose`] changes
     choice: Arc<Mutex<Choice>>,
     instructions: Option<String>,
+    /// The value of the harness's `mode` option to set, `None` to leave it
+    mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
     id: Arc<Mutex<Option<SessionId>>>,
@@ -500,6 +550,30 @@ impl Session {
         choice: Choice,
     ) -> Self {
         let launcher = launcher(Arc::clone(&tree), harness.clone(), project.clone());
+        Self::with_launcher(launcher, harness, project, resume, choice)
+    }
+
+    /// A session like [`Session::new`] that runs its harness inside `sandbox`
+    ///
+    /// Every start of the harness is wrapped by the sandbox before the tree
+    /// spawns it (ADR 0001, ADR 0005), and the sandbox lasts as long as the
+    /// session and its worker do. The sandbox is what confines the harness, so
+    /// the session turns the harness's own permission prompts off by setting
+    /// its [`Harness::unprompted`] mode. A request that still arrives is
+    /// refused, and a command the sandbox refuses shows as a failed step.
+    ///
+    /// A session on a [`Bridge`] has no one sandbox: each version's
+    /// [`Started::launch`] comes from [`sandboxed_launcher`] with its own.
+    #[must_use]
+    pub fn sandboxed(
+        tree: Arc<ProcessTree>,
+        harness: Harness,
+        sandbox: Sandbox,
+        project: PathBuf,
+        resume: Option<SessionId>,
+        choice: Choice,
+    ) -> Self {
+        let launcher = sandboxed_launcher(tree, harness.clone(), sandbox, project.clone());
         Self::with_launcher(launcher, harness, project, resume, choice)
     }
 
@@ -556,12 +630,20 @@ impl Session {
             project,
             choice: Arc::new(Mutex::new(choice)),
             instructions: None,
+            mode: None,
             log: None,
             seed: None,
             id: Arc::new(Mutex::new(resume)),
             running: Arc::new(Mutex::new(None)),
             worker: Mutex::new(None),
         }
+    }
+
+    /// Set the harness's `mode` option to `mode` once the session opens
+    #[cfg(test)]
+    fn with_mode(mut self, mode: &str) -> Self {
+        self.mode = Some(mode.to_owned());
+        self
     }
 
     /// Give the session instructions, such as its agent's body
@@ -704,6 +786,7 @@ impl Session {
             choice: lock(&self.choice).clone(),
             wanted: Arc::clone(&self.choice),
             instructions: self.instructions.clone(),
+            mode: self.mode.clone(),
             log: self.log.clone(),
             seed: self.seed.clone(),
             running: Arc::clone(&self.running),
@@ -746,16 +829,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct ProcessLauncher {
     tree: Arc<ProcessTree>,
     harness: Harness,
+    /// Wraps the command before the tree spawns it
+    sandbox: Option<Sandbox>,
     project: PathBuf,
 }
 
 impl Launch for ProcessLauncher {
+    fn sandboxed(&self) -> bool {
+        self.sandbox.is_some()
+    }
+
     fn launch(&mut self) -> io::Result<Link> {
         let mut command = Process::new(&self.harness.program);
         command
             .args(&self.harness.args)
             .envs(self.harness.env.iter().map(|(name, value)| (name, value)))
-            .current_dir(&self.project)
+            .current_dir(&self.project);
+        // The wrapped command keeps the program, arguments, directory and
+        // environment, and none of the streams
+        let mut command = match &self.sandbox {
+            Some(sandbox) => sandbox.command(&command)?,
+            None => command,
+        };
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
