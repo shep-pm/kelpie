@@ -142,7 +142,7 @@ Port `runner/several.rs` first. It is the acceptance suite for the loop: several
 
 | SK source | Verdict | Cut, and what comes with it |
 |---|---|---|
-| `core/ticket.rs`, `core/ports/tickets.rs`, `core/ports/issue.rs` | adapt | The seam above |
+| `core/ticket.rs`, `core/ports/tickets.rs`, `core/ports/issue.rs`, `core/ports/forge_error.rs` | lifted (#139) | The seam above. The reads are lifted. The writes (`issue_comments`, `add_blocked_by`, `add_sub_issue`, `finished_parents`, `sub_issues`, `file_ticket`, `comment_ticket`, `close_issue`, `set_issue_label`) and `fetch_image` stay for Phase 3 |
 | `core/local_tickets/` | lift | Tickets as Markdown files, behind `Tickets` |
 | `core/state/triage.rs`, `core/settings/triage.rs` | adapt | Re-keyed by `TicketId` |
 | `runner/triage/` | adapt | Its posts go through `Tickets::comment_ticket`, which `close_merged` and `follow_up` already use, instead of the GitHub App |
