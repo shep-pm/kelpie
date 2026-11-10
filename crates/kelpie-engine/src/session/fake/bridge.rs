@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use semver::Version;
 
 use super::{FakeAgent, lock};
-use crate::session::{Bridge, Started};
+use crate::session::{Bridge, Started, Swap};
 
 /// The name a [`FakeBridge`] divider gives it
 pub const BRIDGE: &str = "fake-agent-acp";
@@ -71,6 +71,14 @@ impl FakeBridge {
         self
     }
 
+    /// Leave `version` with no agent to start, the way a harness that is no
+    /// longer installed, or has no login, leaves a bridge that is otherwise fine
+    #[must_use]
+    pub fn without(self, version: &str) -> Self {
+        lock(&self.shared.agents).remove(&bridge_version(version));
+        self
+    }
+
     /// The [`Bridge`] a session runs on
     #[must_use]
     pub fn bridge(&self) -> Bridge {
@@ -87,10 +95,16 @@ impl FakeBridge {
                     Some(ready) => {
                         *lock(&current.ready) = None;
                         let was = std::mem::replace(&mut *lock(&current.in_use), ready.clone());
-                        *lock(&current.previous) = Some(was);
-                        ready
+                        *lock(&current.previous) = Some(was.clone());
+                        Swap {
+                            version: ready,
+                            from: Some(was),
+                        }
                     }
-                    None => lock(&current.in_use).clone(),
+                    None => Swap {
+                        version: lock(&current.in_use).clone(),
+                        from: None,
+                    },
                 }
             }),
             start: Box::new(move |version| {

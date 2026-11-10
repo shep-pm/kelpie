@@ -28,16 +28,16 @@ use agent_client_protocol::{
 use futures::StreamExt as _;
 use futures::future::{Either, select};
 use kelpie_protocol::{CacheLifetime, StopReason, ToolStatus, Usage};
-use semver::Version;
-
-use crate::harness::HarnessError;
 
 use super::raw;
 use super::seed;
 use super::{
-    Choice, Command, Extension, Harness, Inbox, Link, LogEntry, STOP_GRACE, SessionEvent,
-    SessionId, Setup, Sink, Source, Started, lock,
+    Choice, Command, Extension, Inbox, Link, STOP_GRACE, SessionEvent, SessionId, Setup, Sink,
+    Swap, lock,
 };
+
+mod swap;
+use swap::{Attempt, Done, Fault, fault, fell_back, moved, moves, start};
 
 /// The divider a refused resume leaves in the log
 pub const COULDNT_RESUME: &str = "Couldn't resume, started a new session";
@@ -49,6 +49,11 @@ pub const COULDNT_RESUME: &str = "Couldn't resume, started a new session";
 /// names, so a newer one takes over at the session's next idle point, and a
 /// version that cannot open the session sends it back to the one before
 /// (`docs/design/bridge-updates.md`, Swapping).
+///
+/// Only a version this session just swapped to is the bridge's failure. A
+/// harness that is missing, has no login, or would not spawn is the harness's,
+/// and ends the turn with what it said, marking nothing bad
+/// (`docs/design/bridge-updates.md`, Flow).
 pub(super) async fn run(setup: Setup, mut commands: Inbox) {
     let shared = Arc::new(Shared::default());
     let mut turns: Turns = VecDeque::new();
@@ -61,6 +66,8 @@ pub(super) async fn run(setup: Setup, mut commands: Inbox) {
     };
     turns.push_back(first);
     let mut stopper: Option<Stopper> = None;
+    // The swap an idle check offered and this start has not run on yet
+    let mut offered: Option<Swap> = None;
     while let Some((text, sink)) = turns.pop_front() {
         // The harness of the try before this one stops here, so a session that
         // moved to a newer bridge version, or went back to the one before,
@@ -71,14 +78,18 @@ pub(super) async fn run(setup: Setup, mut commands: Inbox) {
         if let Some(sink) = sink {
             shared.start_turn(sink);
         }
-        let (attempt, link) = match start(&setup, lock(&setup.running).clone()) {
+        let swap = offered.take();
+        let (attempt, link) = match start(&setup, swap) {
             Ok(started) => started,
             Err(did_not_start) => {
-                let back = fell_back(
-                    &setup,
-                    did_not_start.version.as_ref(),
-                    &did_not_start.message,
-                );
+                // A harness that is not there is not the bridge version's
+                // failure, so it marks nothing bad and the turn ends with it
+                let back = match (&did_not_start.from, &did_not_start.version) {
+                    (Some(_), Some(version)) => {
+                        fell_back(&setup, version, "start", &did_not_start.message)
+                    }
+                    _ => None,
+                };
                 if back.is_none() {
                     commands.close();
                     shared.emit(failed(did_not_start.message));
@@ -109,11 +120,23 @@ pub(super) async fn run(setup: Setup, mut commands: Inbox) {
         .await;
         match outcome {
             Ok(Done::Over) => break,
-            Ok(Done::Moved) => {}
-            Ok(Done::OpenFailed { message }) => {
-                if fell_back(&setup, attempt.version.as_ref(), &message).is_none() {
+            Ok(Done::Moved { swap }) => offered = Some(swap),
+            Ok(Done::OpenFailed { fault, why }) => {
+                // Only a version this session just swapped to is the bridge's
+                // failure. A harness the person must update is the harness's
+                // problem, so the turn ends with what to run and the swap stands
+                // until they do (`docs/design/bridge-updates.md`, Scope)
+                let swapped = attempt.from.is_some();
+                let back = match (&fault, &attempt.version) {
+                    (Fault::NotTheBridge { .. }, _) => None,
+                    (Fault::Bridge { message }, Some(version)) if swapped => {
+                        fell_back(&setup, version, why, message)
+                    }
+                    _ => None,
+                };
+                if back.is_none() {
                     commands.close();
-                    shared.emit(failed(message));
+                    shared.emit(failed(fault.message().to_owned()));
                     break;
                 }
                 // The message waits for the version before the one that failed
@@ -124,7 +147,7 @@ pub(super) async fn run(setup: Setup, mut commands: Inbox) {
                 // From here a send finds the inbox closed and starts a new
                 // worker, which can take a while to explain
                 commands.close();
-                let mut message = told(&attempt, &error);
+                let mut message = fault(&attempt, &error).message().to_owned();
                 if !shared.state().request_failed
                     && let Some(explained) = explain()
                 {
@@ -172,146 +195,8 @@ pub(super) fn describe(error: &Error) -> String {
     }
 }
 
-/// How one try at a session ended
-enum Done {
-    /// The harness ended the connection, or the session was dropped
-    Over,
-    /// A message waits for a newer bridge version, which the next start uses
-    Moved,
-    /// The session could not be opened on the version it started
-    OpenFailed {
-        /// What to tell the maintainer
-        message: String,
-    },
-}
-
 /// How to stop a started harness for certain
 type Stopper = Box<dyn FnOnce(Duration) -> Option<String> + Send>;
-
-/// One try at a session, on one bridge version
-struct Attempt {
-    /// What to run, and what its harness offers
-    harness: Harness,
-    /// The bridge version it runs on, `None` for a harness kelpie does not move
-    version: Option<Version>,
-    /// The version this try moved from, which the divider names
-    from: Option<Version>,
-}
-
-/// Start the agent for one try, and say what its harness offers
-///
-/// A bridge session asks [`Bridge::current`] which version to run on, which is
-/// how a newer one takes over at the session's next idle point.
-fn start(setup: &Setup, running: Option<Version>) -> Result<(Attempt, Link), DidNotStart> {
-    match &setup.source {
-        Source::Fixed { harness, launcher } => {
-            let mut launcher = lock(launcher);
-            let link = launcher.launch().map_err(|error| DidNotStart {
-                version: None,
-                message: format!("could not start the harness: {error}"),
-            })?;
-            Ok((
-                Attempt {
-                    harness: (**harness).clone(),
-                    version: None,
-                    from: None,
-                },
-                link,
-            ))
-        }
-        Source::Bridge { bridge } => {
-            let version = (bridge.current)();
-            // The version this try moved from, which the divider names
-            let from = running.clone().filter(|was| *was != version);
-            let not_started = |message| DidNotStart {
-                version: Some(version.clone()),
-                message,
-            };
-            let Started { harness, launch } = (bridge.start)(&version).map_err(not_started)?;
-            let mut launch = launch;
-            let link = launch
-                .launch()
-                .map_err(|error| not_started(format!("could not start the harness: {error}")))?;
-            Ok((
-                Attempt {
-                    harness,
-                    from,
-                    version: Some(version),
-                },
-                link,
-            ))
-        }
-    }
-}
-
-/// A try whose harness could not be started at all
-struct DidNotStart {
-    /// The bridge version it tried, `None` for a harness kelpie does not move
-    version: Option<Version>,
-    /// What to tell the maintainer
-    message: String,
-}
-
-/// The version to go back to after the session failed on `failed` with `message`
-///
-/// `None` when the session is on a harness kelpie does not move, or when there
-/// is no version before this one. Marks the version bad and puts the one before
-/// it back in use, and logs the divider that says so.
-fn fell_back(setup: &Setup, failed: Option<&Version>, message: &str) -> Option<Version> {
-    let Source::Bridge { bridge } = &setup.source else {
-        return None;
-    };
-    let failed = failed?;
-    let back = (bridge.failed)(failed, message)?;
-    *lock(&setup.running) = Some(back.clone());
-    if let Some(log) = &setup.log {
-        let text = format!("{bridge} {failed} failed to resume, back on {back}");
-        let _ = log.append(&LogEntry::Divider { text });
-    }
-    Some(back)
-}
-
-/// The bridge version this session should move to, `None` when the one it runs on stands
-fn moves(setup: &Setup, attempt: &Attempt) -> Option<Version> {
-    let Source::Bridge { bridge } = &setup.source else {
-        return None;
-    };
-    let now = attempt.version.as_ref()?;
-    let next = (bridge.current)();
-    (next != *now).then_some(next)
-}
-
-/// The divider that says the session moved to a newer bridge version
-fn moved(setup: &Setup, from: &Version, to: &Version) {
-    let (Some(log), Source::Bridge { bridge }) = (&setup.log, &setup.source) else {
-        return;
-    };
-    let text = format!("Updated {bridge} from {from} to {to}");
-    let _ = log.append(&LogEntry::Divider { text });
-}
-
-/// What to tell the maintainer about `error`, naming the harness's own update
-/// command when its bridge says the harness behind it is too old
-fn told(attempt: &Attempt, error: &Error) -> String {
-    let said = describe(error);
-    let Some(outdated) = &attempt.harness.outdated else {
-        return said;
-    };
-    let lower = said.to_lowercase();
-    if !outdated
-        .says
-        .iter()
-        .any(|phrase| lower.contains(phrase.to_lowercase().as_str()))
-    {
-        return said;
-    }
-    HarnessError::TooOld {
-        harness: outdated.harness.clone(),
-        bridge: said,
-        update: outdated.update.clone(),
-    }
-    .to_string()
-}
 
 /// What the connection's handlers share with the worker
 #[derive(Default)]
@@ -565,7 +450,8 @@ async fn serve(
         Err(error) if asked(&error) => return Err(error),
         Err(error) => {
             return Ok(Done::OpenFailed {
-                message: told(attempt, &error),
+                fault: fault(attempt, &error),
+                why: "start",
             });
         }
     };
@@ -577,7 +463,7 @@ async fn serve(
     } = match open(cx, &init, setup, attempt, shared).await {
         Ok(opened) => opened,
         Err(Open::Gone(error)) => return Err(error),
-        Err(Open::Failed(message)) => return Ok(Done::OpenFailed { message }),
+        Err(Open::Failed { fault, why }) => return Ok(Done::OpenFailed { fault, why }),
     };
     if let (Some(from), Some(to)) = (&attempt.from, &attempt.version) {
         moved(setup, from, to);
@@ -611,9 +497,9 @@ async fn serve(
                     // A newer bridge version takes over here, between turns:
                     // the turn that just ended finished on the version it
                     // started with, and this message waits for the next start
-                    if moves(setup, attempt).is_some() {
+                    if let Some(swap) = moves(setup, attempt) {
                         turns.push_back((text, Some(sink)));
-                        return Ok(Done::Moved);
+                        return Ok(Done::Moved { swap });
                     }
                     (text, Some(sink))
                 }
@@ -740,7 +626,13 @@ enum Open {
     Gone(Error),
 
     /// This version would not open the session, with what to tell the maintainer
-    Failed(String),
+    /// and what it failed to do
+    Failed {
+        /// Why, and what to tell the maintainer
+        fault: Fault,
+        /// What the version failed to do, which the divider says
+        why: &'static str,
+    },
 }
 
 /// Resume the session, or start one
@@ -791,9 +683,12 @@ async fn open(
             }
             Err(error) if gone(&error) => return Err(Open::Gone(error)),
             Err(error) if attempt.from.is_some() => {
-                // The version this session just moved to cannot open it, so it
+                // The version this session just swapped to cannot open it, so it
                 // goes back to the one before rather than starting over here
-                return Err(Open::Failed(told(attempt, &error)));
+                return Err(Open::Failed {
+                    fault: fault(attempt, &error),
+                    why: "resume",
+                });
             }
             Err(error) => {
                 refused = true;
@@ -816,12 +711,22 @@ async fn open(
         setup.project.clone(),
         attempt.harness.new_session_meta.as_ref(),
     )
-    .map_err(|error| Open::Failed(describe(&error)))?
+    .map_err(|error| Open::Failed {
+        fault: Fault::NotTheBridge {
+            message: describe(&error),
+        },
+        why: "start",
+    })?
     .system_prompt(system_prompt(init, setup));
     let response = match cx.send_request(request).block_task().await {
         Ok(response) => response,
         Err(error) if gone(&error) => return Err(Open::Gone(error)),
-        Err(error) => return Err(Open::Failed(told(attempt, &error))),
+        Err(error) => {
+            return Err(Open::Failed {
+                fault: fault(attempt, &error),
+                why: "start",
+            });
+        }
     };
     Ok(Opened {
         session: response.session_id,

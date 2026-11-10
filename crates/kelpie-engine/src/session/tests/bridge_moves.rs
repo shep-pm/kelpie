@@ -216,6 +216,164 @@ fn a_failed_resume_falls_back_and_marks_the_version_bad() {
     );
 }
 
+/// A newer version was ready before this session ever started, so its first
+/// send swaps to it. It cannot resume the session the older one made, so the
+/// session goes back to the version before, resumes there, and the newer one is
+/// marked bad
+#[test]
+fn a_first_send_on_a_ready_new_version_falls_back_when_it_cannot_resume() {
+    let old = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("on the one before"));
+    // The newer version has never seen this session
+    let new = FakeAgent::new().can_resume();
+    let bridge = FakeBridge::new("0.101.1")
+        .agent("0.101.1", old.clone())
+        .agent("0.102.0", new.clone())
+        .ready("0.102.0");
+    let path = log_path();
+    let session = Session::on_bridge(
+        bridge.bridge(),
+        PathBuf::from("/project"),
+        Some("fake-1".into()),
+        Choice::default(),
+    )
+    .with_log(log::Log::open(&path).unwrap());
+
+    assert_eq!(
+        say(&session, "first"),
+        [started("fake-1"), text("on the one before"), ended()]
+    );
+
+    assert_eq!(
+        bridge.started(),
+        [version("0.102.0"), version("0.101.1")],
+        "the first send swapped to the newer version and went back"
+    );
+    assert_eq!(bridge.in_use(), version("0.101.1"));
+    assert_eq!(session.bridge_version(), Some(version("0.101.1")));
+    let bad = bridge.bad();
+    assert_eq!(bad.len(), 1, "{bad:?}");
+    assert_eq!(bad[0].0, version("0.102.0"));
+    assert_eq!(
+        new.methods(),
+        ["initialize", "session/resume"],
+        "the newer version was asked to resume the session"
+    );
+    assert_eq!(
+        log::read(&path).unwrap(),
+        [
+            user("first"),
+            fell_back("0.102.0", "0.101.1"),
+            event(started("fake-1")),
+            event(text("on the one before")),
+            event(ended()),
+        ]
+    );
+}
+
+/// The harness the bridge drives is no longer there, which is not the bridge
+/// version's failure: the turn ends with what it said, no version is marked
+/// bad, and the session stays on the version it was running on
+#[test]
+fn a_harness_that_is_not_there_marks_no_bridge_version_bad() {
+    let old = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("first"));
+    // The newer version runs one turn and then its process is gone, so the
+    // next send has to start it again
+    let new = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("on the new one").exit());
+    let bridge = FakeBridge::new("0.101.1")
+        .agent("0.101.1", old.clone())
+        .agent("0.102.0", new.clone());
+    let session = on(bridge.bridge());
+
+    assert_eq!(
+        say(&session, "first"),
+        [started("fake-1"), text("first"), ended()]
+    );
+    let bridge = bridge.ready("0.102.0");
+    let (sink, heard) = events();
+    session.send("second", sink);
+    assert_eq!(next(&heard), started("fake-1"));
+    assert_eq!(next(&heard), text("on the new one"));
+    assert!(
+        matches!(next(&heard), SessionEvent::Failed { .. }),
+        "the newer version's process did not end the turn"
+    );
+    assert_eq!(bridge.in_use(), version("0.102.0"));
+
+    // A removed login, or a `claude` taken off PATH, leaves the bridge version
+    // installed and its harness unrunnable
+    let bridge = bridge.without("0.102.0");
+    let (sink, heard) = events();
+    session.send("third", sink);
+    let SessionEvent::Failed { message } = next(&heard) else {
+        panic!("a harness that is not there did not end the turn with Failed");
+    };
+    assert!(message.contains("0.102.0"), "{message}");
+
+    assert_eq!(
+        bridge.bad(),
+        [],
+        "the bridge version is not blamed for its harness"
+    );
+    assert_eq!(bridge.in_use(), version("0.102.0"));
+    assert_eq!(bridge.previous(), Some(version("0.101.1")));
+    assert_eq!(session.bridge_version(), Some(version("0.102.0")));
+}
+
+/// A bridge that says the harness behind it is too old ends the turn with what
+/// the person can run, and does not mark the bridge version bad or go back
+#[test]
+fn a_too_old_harness_shows_its_update_command_and_marks_no_version_bad() {
+    let old = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("first"));
+    let new = FakeAgent::new()
+        .fails_initialize("Claude Code 1.0.0 is too old: this bridge needs 2.0.0 or later")
+        .says_outdated(&["too old"], "claude update");
+    let bridge = FakeBridge::new("0.101.1")
+        .agent("0.101.1", old.clone())
+        .agent("0.102.0", new.clone());
+    let session = on(bridge.bridge());
+
+    assert_eq!(
+        say(&session, "first"),
+        [started("fake-1"), text("first"), ended()]
+    );
+    let bridge = bridge.ready("0.102.0");
+
+    let (sink, heard) = events();
+    session.send("second", sink);
+    let SessionEvent::Failed { message } = next(&heard) else {
+        panic!("a bridge that refused its harness did not end the turn with Failed");
+    };
+    assert!(message.contains("claude update"), "{message}");
+    assert!(
+        message.contains("too old: this bridge needs 2.0.0"),
+        "the bridge's own words are gone: {message}"
+    );
+
+    assert_eq!(
+        bridge.bad(),
+        [],
+        "a harness the person must update is not the bridge version's failure"
+    );
+    assert_eq!(
+        bridge.in_use(),
+        version("0.102.0"),
+        "the swap stands until the person updates the harness"
+    );
+    assert_eq!(new.launches(), 1);
+}
+
 fn user(text: &str) -> LogEntry {
     LogEntry::User {
         text: text.to_owned(),

@@ -334,8 +334,23 @@ impl fmt::Debug for Started {
     }
 }
 
-/// The version a session starts its next agent on
-type Current = Box<dyn Fn() -> Version + Send + Sync>;
+/// The swap [`Bridge::current`] offers: the version to start on, and the one it
+/// takes over from
+///
+/// `from` is `Some` only when this look actually took a newer version into use,
+/// which is what makes a later failure *that version's* failure rather than the
+/// harness's (`docs/design/bridge-updates.md`, Flow).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Swap {
+    /// The version to start on
+    pub version: Version,
+
+    /// The version this swap leaves behind, `None` when nothing swapped
+    pub from: Option<Version>,
+}
+
+/// The swap the next agent runs on
+type Current = Box<dyn Fn() -> Swap + Send + Sync>;
 
 /// The agent to start on one bridge version, and what its harness offers
 type Start = Box<dyn Fn(&Version) -> Result<Started, String> + Send + Sync>;
@@ -354,10 +369,11 @@ pub struct Bridge {
     /// The bridge, as kelpie names it in a divider, such as `claude-agent-acp`
     pub id: String,
 
-    /// The version to run on
+    /// The version to run on, and the one it swaps from
     ///
     /// Answers with the version in use when nothing newer is to be used. Taking
-    /// a ready version into use is what moves it into use
+    /// a ready version into use is what moves it into use, and is what answers
+    /// with the version it left
     /// ([`crate::bridge::Versions::current`]).
     pub current: Current,
 

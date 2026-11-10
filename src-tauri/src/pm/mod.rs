@@ -28,7 +28,7 @@ use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::session::{
-    Bridge, Choice, LogEntry, Session, SessionEvent, Started, launcher, log,
+    Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, launcher, log,
 };
 use kelpie_engine::settings::{BridgeUpdates, ConfigDir, Harness, Settings};
 use kelpie_engine::tree::ProcessTree;
@@ -268,12 +268,17 @@ fn claude_bridge(
         id: claude::CMD.to_owned(),
         current: Box::new(move || {
             let mut now = versions(&current_dir, pin);
-            let before = now.clone();
-            let taken = now.current(policy(&config, &project_id, pin.id));
-            if now != before {
+            let was = now.in_use.clone();
+            let version = now.current(policy(&config, &project_id, pin.id));
+            // Only a look that took a ready version into use swapped anything
+            let swapped = version != was;
+            if swapped {
                 keep(&current_dir, pin.id, &now);
             }
-            taken
+            Swap {
+                from: swapped.then_some(was),
+                version,
+            }
         }),
         start: Box::new(move |version| {
             let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
