@@ -488,6 +488,7 @@ fn begin(
             .with_log(log),
     );
     let watch = Watch::new();
+    lock(project.records).keep_watch(&ticket.id, watch.clone());
     session.send(
         ticket.text.clone(),
         kept(project, &ticket.id, watch.clone(), events),
@@ -528,6 +529,9 @@ fn hold_slot(project: &Project<'_>, ticket: &str, branch: &str) -> Result<Held, 
             ticket: ticket.to_owned(),
         });
     }
+    // A turn that ended with its harness never reported an end, and its clock
+    // must not reach the worker this start begins
+    records.retire_watch(ticket);
     let mut record = before
         .clone()
         .unwrap_or_else(|| Record::new(ticket, branch));

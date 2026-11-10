@@ -136,14 +136,24 @@ impl Watch {
                         .unwrap_or_else(PoisonError::into_inner)
                         .0;
                 }
-                *state = State::Expired;
                 drop(state);
+                // The records first, as every turn event takes them, so a turn
+                // that ended by itself just now is seen and left as it ended
+                let mut records = lock(&records);
+                {
+                    let mut state = lock(&shared.0);
+                    if *state != State::Counting {
+                        return;
+                    }
+                    *state = State::Expired;
+                }
                 // Paused before the cancel, so the turn's end finds it so
-                if let Err(error) = pause(&records, &ticket, slots) {
+                if let Err(error) = pause(&mut records, &ticket, slots) {
                     eprintln!(
                         "kelpie: the record of ticket {ticket} did not keep its pause: {error}"
                     );
                 }
+                drop(records);
                 session.cancel();
             });
         if let Err(error) = spawned {
@@ -153,8 +163,7 @@ impl Watch {
 }
 
 /// Pause `ticket`'s worker, and give its slot to the next in line
-fn pause(records: &Mutex<Records>, ticket: &str, slots: usize) -> io::Result<()> {
-    let mut records = lock(records);
+fn pause(records: &mut Records, ticket: &str, slots: usize) -> io::Result<()> {
     records.set_status(ticket, Status::Paused)?;
     records.seat(slots)?;
     Ok(())
@@ -240,6 +249,60 @@ mod tests {
             waiting.seat,
             Seat::Held,
             "the freed slot went on to the next in line"
+        );
+    }
+
+    #[test]
+    fn a_restarted_worker_is_not_paused_by_the_ceiling_of_the_turn_before() {
+        let rig = Rig::new("restart");
+        let binding = binding();
+        // The harness goes away mid-turn: the turn ends with a `Failed` and no `TurnEnded`
+        let crashing = FakeAgent::new().turn(Turn::new().exit());
+        let open =
+            |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&crashing, opening)) };
+        let (sink, heard) = events();
+        let mut short = rig.project(&binding, &open, 2);
+        short.turn_timeout = Duration::from_millis(400);
+        start(&short, &ticket("74", "Build the thing"), sink).unwrap();
+        loop {
+            let event = heard
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the first turn never failed");
+            if matches!(event, SessionEvent::Failed { .. }) {
+                break;
+            }
+        }
+
+        let healthy = FakeAgent::new()
+            .can_resume()
+            .knows("fake-1")
+            .turn(Turn::new().text("again").until_cancelled());
+        let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&healthy, opening)) };
+        let (sink, heard) = events();
+        let long = rig.project(&binding, &open, 2);
+        let started = start(&long, &ticket("74", "Build the thing"), sink).unwrap();
+        assert!(matches!(started, Started::Running { .. }), "{started:?}");
+        loop {
+            let event = heard
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the second turn never started");
+            if matches!(event, SessionEvent::Started { .. }) {
+                break;
+            }
+        }
+
+        // Well past the first turn's ceiling
+        std::thread::sleep(Duration::from_millis(900));
+
+        let records = kept(&rig);
+        assert_eq!(
+            (records[0].status, records[0].seat),
+            (Status::Running, Seat::Held),
+            "the first turn's ceiling left the restarted worker alone"
+        );
+        assert!(
+            !healthy.methods().contains(&"session/cancel".to_owned()),
+            "and cancelled nothing of it"
         );
     }
 }
