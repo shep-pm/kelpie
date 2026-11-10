@@ -64,7 +64,7 @@ First interactions:
 
 ## Tickets and links
 
-1. **Board:** a kanban, Draft, Ready, Building, Review, Done. A ticket that needs the maintainer carries a marker. Filter by area. Its own design note comes later.
+1. **Board:** a kanban, Draft, Ready, Building, Review, Done. A ticket that needs the maintainer carries a marker. Filter by area. Its design is `docs/design/tickets.md`.
 2. **A ticket holds more than its issue:** links, its threads, notes to its worker. Issues stay the git flow on GitHub.
 3. **Links**, most stable first: an area, a symbol, a file, lines within a symbol.
 4. **Links follow the code.** A file watcher reindexes what changed. Renamed files are found by git's rename detection, moved symbols through the index, and line ranges are shifted by the diff's hunks. The PM fixes the obvious ones and logs them, and asks about the rest (a function split in two, a file deleted).
