@@ -169,8 +169,9 @@ impl core::error::Error for HarnessError {
 /// The first `cmd` on the `PATH` text `path`, as an absolute path
 ///
 /// Each harness runs the person's own install, found here rather than trusted to
-/// whatever `PATH` the harness would search itself.
-pub(super) fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
+/// whatever `PATH` the harness would search itself. `worker::login` reads the same
+/// way for the `gh` a worker's git answers github.com with.
+pub(crate) fn on_path(cmd: &str, path: &OsStr) -> Option<PathBuf> {
     let name = format!("{cmd}{EXE_SUFFIX}");
     env::split_paths(path).find_map(|dir| {
         let found = dir.join(&name);
