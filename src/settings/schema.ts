@@ -14,6 +14,7 @@ const LABELS: Record<string, string> = {
   "worker-model": "Worker model",
   "worker-effort": "Worker effort",
   "worker-slots": "Worker slots",
+  "worker-turn-timeout": "Worker turn ceiling (minutes)",
   provider: "Provider",
   host: "Host",
   "reply-style": "Reply style",
