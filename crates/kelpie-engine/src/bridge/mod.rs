@@ -22,6 +22,7 @@
 //!
 //! ```no_run
 //! use kelpie_engine::bridge::{Download, Pin, Platform, ensure};
+//! use std::collections::BTreeMap;
 //! use std::path::Path;
 //!
 //! let pin = Pin {
@@ -34,6 +35,8 @@
 //!             url: "https://github.com/agentclientprotocol/claude-agent-acp/releases/download/v0.101.1/claude-code-acp-darwin-arm64.zip".into(),
 //!             sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
 //!             cmd: "claude-code-acp".into(),
+//!             args: Vec::new(),
+//!             env: BTreeMap::new(),
 //!         },
 //!     )],
 //! };
@@ -42,6 +45,7 @@
 //! # Ok::<(), kelpie_engine::bridge::BridgeError>(())
 //! ```
 
+use std::collections::BTreeMap;
 use std::env::consts::{ARCH, OS};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
@@ -134,6 +138,10 @@ fn platform_text() -> String {
 }
 
 /// One bridge archive kelpie downloads for one platform
+///
+/// `args` and `env` are what the registry's entry says the bridge is run with,
+/// such as goose's `acp`. [`check`] starts a new version with them, so a bridge
+/// that needs a subcommand is never probed as a bare command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Download {
     /// Where the archive is. Its extension says which format kelpie unpacks
@@ -144,6 +152,13 @@ pub struct Download {
 
     /// The file inside the archive kelpie installs, which is the one it runs
     pub cmd: String,
+
+    /// The arguments the bridge is run with, empty where its entry has none
+    pub args: Vec<String>,
+
+    /// Variables added to the environment the bridge inherits, empty where its
+    /// entry has none
+    pub env: BTreeMap<String, String>,
 }
 
 /// One bridge kelpie installs: a registry id, one pinned version, and the
