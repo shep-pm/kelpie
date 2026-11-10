@@ -20,7 +20,7 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let folder = std::env::temp_dir().join(format!("kelpie-lease-{}", RunId::new().unwrap()));
+        let folder = std::env::temp_dir().join(format!("kelpie-lease-{}", short_run()));
         let _ = std::fs::remove_dir_all(&folder);
         std::fs::create_dir_all(&folder).unwrap();
         Self(folder)
@@ -29,6 +29,12 @@ impl Scratch {
     fn path(&self) -> &Path {
         &self.0
     }
+}
+
+/// A random folder name short enough that a session's `lease.sock` inside it is
+/// still a path macOS will bind
+fn short_run() -> String {
+    RunId::new().unwrap().to_string()[..8].to_owned()
 }
 
 impl Drop for Scratch {
@@ -206,6 +212,52 @@ fn a_session_that_ends_gives_back_every_place_its_connections_held() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The lease book every session's socket tasks share
+fn book(leases: &Leases) -> std::sync::Arc<Shared> {
+    std::sync::Arc::clone(&leases.shared)
+}
+
+/// A taker with `n` as its connection, for a book asked to by hand
+fn taker(n: u64) -> Taker {
+    Taker {
+        connection: Connection(n),
+        pid: u32::try_from(n).unwrap_or(1),
+        what: "cargo test".to_owned(),
+    }
+}
+
+#[test]
+fn a_grant_made_while_the_queued_answer_is_written_still_wakes_the_waiter() {
+    let dir = Scratch::new();
+    let leases = leases(&dir, 1);
+    let shared = book(&leases);
+    let now = Timestamp::now();
+
+    assert!(matches!(
+        shared.ask("cargo-test", taker(1), false, now),
+        Took::Granted
+    ));
+    let Took::Queued { ahead, wake } = shared.ask("cargo-test", taker(2), false, now) else {
+        panic!("the second ask queues behind the holder");
+    };
+    assert_eq!(ahead, 0);
+    assert!(!wake.is_cancelled(), "the waiter has not been granted yet");
+
+    // The holder's connection closes while the waiter's queued answer is still
+    // on its way out, which is the moment kelpie grants the waiter
+    shared.leave("cargo-test", Connection(1), now);
+
+    assert!(
+        wake.is_cancelled(),
+        "the waiter was granted, so it must hear it and not line up again"
+    );
+    assert_eq!(
+        holders(&leases, "cargo-test"),
+        1,
+        "the place went to the waiter"
+    );
 }
 
 #[test]

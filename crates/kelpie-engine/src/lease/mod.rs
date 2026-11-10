@@ -237,7 +237,7 @@ impl Shared {
     /// says its command already runs under a grant that went away
     ///
     /// A lease no layer names a capacity for holds one command at a time.
-    fn ask(&self, name: &str, taker: Taker, running: bool, now: Timestamp) -> Taken {
+    fn ask(&self, name: &str, taker: Taker, running: bool, now: Timestamp) -> Took {
         let connection = taker.connection;
         let mut leases = locked(&self.leases);
         let capacity = self.settings.lease_capacity_for(name).count();
@@ -250,12 +250,16 @@ impl Shared {
         } else {
             book.counted.ask(taker, now)
         };
-        if matches!(taken, Taken::Queued { .. }) {
-            // Held across the ask, so a grant made before the waiter listens is
-            // not missed
-            book.waiting.insert(connection, CancellationToken::new());
+        match taken {
+            Taken::Granted => Took::Granted,
+            Taken::Queued { ahead } => {
+                // The wake is made in the same lock that queued the ask, so a
+                // grant from another connection cannot pass it by
+                let wake = CancellationToken::new();
+                book.waiting.insert(connection, wake.clone());
+                Took::Queued { ahead, wake }
+            }
         }
-        taken
     }
 
     /// Gives back the place or queue entry `connection` had in `name`, and wakes
@@ -272,15 +276,19 @@ impl Shared {
             }
         }
     }
+}
 
-    /// The wake that says `connection`'s turn in `name` has come, `None` when it
-    /// was granted at once or is gone already
-    fn wake(&self, name: &str, connection: Connection) -> Option<CancellationToken> {
-        locked(&self.leases)
-            .get(name)
-            .and_then(|book| book.waiting.get(&connection))
-            .cloned()
-    }
+/// What kelpie made of an ask, with the wake a queued one waits on
+///
+/// The wake comes out of the same lock that queued the ask, so a grant made
+/// while the queued answer is still on its way out has already cancelled it, and
+/// the waiter still hears it.
+enum Took {
+    Granted,
+    Queued {
+        ahead: usize,
+        wake: CancellationToken,
+    },
 }
 
 /// Whether `text` is a lease name kelpie can hold: lowercase letters, digits and
@@ -407,7 +415,7 @@ mod serve {
     use tokio_util::sync::CancellationToken;
 
     use crate::lease::counted::{Connection, Taker};
-    use crate::lease::{Answer, Ask, Shared, Taken, named};
+    use crate::lease::{Answer, Ask, Shared, Took, named};
     use crate::pacer::Timestamp;
     use crate::tools::door::{Accepted, Listener};
 
@@ -466,25 +474,21 @@ mod serve {
             connection,
         };
         match shared.ask(&name, taker, ask.running, Timestamp::now()) {
-            Taken::Granted => {
+            Took::Granted => {
                 if said(&mut write, &Answer::Granted).await.is_err() {
                     return;
                 }
             }
-            Taken::Queued { ahead } => {
+            Took::Queued { ahead, wake } => {
                 if said(&mut write, &Answer::Queued(ahead)).await.is_err() {
                     return;
                 }
-                // A client that closes while queued withdraws its ask, so it
-                // never holds a place it was never granted
-                let Some(wake) = shared.wake(&name, connection) else {
-                    return;
-                };
                 tokio::select! {
                     biased;
                     () = stop.cancelled() => return,
                     () = wake.cancelled() => {}
-                    // A client that sends nothing and closes is withdrawing
+                    // A client that sends nothing and closes is withdrawing its
+                    // ask, so it never holds a place it was never granted
                     () = closed(&mut read) => return,
                 }
                 if said(&mut write, &Answer::Granted).await.is_err() {
