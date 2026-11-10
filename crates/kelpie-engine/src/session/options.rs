@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use kelpie_protocol::{Choice, Options};
 
 use crate::bridge::is_name;
+use crate::sandbox::Sandbox;
 use crate::tree::ProcessTree;
 
 use super::acp::{describe, is_gone, new_session};
@@ -55,11 +56,12 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(60);
 
 /// Ask `harness` what it offers, and stop it
 ///
-/// Starts it through `tree`, sends `initialize` and `session/new` in `project`,
-/// reads the config options it answers with, closes the session and stops the
-/// process. It sends no prompt, so no model runs and nothing is spent. This
-/// blocks until the harness has answered or is gone, and names no model or
-/// effort of its own: the harness's defaults stand.
+/// Starts it through `tree` inside `sandbox` (ADR 0005), sends `initialize` and
+/// `session/new` in `project`, reads the config options it answers with, closes
+/// the session and stops the process. It sends no prompt, so no model runs and
+/// nothing is spent. This blocks until the harness has answered or is gone, and
+/// names no model or effort of its own: the harness's defaults stand. The
+/// sandbox lasts until the ask returns.
 ///
 /// # Errors
 ///
@@ -68,9 +70,10 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(60);
 pub fn ask(
     tree: &Arc<ProcessTree>,
     harness: &Harness,
+    sandbox: Sandbox,
     project: &Path,
 ) -> Result<Options, SessionError> {
-    let mut launcher = launcher(tree, harness, project);
+    let mut launcher = launcher(tree, harness, sandbox, project);
     asked(&mut launcher, project, harness.new_session_meta.as_ref())
 }
 
@@ -90,6 +93,12 @@ pub(crate) fn asked_within(
     meta: Option<&serde_json::Value>,
     deadline: Duration,
 ) -> Result<Options, SessionError> {
+    // Whatever launcher is handed in, nothing starts outside a sandbox (ADR 0005)
+    if !launcher.sandboxed() {
+        return Err(SessionError::Start(io::Error::other(
+            "the ask starts no harness outside a sandbox",
+        )));
+    }
     asking(launcher, deadline, async |cx| {
         talk(cx, project.to_path_buf(), meta).await
     })
@@ -200,9 +209,10 @@ async fn until<T>(deadline: Duration, work: impl Future<Output = T>) -> Option<T
 /// What harness `id` offers: what kelpie was last told, or a fresh ask
 ///
 /// The answer kept under `data_dir` answers until `refresh` is set. A fresh one
-/// is kept at `options/<id>.json` for the next time. Building the harness has
-/// its own cost, such as installing its bridge, so a caller that must start
-/// nothing reads [`kept`] before it builds one.
+/// is asked as [`ask`] does, inside `sandbox`, and is kept at
+/// `options/<id>.json` for the next time. Building the harness has its own cost,
+/// such as installing its bridge, so a caller that must start nothing reads
+/// [`kept`] before it builds one.
 ///
 /// # Errors
 ///
@@ -212,11 +222,12 @@ pub fn offerings(
     tree: &Arc<ProcessTree>,
     harness: &Harness,
     id: &str,
+    sandbox: Sandbox,
     data_dir: &Path,
     project: &Path,
     refresh: bool,
 ) -> Result<Options, SessionError> {
-    let mut launcher = launcher(tree, harness, project);
+    let mut launcher = launcher(tree, harness, sandbox, project);
     offerings_at(
         &mut launcher,
         id,
@@ -249,16 +260,17 @@ pub(crate) fn offerings_at(
     Ok(options)
 }
 
-/// The launcher that starts `harness` through `tree`, in `project`
-pub(crate) fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Path) -> impl Launch {
+/// The launcher that starts `harness` through `tree` inside `sandbox`, in `project`
+pub(crate) fn launcher(
+    tree: &Arc<ProcessTree>,
+    harness: &Harness,
+    sandbox: Sandbox,
+    project: &Path,
+) -> impl Launch {
     ProcessLauncher {
         tree: Arc::clone(tree),
         harness: harness.clone(),
-        // The ask sends no prompt, so no model runs and the harness runs no tools
-        // before it ends. It is not sandboxed: a sandbox is per session, built
-        // from a project and a state folder, and an ask has neither. It is the
-        // one harness start outside a sandbox, and the one that sends nothing.
-        sandbox: None,
+        sandbox: Some(sandbox),
         project: project.to_path_buf(),
     }
 }
