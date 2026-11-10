@@ -6,16 +6,27 @@
 //! Each runs off the main thread, since a locked keychain can wait on the person.
 //!
 //! [`harness_options`] lists what a harness offers, from the harness itself.
+//!
+//! [`settings_get`], [`settings_set`], [`settings_reset`] and [`settings_schema`]
+//! are the settings form's way in: every field it shows is written to the layer
+//! file it sits in, never held here. The PM's harness, model and effort are one
+//! value kept in two places by layer: the global `pm` agent's keys on the Global
+//! tab, and the project's own `pm-*` settings on the Project tab.
 
 use std::fs;
 
+use kelpie_engine::agents::{Agents, Binding, Origin, PmKey};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::session::options;
+use kelpie_engine::settings::{ConfigDir, Field, Layer, LayerFile, Resolved, Settings};
 use kelpie_protocol::Options;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::State;
 
+use crate::pm::{self, Defaulted};
 use crate::state::AppState;
 
 /// The folder under the data folder a harness is asked in
@@ -100,13 +111,296 @@ pub fn harness_options(
     .map_err(|error| error.to_string())
 }
 
+/// One field of the form: its value, and the layer the value came from
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
+pub struct FieldView {
+    /// The field's key in a settings file, such as `pm-model`
+    pub key: String,
+
+    /// The value as the file holds it, `null` where no layer sets one
+    pub value: Value,
+
+    /// Where it came from, as a person reads it: `kelpie`, `global`, `project`, or an agent such as `kelpie:pm`
+    pub from: String,
+}
+
+/// The project tab: one project's fields over the global and built-in layers
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
+pub struct ProjectView {
+    /// The project's id, which a write to its layer names
+    pub id: String,
+
+    /// The folder the maintainer picked
+    pub path: String,
+
+    /// Every field, in the order the form shows them
+    pub fields: Vec<FieldView>,
+}
+
+/// What the settings page shows: each tab's fields with the layer of each value
+#[derive(Debug, Clone, PartialEq, Serialize, specta::Type)]
+pub struct ResolvedView {
+    /// The fields the global layer can hold, resolved from it alone
+    pub global: Vec<FieldView>,
+
+    /// The project's fields, `None` before a project is picked
+    pub project: Option<ProjectView>,
+}
+
+/// The layer a write goes to
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Target {
+    /// `settings.json`, and the global `pm` agent for the PM's harness, model and effort
+    Global,
+
+    /// One project's own settings
+    Project {
+        /// The project's id, from [`ProjectView`]
+        id: String,
+    },
+}
+
+/// The layer a value's origin is shown as: the global `pm` agent is the global layer
+fn from(origin: &Origin) -> String {
+    match origin {
+        Origin::File(name) if name == kelpie_engine::agents::PM => Layer::Global.name().to_owned(),
+        other => other.to_string(),
+    }
+}
+
+fn layered<T: Serialize>(field: Field, value: &T, layer: Layer) -> FieldView {
+    FieldView {
+        key: field.key().to_owned(),
+        value: serde_json::to_value(value).unwrap_or(Value::Null),
+        from: layer.name().to_owned(),
+    }
+}
+
+/// The form's fields in order, from the settings and the PM's resolved binding
+fn fields(resolved: &Resolved, pm: &Defaulted, only: impl Fn(Field) -> bool) -> Vec<FieldView> {
+    let sourced = |field: Field, value: Value, origin: &Origin| FieldView {
+        key: field.key().to_owned(),
+        value,
+        from: from(origin),
+    };
+    Field::ALL
+        .into_iter()
+        .filter(|field| only(*field))
+        .map(|field| match field {
+            Field::PmHarness => sourced(field, json_of(&Some(pm.harness.value)), &pm.harness.from),
+            Field::PmModel => sourced(field, json_of(&pm.model.value), &pm.model.from),
+            Field::PmEffort => sourced(field, json_of(&pm.effort.value), &pm.effort.from),
+            Field::Provider => layered(field, &resolved.provider.value, resolved.provider.from),
+            Field::Host => layered(field, &resolved.host.value, resolved.host.from),
+            Field::ReplyStyle => layered(
+                field,
+                &resolved.reply_style.value,
+                resolved.reply_style.from,
+            ),
+            Field::NetworkAllowlist => layered(
+                field,
+                &resolved.network_allowlist.value,
+                resolved.network_allowlist.from,
+            ),
+            Field::ReadAnywhere => layered(
+                field,
+                &resolved.read_anywhere.value,
+                resolved.read_anywhere.from,
+            ),
+            Field::HarnessGlobalFolder => layered(
+                field,
+                &resolved.harness_global_folder.value,
+                resolved.harness_global_folder.from,
+            ),
+            // `Field` grows with each slice's settings, and a form shows only those it has
+            _ => FieldView {
+                key: field.key().to_owned(),
+                value: Value::Null,
+                from: Layer::BuiltIn.name().to_owned(),
+            },
+        })
+        .collect()
+}
+
+fn json_of<T: Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+/// Read every field of both tabs, each with the layer it came from
+///
+/// The Global tab shows what the global layer and the global `pm` agent say. The
+/// Project tab shows what the project sees: its own file over those. `project`
+/// is a project's id, and `None` is the first project, since Phase 1 has one.
+///
+/// # Errors
+///
+/// The text of which settings or agent file cannot be used, and why.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn settings_get(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<ResolvedView, String> {
+    let config = state.config();
+    let agents = Agents::load(config).map_err(|error| error.to_string())?;
+    let global_pm = agents.pm().map_err(|error| error.to_string())?;
+    let global_settings = Settings::load_global(config).map_err(|error| error.to_string())?;
+    let global_binding = Binding {
+        harness: global_pm.harness,
+        model: global_pm.model,
+        effort: global_pm.effort,
+        body: global_pm.body,
+    };
+    let global = fields(
+        &global_settings,
+        &pm::with_defaults(&global_binding),
+        |field| field.layers().contains(&Layer::Global) || is_pm(field),
+    );
+    let project = match state.project_id(project.as_deref()) {
+        Ok(id) => {
+            let settings = Settings::load(config, &id).map_err(|error| error.to_string())?;
+            let binding = agents
+                .pm_binding(&settings)
+                .map_err(|error| error.to_string())?;
+            let path = state
+                .project_path_of(&id)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            Some(ProjectView {
+                id,
+                path,
+                fields: fields(&settings, &pm::with_defaults(&binding), |_| true),
+            })
+        }
+        // No project yet: the Project tab has nothing to show
+        Err(_) if state.project_path().is_none() => None,
+        Err(error) => return Err(error),
+    };
+    Ok(ResolvedView { global, project })
+}
+
+/// Whether `field` is one of the PM's three, which the global layer keeps in the `pm` agent
+fn is_pm(field: Field) -> bool {
+    pm_key(field).is_some()
+}
+
+fn pm_key(field: Field) -> Option<PmKey> {
+    match field {
+        Field::PmHarness => Some(PmKey::Harness),
+        Field::PmModel => Some(PmKey::Model),
+        Field::PmEffort => Some(PmKey::Effort),
+        _ => None,
+    }
+}
+
+fn field_named(path: &str) -> Result<Field, String> {
+    Field::ALL
+        .into_iter()
+        .find(|field| field.key() == path)
+        .ok_or_else(|| format!("kelpie has no setting named {path}"))
+}
+
+/// The layer file `target` names, checked against the projects kelpie holds
+fn layer_file(state: &AppState, target: &Target) -> Result<Option<String>, String> {
+    match target {
+        Target::Global => Ok(None),
+        Target::Project { id } => state.project_id(Some(id)).map(Some),
+    }
+}
+
+/// Write one field of one layer
+///
+/// The value is checked against the settings schema before anything is written.
+/// `null` and a blank string clear the field, which is what an empty form field
+/// means. On the Global tab the PM's harness, model and effort are written to the
+/// global `pm` agent's file, and everything else to `settings.json`. The PM's
+/// next message uses the result.
+///
+/// # Errors
+///
+/// The text of why the value was refused, or the file could not be written.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn settings_set(
+    state: State<'_, AppState>,
+    layer: Target,
+    path: String,
+    value: Value,
+) -> Result<(), String> {
+    let field = field_named(&path)?;
+    let project = layer_file(&state, &layer)?;
+    let value = match value {
+        Value::String(text) if text.trim().is_empty() => Value::Null,
+        other => other,
+    };
+    write(state.config(), field, project.as_deref(), Some(&value))
+}
+
+/// Clear one field of one layer, so its value falls back to the layer below
+///
+/// # Errors
+///
+/// The text of why the file could not be written.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn settings_reset(
+    state: State<'_, AppState>,
+    layer: Target,
+    path: String,
+) -> Result<(), String> {
+    let field = field_named(&path)?;
+    let project = layer_file(&state, &layer)?;
+    write(state.config(), field, project.as_deref(), None)
+}
+
+/// Set, or with `None` reset, `field` in the layer file of `project`, or the global one
+fn write(
+    config: &ConfigDir,
+    field: Field,
+    project: Option<&str>,
+    value: Option<&Value>,
+) -> Result<(), String> {
+    let at = match project {
+        Some(id) => LayerFile::Project(id),
+        None => LayerFile::Global,
+    };
+    if project.is_none()
+        && let Some(key) = pm_key(field)
+    {
+        let text = match value {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) => Some(text.as_str()),
+            Some(other) => return Err(format!("{} takes text, not {other}", field.key())),
+        };
+        return Agents::set_pm_key(config, key, text).map_err(|error| error.to_string());
+    }
+    match value {
+        Some(value) => Settings::set(config, at, field, value),
+        None => Settings::reset(config, at, field),
+    }
+    .map_err(|error| error.to_string())
+}
+
+/// The JSON Schema every settings file satisfies, from the Rust types
+///
+/// The form is rendered from it, and a field's description is its help text.
+#[tauri::command]
+#[specta::specta]
+#[must_use]
+pub fn settings_schema() -> Value {
+    kelpie_engine::settings::schema()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
     use kelpie_engine::login::Store;
     use kelpie_engine::run::RunId;
+    use kelpie_engine::settings::ConfigDir;
 
+    use super::{FieldView, Target, settings_get, settings_reset, settings_schema, settings_set};
     use crate::state::AppState;
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
@@ -198,6 +492,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-settings-{}", RunId::new().unwrap()));
         let state = AppState::open(
             dir.clone(),
+            ConfigDir::at(dir.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
@@ -245,6 +540,7 @@ mod tests {
         fs::write(dir.join("options").join("claude.json"), KEPT).unwrap();
         let state = AppState::open(
             dir.clone(),
+            ConfigDir::at(dir.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
@@ -272,5 +568,227 @@ mod tests {
             dir.display()
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An app on the mock runtime with a project picked, its settings in `dir/config`
+    fn app_with_project(dir: &std::path::Path) -> tauri::App<tauri::test::MockRuntime> {
+        let state = AppState::open(
+            dir.to_path_buf(),
+            ConfigDir::at(dir.join("config")),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+        )
+        .unwrap();
+        state.set_project(dir.to_path_buf()).unwrap();
+        mock_builder()
+            .manage(state)
+            .build(mock_context(noop_assets()))
+            .unwrap()
+    }
+
+    fn field<'a>(fields: &'a [FieldView], key: &str) -> &'a FieldView {
+        fields.iter().find(|field| field.key == key).unwrap()
+    }
+
+    fn fresh_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("kelpie-settings-{}", RunId::new().unwrap()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_field_says_which_layer_its_value_came_from() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+        let project = state.project_id(None).unwrap();
+        let on = || Target::Project {
+            id: project.clone(),
+        };
+
+        settings_set(
+            state.clone(),
+            Target::Global,
+            "host".into(),
+            "http://one".into(),
+        )
+        .unwrap();
+        settings_set(
+            state.clone(),
+            on(),
+            "reply-style".into(),
+            "harness-default".into(),
+        )
+        .unwrap();
+        let seen = settings_get(state.clone(), None).unwrap();
+
+        let project_fields = seen.project.unwrap().fields;
+        assert_eq!(field(&project_fields, "host").value, "http://one");
+        assert_eq!(field(&project_fields, "host").from, "global");
+        assert_eq!(field(&project_fields, "reply-style").from, "project");
+        assert_eq!(field(&project_fields, "read-anywhere").from, "kelpie");
+        // The global tab holds only what the global layer can hold, and never a project's value
+        assert_eq!(field(&seen.global, "reply-style").from, "kelpie");
+        assert!(seen.global.iter().all(|f| f.key != "network-allowlist"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_pm_fields_on_the_global_tab_are_the_global_pm_agents_keys() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+
+        let before = settings_get(state.clone(), None).unwrap();
+        assert_eq!(field(&before.global, "pm-model").value, "opus");
+        assert_eq!(field(&before.global, "pm-model").from, "kelpie");
+        assert_eq!(field(&before.global, "pm-harness").value, "claude-code");
+
+        settings_set(
+            state.clone(),
+            Target::Global,
+            "pm-model".into(),
+            "sonnet".into(),
+        )
+        .unwrap();
+        let after = settings_get(state.clone(), None).unwrap();
+
+        assert_eq!(field(&after.global, "pm-model").value, "sonnet");
+        assert_eq!(field(&after.global, "pm-model").from, "global");
+        let project = after.project.unwrap().fields;
+        assert_eq!(field(&project, "pm-model").value, "sonnet");
+        assert_eq!(field(&project, "pm-model").from, "global");
+        let text = fs::read_to_string(dir.join("config/agents/pm.md")).unwrap();
+        assert!(text.contains("model: sonnet"), "{text}");
+        assert!(!dir.join("config/settings.json").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reset_falls_back_to_the_layer_below() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+        let project = state.project_id(None).unwrap();
+        let on = || Target::Project {
+            id: project.clone(),
+        };
+        settings_set(
+            state.clone(),
+            Target::Global,
+            "pm-model".into(),
+            "global-model".into(),
+        )
+        .unwrap();
+        settings_set(
+            state.clone(),
+            on(),
+            "pm-model".into(),
+            "project-model".into(),
+        )
+        .unwrap();
+
+        settings_reset(state.clone(), on(), "pm-model".into()).unwrap();
+        let seen = settings_get(state.clone(), None)
+            .unwrap()
+            .project
+            .unwrap()
+            .fields;
+        assert_eq!(field(&seen, "pm-model").value, "global-model");
+        assert_eq!(field(&seen, "pm-model").from, "global");
+
+        settings_reset(state.clone(), Target::Global, "pm-model".into()).unwrap();
+        let seen = settings_get(state.clone(), None)
+            .unwrap()
+            .project
+            .unwrap()
+            .fields;
+        assert_eq!(field(&seen, "pm-model").value, "opus");
+        assert_eq!(field(&seen, "pm-model").from, "kelpie");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_blank_value_clears_the_field_and_a_bad_one_is_refused() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+        settings_set(
+            state.clone(),
+            Target::Global,
+            "host".into(),
+            "http://one".into(),
+        )
+        .unwrap();
+
+        settings_set(state.clone(), Target::Global, "host".into(), "  ".into()).unwrap();
+        let seen = settings_get(state.clone(), None).unwrap().global;
+        assert_eq!(field(&seen, "host").from, "kelpie");
+
+        let error = settings_set(
+            state.clone(),
+            Target::Global,
+            "reply-style".into(),
+            "loud".into(),
+        )
+        .unwrap_err();
+        assert!(error.contains("reply-style"), "{error}");
+        let error =
+            settings_set(state.clone(), Target::Global, "nope".into(), 1.into()).unwrap_err();
+        assert!(error.contains("nope"), "{error}");
+        let error = settings_set(
+            state.clone(),
+            Target::Global,
+            "network-allowlist".into(),
+            serde_json::json!(["a.example"]),
+        )
+        .unwrap_err();
+        assert!(error.contains("network-allowlist"), "{error}");
+        let error = settings_set(
+            state.clone(),
+            Target::Project { id: "../x".into() },
+            "host".into(),
+            "h".into(),
+        )
+        .unwrap_err();
+        assert!(error.contains("no project"), "{error}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn before_a_project_is_picked_the_global_tab_still_reads() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let state = AppState::open(
+            dir.clone(),
+            ConfigDir::at(dir.join("config")),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+        )
+        .unwrap();
+        let app = mock_builder()
+            .manage(state)
+            .build(mock_context(noop_assets()))
+            .unwrap();
+
+        let seen = settings_get(app.state::<AppState>(), None).unwrap();
+
+        assert!(seen.project.is_none());
+        assert!(!seen.global.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_schema_the_form_is_drawn_from_names_every_field() {
+        let schema = settings_schema();
+        for key in ["pm-model", "reply-style", "network-allowlist"] {
+            assert!(schema["properties"][key].is_object(), "{key}");
+        }
     }
 }

@@ -18,8 +18,11 @@ use std::time::Duration;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::{Session, SessionId};
+use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
+
+use crate::pm::{self, PmPlan};
 
 /// The run file's name in the data folder
 const RUN_FILE: &str = "run.json";
@@ -155,6 +158,9 @@ pub struct Opening<'a> {
 
     /// Where the person's harness logins are kept
     pub logins: &'a Store,
+
+    /// What the PM runs on, resolved from the settings when this send began
+    pub pm: &'a PmPlan,
 }
 
 /// Builds the PM's session for a project
@@ -168,10 +174,11 @@ pub struct AppState {
     data_dir: PathBuf,
     tree: Arc<ProcessTree>,
     logins: Store,
+    config: ConfigDir,
     projects: Arc<Mutex<Projects>>,
-    /// The first project's PM, `None` until the first send. Held only for a
-    /// look or a swap, never while the opener runs.
-    session: Mutex<Option<Arc<Session>>>,
+    /// The first project's PM and the harness it was opened on, `None` until
+    /// the first send. Held only for a look or a swap, never while the opener runs.
+    session: Mutex<Option<(Harness, Arc<Session>)>>,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -190,8 +197,9 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    /// Open the state in `data_dir`, with `opener` to build each PM session from
-    /// `logins`, and `picker` to ask for a folder
+    /// Open the state in `data_dir`, with settings and agent files read from
+    /// `config`, `opener` to build each PM session from `logins`, and `picker`
+    /// to ask for a folder
     ///
     /// Sweeps what the previous run's file lists before the new tree starts
     /// anything, then writes a run file of its own. Starts no process and no
@@ -203,6 +211,7 @@ impl AppState {
     /// previous run's file is not a run file.
     pub fn open(
         data_dir: PathBuf,
+        config: ConfigDir,
         logins: Store,
         opener: Opener,
         picker: Picker,
@@ -216,6 +225,7 @@ impl AppState {
             data_dir,
             tree,
             logins,
+            config,
             projects: Arc::new(Mutex::new(projects)),
             session: Mutex::new(None),
             opening: Mutex::new(()),
@@ -228,6 +238,12 @@ impl AppState {
     #[must_use]
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// The folder settings and agent files are read from
+    #[must_use]
+    pub fn config(&self) -> &ConfigDir {
+        &self.config
     }
 
     /// The tree every process of this run starts in
@@ -260,6 +276,16 @@ impl AppState {
             .map(|project| project.path.clone())
     }
 
+    /// The folder of the project `id`, `None` when kelpie holds no such project
+    #[must_use]
+    pub fn project_path_of(&self, id: &str) -> Option<PathBuf> {
+        lock(&self.projects)
+            .list()
+            .iter()
+            .find(|project| project.id == id)
+            .map(|project| project.path.clone())
+    }
+
     /// Make `path` the project, with a state folder of its own, and drop the PM
     /// of the one before
     ///
@@ -280,10 +306,17 @@ impl AppState {
 
     /// The first project's PM session, built on the first call
     ///
+    /// What the PM runs on is resolved from the settings on every call, so a
+    /// model or effort changed since the last message applies to this one, on
+    /// the same session. A changed harness does not move a session that is
+    /// open: that is a session of its own (#31), and until then the new one is
+    /// used when the next one is opened.
+    ///
     /// # Errors
     ///
-    /// No project is picked yet, or the opener could not build the session. The
-    /// text is for the maintainer to read.
+    /// No project is picked yet, the settings or the PM's agent file cannot be
+    /// used, or the opener could not build the session. The text is for the
+    /// maintainer to read.
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle), String> {
         let _opening = lock(&self.opening);
         let project = lock(&self.projects)
@@ -294,8 +327,10 @@ impl AppState {
             id: project.id.clone(),
             projects: Arc::clone(&self.projects),
         };
-        if let Some(session) = self.held_session() {
-            return Ok((session, handle));
+        let plan = pm::plan(&self.config, &project.id)?;
+        if let Some((_, session)) = lock(&self.session).as_ref() {
+            session.choose(plan.choice.clone());
+            return Ok((Arc::clone(session), handle));
         }
         let state_dir = self
             .data_dir
@@ -308,9 +343,31 @@ impl AppState {
             project: &project,
             state_dir: &state_dir,
             logins: &self.logins,
+            pm: &plan,
         })?);
-        *lock(&self.session) = Some(Arc::clone(&session));
+        *lock(&self.session) = Some((plan.harness, Arc::clone(&session)));
         Ok((session, handle))
+    }
+
+    /// The id of the project `id` names, or of the first when `None`
+    ///
+    /// # Errors
+    ///
+    /// No project is picked yet, or none has this id.
+    pub fn project_id(&self, id: Option<&str>) -> Result<String, String> {
+        let projects = lock(&self.projects);
+        match id {
+            Some(id) => projects
+                .list()
+                .iter()
+                .find(|project| project.id == id)
+                .map(|project| project.id.clone())
+                .ok_or_else(|| format!("kelpie has no project {id}")),
+            None => projects
+                .first()
+                .map(|project| project.id.clone())
+                .ok_or_else(|| "Pick the project's folder first.".to_owned()),
+        }
     }
 
     /// The PM session when one is open, `None` when none is
@@ -319,7 +376,9 @@ impl AppState {
     /// the main thread.
     #[must_use]
     pub fn held_session(&self) -> Option<Arc<Session>> {
-        lock(&self.session).as_ref().map(Arc::clone)
+        lock(&self.session)
+            .as_ref()
+            .map(|(_, session)| Arc::clone(session))
     }
 
     /// Stop every process of this run
@@ -455,6 +514,7 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
@@ -483,6 +543,7 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),

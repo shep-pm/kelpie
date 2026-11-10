@@ -18,6 +18,10 @@
   "dependencies": {
     "@fontsource-variable/atkinson-hyperlegible-mono": "^5.3.0",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
+    "@rjsf/core": "^6.11.1",
+    "@rjsf/shadcn": "^6.11.1",
+    "@rjsf/utils": "^6.11.1",
+    "@rjsf/validator-ajv8": "^6.11.1",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "class-variance-authority": "^0.7.1",
