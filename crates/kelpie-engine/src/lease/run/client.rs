@@ -134,6 +134,10 @@ async fn tend(
     let deadline = granted + limit;
     let patience = rejoin.patience;
     let mut tries = 0;
+    // When to knock again, as a time and not as a fresh wait each pass: the
+    // `POLL` below is shorter than `patience.every`, so a wait started here would
+    // be thrown away and started again before it could ever come due
+    let mut knock: Option<Instant> = None;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -150,12 +154,11 @@ async fn tend(
                 return failed(&format!("cannot tell how the command ended: {error}"), 1);
             }
         }
-        let rejoining = held.is_none() && tries < patience.tries;
         let event = tokio::select! {
             caught = signals.recv() => Event::Caught(caught),
             () = tokio::time::sleep_until(deadline) => Event::Overran,
             () = gone(&mut held) => Event::KelpieGone,
-            () = tokio::time::sleep(patience.every), if rejoining => Event::Rejoin,
+            () = until(knock) => Event::Rejoin,
             () = tokio::time::sleep(POLL) => Event::Nap,
         };
         match event {
@@ -171,6 +174,7 @@ async fn tend(
             Event::KelpieGone => {
                 held = None;
                 tries = 0;
+                knock = Some(Instant::now() + patience.every);
                 say("kelpie went away: asking it to count this run again once it is back");
             }
             Event::Rejoin => {
@@ -178,12 +182,14 @@ async fn tend(
                 match seat(rejoin.door, &rejoin.ask).await {
                     Ok(visit) => {
                         held = Some(visit);
+                        knock = None;
                         say("kelpie counts this run again");
                     }
                     Err(_) if tries == patience.tries => {
+                        knock = None;
                         say("kelpie did not come back, so this run is not counted");
                     }
-                    Err(_) => {}
+                    Err(_) => knock = Some(Instant::now() + patience.every),
                 }
             }
             Event::Overran => {
@@ -332,6 +338,17 @@ async fn gone(held: &mut Option<Visit>) {
         return std::future::pending().await;
     };
     while let Ok(Some(_)) = visit.answer().await {}
+}
+
+/// Sleep until `when`, and never when there is none
+///
+/// `when` is a time and not a wait, so a pass of the loop that ends early leaves
+/// it where it was.
+async fn until(when: Option<Instant>) {
+    match when {
+        Some(when) => tokio::time::sleep_until(when).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// A worker cannot start kelpie, so it is told to go on without the lease

@@ -44,7 +44,7 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let folder = env::temp_dir().join(format!("kelpie-lease-run-{}", RunId::new().unwrap()));
+        let folder = env::temp_dir().join(format!("kelpie-lr-{}", short_run()));
         let _ = fs::remove_dir_all(&folder);
         fs::create_dir_all(&folder).unwrap();
         Self(folder)
@@ -53,6 +53,12 @@ impl Scratch {
     fn path(&self) -> &Path {
         &self.0
     }
+}
+
+/// A random folder name short enough that a session's `lease.sock` inside it is
+/// still a path macOS will bind
+fn short_run() -> String {
+    RunId::new().unwrap().to_string()[..8].to_owned()
 }
 
 impl Drop for Scratch {
@@ -76,6 +82,19 @@ fn leases(dir: &Scratch, capacity: u32) -> Leases {
 /// The tree a test's command runs through
 fn tree(dir: &Scratch) -> ProcessTree {
     ProcessTree::new(RunId::new().unwrap(), dir.path().join("run.json")).unwrap()
+}
+
+/// Wait until `name` holds `want` places, as kelpie's lease status says
+async fn holders_until(leases: &Leases, name: &str, want: usize) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while held(leases, name) != want {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{name} holds {}, not {want}",
+            held(leases, name)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 fn words<'a>(words: &'a [&'a str]) -> Vec<&'a OsStr> {
@@ -272,4 +291,50 @@ fn a_command_killed_by_a_signal_exits_as_the_shell_says() {
     assert_eq!(exit_number(killed), 143);
     assert_eq!(exit_number(ExitStatus::from_raw(0)), 0);
     assert_eq!(exit_number(ExitStatus::from_raw(0x0100)), 1);
+}
+
+/// A run whose kelpie went away asks the kelpie that comes back to count it
+///
+/// macOS only, because a restarted kelpie is at the same socket there. Linux
+/// binds a port the OS picks, so the run's door is gone with the kelpie that
+/// opened it.
+#[tokio::test]
+#[cfg(target_os = "macos")]
+async fn a_run_asks_a_restarted_kelpie_to_count_its_running_command_again() {
+    let dir = Scratch::new();
+    let state = dir.path().join("w");
+    let patience = Patience {
+        tries: 40,
+        every: Duration::from_millis(100),
+    };
+
+    let first = leases(&dir, 1);
+    let session = first.session(&state).unwrap();
+    let door = session.door().clone();
+    let tree = tree(&dir);
+    let command = words(&["sh", "-c", "sleep 5"]);
+
+    let gone_and_back = async {
+        holders_until(&first, CARGO_TEST, 1).await;
+        // kelpie goes away: its sockets close and its runtime ends, while the
+        // command it granted keeps running
+        drop(session);
+        drop(first);
+        // ...and comes back on the same socket, where the run is still going
+        let back = leases(&dir, 1);
+        let session = back.session(&state).unwrap();
+        assert_eq!(
+            session.door(),
+            &door,
+            "the restarted kelpie is at the socket"
+        );
+        holders_until(&back, CARGO_TEST, 1).await;
+    };
+
+    let (code, ()) = tokio::join!(
+        run(&door, CARGO_TEST, &command, RUN_LIMIT, patience, &tree),
+        gone_and_back
+    );
+    let _ = tree.stop_all(KILL_AFTER);
+    assert_eq!(code, 0, "the command ran out, counted all along");
 }
