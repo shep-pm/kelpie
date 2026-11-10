@@ -127,10 +127,12 @@ export const useAgents = create<Agents>((set, get) => {
 
     async openAgent(name) {
       clearTimeout(timer);
-      asked++;
+      const mine = ++asked;
       set({ ...empty, agents: get().agents });
       try {
         const done = await commands.agentGet(name);
+        // Closed, or another agent opened, while this one was read
+        if (mine !== asked) return;
         if (done.status === "error") {
           set({ error: done.error });
           return;
@@ -142,7 +144,7 @@ export const useAgents = create<Agents>((set, get) => {
           previewError: done.data.problem,
         });
       } catch (error) {
-        set({ error: String(error) });
+        if (mine === asked) set({ error: String(error) });
       }
     },
 

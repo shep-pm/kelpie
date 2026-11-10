@@ -268,4 +268,23 @@ describe("the agent editor", () => {
     ).toBe("A new line.");
     expect(screen.queryByText("Saved")).toBeNull();
   });
+
+  it("a file the loader cannot read says why instead of staying blank", async () => {
+    const why = "agent odd cannot be read: it is not UTF-8 text";
+    agentGet.mockResolvedValue(refused(why));
+    render(<AgentEditor name="odd" onClose={() => {}} />);
+
+    expect((await screen.findByRole("alert")).textContent).toBe(why);
+  });
+
+  it("a key cleared in the form stays empty until it is typed again", async () => {
+    await openChild();
+    const extendsField = within(row("Extends")).getByRole("textbox");
+
+    fireEvent.change(extendsField, { target: { value: "" } });
+
+    expect((extendsField as HTMLInputElement).value).toBe("");
+    fireEvent.change(extendsField, { target: { value: "base" } });
+    expect((extendsField as HTMLInputElement).value).toBe("base");
+  });
 });

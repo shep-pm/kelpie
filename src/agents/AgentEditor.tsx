@@ -194,11 +194,11 @@ function Fields() {
       onChange={(event) => {
         const next = event.formData as Record<string, Value | undefined>;
         for (const key of KEYS) {
-          if (next[key] === data[key]) continue;
-          const value = next[key];
-          useAgents
-            .getState()
-            .setKey(key, typeof value === "string" ? value : null);
+          const now = next[key];
+          if ((now ?? "") === (data[key] ?? "")) continue;
+          // A field emptied is reported as no value. The draft keeps it empty,
+          // so it is not refilled from the preview before the person types
+          useAgents.getState().setKey(key, typeof now === "string" ? now : "");
         }
       }}
     />
@@ -270,6 +270,7 @@ export function AgentEditor({
 }) {
   const ready = useAgents((s) => s.open?.name === name);
   const problem = useAgents((s) => s.open?.problem ?? null);
+  const unread = useAgents((s) => s.error);
 
   useEffect(() => {
     void useSettings.getState().load();
@@ -292,7 +293,13 @@ export function AgentEditor({
         <h2 className="font-mono text-lg font-semibold">{name}</h2>
       </header>
       {!ready ? (
-        <Skeleton className="h-24 w-full" />
+        unread !== null ? (
+          <p role="alert" className="text-sm text-status-failed-fg">
+            {unread}
+          </p>
+        ) : (
+          <Skeleton className="h-24 w-full" />
+        )
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="flex min-w-0 flex-col gap-3">

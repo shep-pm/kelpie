@@ -66,7 +66,7 @@ impl Source {
         };
         let mut frontmatter = Frontmatter::default();
         for entry in extends::entries(front) {
-            let value = Some(entry.value()).filter(|value| !value.is_empty());
+            let value = Some(value_of(&entry)).filter(|value| !value.is_empty());
             match entry.key.as_str() {
                 "extends" => frontmatter.extends = value,
                 "role" => frontmatter.role = value,
@@ -115,6 +115,21 @@ impl Source {
         }
         text
     }
+}
+
+/// An entry's value. A double-quoted one is read as the JSON string [`Source::text`]
+/// writes, so its escapes are undone and a quote inside it does not end it.
+fn value_of(entry: &extends::Entry) -> String {
+    let line = entry.text.lines().next().unwrap_or("");
+    let raw = line.split_once(':').map_or("", |(_, v)| v.trim());
+    if raw.starts_with('"')
+        && let Some(Ok(text)) = serde_json::Deserializer::from_str(raw)
+            .into_iter::<String>()
+            .next()
+    {
+        return text;
+    }
+    entry.value()
 }
 
 /// Whether `value` is `kelpie:<name>`, which is a plain YAML scalar as it is
@@ -361,6 +376,18 @@ mod tests {
             "a word YAML reads as a boolean is quoted"
         );
         assert_eq!(Source::parse(&text), source);
+    }
+
+    #[test]
+    fn a_value_with_a_backslash_or_a_quote_is_the_same_after_every_save() {
+        let mut source = extending("kelpie:pm", "Body.");
+        source.frontmatter.model = Some(r#"a\b"c"#.to_owned());
+
+        let once = Source::parse(&source.text());
+        let twice = Source::parse(&once.text());
+
+        assert_eq!(once, source);
+        assert_eq!(twice, source);
     }
 
     #[test]
