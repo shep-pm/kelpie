@@ -291,10 +291,17 @@ pub(crate) fn check(rule: &Value, value: &Value, path: &str) -> Option<(String, 
                         return Some(bad);
                     }
                 }
-                None if rule.get("additionalProperties") == Some(&Value::Bool(false)) => {
-                    return broke(format!("{path} is not a setting kelpie has"));
-                }
-                None => {}
+                None => match rule.get("additionalProperties") {
+                    Some(Value::Bool(false)) => {
+                        return broke(format!("{path} is not a setting kelpie has"));
+                    }
+                    Some(any_other @ Value::Object(_)) => {
+                        if let Some(bad) = check(any_other, nested, &path) {
+                            return Some(bad);
+                        }
+                    }
+                    _ => {}
+                },
             }
         }
         if let Some(Value::Array(required)) = rule.get("required") {
