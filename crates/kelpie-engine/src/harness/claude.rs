@@ -110,6 +110,7 @@ static PLATFORMS: LazyLock<Vec<(Platform, Download)>> = LazyLock::new(|| {
 /// The pinned bridge, ready for [`bridge::ensure`]
 static PIN: LazyLock<Pin<'static>> = LazyLock::new(|| Pin {
     id: ID,
+    registry_id: ID,
     version: VERSION,
     platforms: PLATFORMS.as_slice(),
 });

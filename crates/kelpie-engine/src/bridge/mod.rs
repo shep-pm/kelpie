@@ -25,6 +25,7 @@
 //!
 //! let pin = Pin {
 //!     id: "claude-acp",
+//!     registry_id: "claude-acp",
 //!     version: "0.101.1",
 //!     platforms: &[(
 //!         Platform::MacOsArm64,
@@ -50,6 +51,7 @@ use std::time::Duration;
 use sha2::{Digest as _, Sha256};
 
 mod error;
+pub mod registry;
 
 pub use error::BridgeError;
 use error::{could_not_download, could_not_read, could_not_write, missing_command};
@@ -145,6 +147,9 @@ pub struct Download {
 pub struct Pin<'a> {
     /// The registry id, such as `claude-acp`
     pub id: &'a str,
+
+    /// The id the registry's index lists this bridge under, which [`registry::Index::bridge`] looks up
+    pub registry_id: &'a str,
 
     /// The version pinned, such as `0.101.1`
     pub version: &'a str,

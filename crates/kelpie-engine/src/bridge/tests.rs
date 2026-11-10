@@ -29,9 +29,12 @@ const PLATFORMS: [Platform; 5] = [
     Platform::WindowsX64,
 ];
 
-/// The two fixtures the server answers with
+/// The two archives the server answers with
 const TAR: &str = "bridge.tar.gz";
 const ZIP: &str = "bridge.zip";
+
+/// The registry's index, which the server answers with `{{base}}` made its own address
+const REGISTRY: &str = "registry.json";
 
 /// A local HTTP server that answers `GET /<name>` with the fixture of that name
 ///
@@ -60,7 +63,7 @@ impl Server {
                     }
                     let Ok(stream) = stream else { continue };
                     let hits = hits.clone();
-                    thread::spawn(move || answer(stream, delay, &hits));
+                    thread::spawn(move || answer(stream, addr, delay, &hits));
                 }
             })
         };
@@ -95,7 +98,7 @@ impl Drop for Server {
 }
 
 /// Read one request from `stream` and answer it
-fn answer(mut stream: TcpStream, delay: Duration, hits: &AtomicUsize) {
+fn answer(mut stream: TcpStream, addr: SocketAddr, delay: Duration, hits: &AtomicUsize) {
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
     while !request.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -122,6 +125,18 @@ fn answer(mut stream: TcpStream, delay: Duration, hits: &AtomicUsize) {
             )
             .into_bytes();
             reply.extend_from_slice(&body);
+            reply
+        }
+        REGISTRY => {
+            let body = fs::read_to_string(fixture_path(name))
+                .unwrap()
+                .replace("{{base}}", &format!("http://{addr}"));
+            let mut reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            reply.extend_from_slice(body.as_bytes());
             reply
         }
         _ => b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec(),
@@ -194,6 +209,7 @@ fn this_platform() -> Platform {
 fn pin(platforms: &[(Platform, Download)]) -> Pin<'_> {
     Pin {
         id: ID,
+        registry_id: ID,
         version: VERSION,
         platforms,
     }
@@ -407,4 +423,33 @@ fn a_pin_that_names_a_path_outside_the_bridges_folder_is_refused() {
     assert!(matches!(error, BridgeError::PinNotUsable { .. }), "{error}");
     assert!(error.to_string().contains("../escape"), "{error}");
     assert!(!dir.data().join("bridges").exists());
+}
+
+#[test]
+fn the_index_gives_a_pin_for_the_stable_version() {
+    let server = Server::start(Duration::ZERO);
+
+    let index = registry::fetch(&server.url(REGISTRY)).unwrap();
+
+    let pin = index.bridge(ID).expect("claude-acp is in the index");
+    assert_eq!((pin.id, pin.registry_id, pin.version), (ID, ID, "0.102.0"));
+    assert_eq!(pin.platforms.len(), PLATFORMS.len());
+    let (_, arm_mac) = pin
+        .platforms
+        .iter()
+        .find(|(platform, _)| *platform == Platform::MacOsArm64)
+        .expect("the index has macOS on arm64");
+    assert_eq!(
+        *arm_mac,
+        Download {
+            url: server.url(ZIP),
+            sha256: hash_file(&fixture_path(ZIP)).unwrap(),
+            cmd: CMD.to_string(),
+        },
+        "the command is the file's name, without the registry's ./"
+    );
+    assert!(
+        index.bridge("codex-acp").is_none(),
+        "an agent with no binary distribution has no pin"
+    );
 }
