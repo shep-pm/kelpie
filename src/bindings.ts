@@ -145,9 +145,87 @@ export const commands = {
 	 *  The form is rendered from it, and a field's description is its help text.
 	 */
 	settingsSchema: () => __TAURI_INVOKE<Value>("settings_schema"),
+	/**
+	 *  The agents the config folder holds, and the global `pm`, which is always there to edit
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the folder cannot be listed.
+	 */
+	agentsList: () => typedError<AgentSummary[], string>(__TAURI_INVOKE("agents_list")),
+	/**
+	 *  One agent: its own keys and body, and what they resolve to with each key's layer
+	 * 
+	 *  A file the loader cannot use still opens, with its keys and the loader's
+	 *  reason, so it can be fixed in the form. The global `pm` opens empty before it
+	 *  is saved, resolved as `kelpie:pm`.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why `name` is no agent: it is not a name, or no such file is there.
+	 */
+	agentGet: (name: string) => typedError<AgentView, string>(__TAURI_INVOKE("agent_get", { name })),
+	/**
+	 *  The agent `frontmatter` and `body` would make as `name`, for the preview beside the editor
+	 * 
+	 *  Nothing is written. The loader checks it as it checks a file, so what it
+	 *  refuses here is what [`agent_save`] refuses.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of what the loader refuses, naming the key.
+	 */
+	agentPreview: (name: string, frontmatter: Frontmatter, body: string) => typedError<ResolvedAgent, string>(__TAURI_INVOKE("agent_preview", { name, frontmatter, body })),
+	/**
+	 *  Write `frontmatter` and `body` as the file of `name`, if the loader accepts them
+	 * 
+	 *  The loader checks the file before anything is written, so a refusal leaves
+	 *  the folder as it was. The file is written again from the keys given, so a
+	 *  comment in its frontmatter does not stay. The PM's next message uses a saved `pm`.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of what the loader refuses, naming the key, or why the file could
+	 *  not be written.
+	 */
+	agentSave: (name: string, frontmatter: Frontmatter, body: string) => typedError<null, string>(__TAURI_INVOKE("agent_save", { name, frontmatter, body })),
+	/**
+	 *  Make a new agent that builds on `parent`, or with none a plain `pm` agent
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why not: the name is taken or is no name, or the parent is one the loader cannot find.
+	 */
+	agentNew: (name: string, parent: string | null) => typedError<null, string>(__TAURI_INVOKE("agent_new", { name, parent })),
 };
 
 /* Types */
+/**  One agent in the list */
+export type AgentSummary = {
+	/**  The file's name without `.md` */
+	name: string,
+	/**  Whether the file is there. The global `pm` is listed before it is, since it builds on `kelpie:pm`. */
+	exists: boolean,
+	/**  Why the loader cannot use the file, `None` when it can */
+	problem: string | null,
+};
+
+/**  What the editor shows for one agent */
+export type AgentView = {
+	/**  The file's name without `.md` */
+	name: string,
+	/**  Whether the file is there */
+	exists: boolean,
+	/**  The keys the file sets itself */
+	frontmatter: Frontmatter,
+	/**  The file's own instructions, before its parent's are merged in */
+	body: string,
+	/**  Why the loader cannot use the file, `None` when it can */
+	problem: string | null,
+	/**  The agent as a session gets it, `None` when the file cannot be used */
+	resolved: ResolvedAgent | null,
+};
+
 /**  How long a prompt cache entry lives */
 export type CacheLifetime = 
 /**  Five minutes */
@@ -173,6 +251,22 @@ export type FieldView = {
 	value: Value,
 	/**  Where it came from, as a person reads it: `kelpie`, `global`, `project`, or an agent such as `kelpie:pm` */
 	from: string,
+};
+
+/**  The keys an agent file sets itself. A key that is `null` or blank is not in the file. */
+export type Frontmatter = {
+	/**  The agent it builds on: another file's name, or `kelpie:<name>` for one of kelpie's own */
+	extends: string | null,
+	/**  What the agent is for. Only `pm` so far, and an agent that extends none needs it */
+	role: string | null,
+	/**  The harness it runs on, such as `claude-code` */
+	harness: string | null,
+	/**  The model, named as the harness names it */
+	model: string | null,
+	/**  The effort, named as the harness names it */
+	effort: string | null,
+	/**  `append` puts this file's body after its parent's, and none replaces it */
+	body: string | null,
 };
 
 /**
@@ -222,6 +316,14 @@ export type ProjectView = {
 	path: string,
 	/**  Every field, in the order the form shows them */
 	fields: FieldView[],
+};
+
+/**  An agent with its `extends` chain resolved */
+export type ResolvedAgent = {
+	/**  `role`, `harness`, `model`, `effort` and `body`, each with the layer it came from: `kelpie:pm`, a file's name, or `kelpie` */
+	fields: FieldView[],
+	/**  The parents it builds on, nearest first, ending at one of kelpie's own */
+	chain: string[],
 };
 
 /**  What the settings page shows: each tab's fields with the layer of each value */
