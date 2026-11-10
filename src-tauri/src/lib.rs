@@ -26,6 +26,7 @@ use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::collect_commands;
 
 pub mod agents;
+pub mod bridges;
 pub mod pm;
 pub mod settings;
 pub mod state;
@@ -53,6 +54,8 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::settings_set,
             settings::settings_reset,
             settings::settings_schema,
+            bridges::bridge_status,
+            bridges::bridge_approve,
             agents::agents_list,
             agents::agent_get,
             agents::agent_preview,

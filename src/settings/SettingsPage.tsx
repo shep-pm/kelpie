@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BridgeField } from "./BridgeField";
+import { HARNESSES } from "./harnesses";
 import { LayeredField, type SettingsContext, type Tab } from "./LayeredField";
 import { LoginField } from "./LoginField";
 import { formSchema, ordered } from "./schema";
@@ -191,6 +193,7 @@ function Fields({ tab }: { tab: Tab }) {
       <>
         <TabForm tab="global" id={null} fields={view.global} below={[]} />
         <LoginFor fields={view.global} />
+        <BridgeFor fields={view.global} />
       </>
     );
   }
@@ -217,6 +220,21 @@ function LoginFor({ fields }: { fields: FieldView[] }) {
   const harness = fields.find((f) => f.key === "pm-harness")?.value;
   if (typeof harness !== "string") return null;
   return <LoginField harness={harness} />;
+}
+
+/** The bridge of the PM's harness, beside its login: the version in use and how new ones arrive. */
+function BridgeFor({ fields }: { fields: FieldView[] }) {
+  const harness = fields.find((f) => f.key === "pm-harness")?.value;
+  if (typeof harness !== "string") return null;
+  const info = HARNESSES[harness];
+  if (info?.bridge === undefined) return null;
+  return (
+    <BridgeField
+      bridge={info.bridge}
+      harness={info.name}
+      field={fields.find((f) => f.key === "bridge-updates")}
+    />
+  );
 }
 
 /** The settings of kelpie and of the project, one form for each, drawn from the settings schema. */

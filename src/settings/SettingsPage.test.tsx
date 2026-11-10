@@ -16,6 +16,7 @@ import {
   vi,
 } from "vitest";
 import type {
+  BridgeStatus,
   FieldView,
   Options,
   ResolvedView,
@@ -36,6 +37,8 @@ const harnessOptions =
 const loginStatus = vi.fn<(harness: string) => Promise<unknown>>();
 const loginSet = vi.fn<(harness: string, value: string) => Promise<unknown>>();
 const loginClear = vi.fn<(harness: string) => Promise<unknown>>();
+const bridgeStatus = vi.fn<(id: string) => Promise<unknown>>();
+const bridgeApprove = vi.fn<(id: string) => Promise<unknown>>();
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -49,6 +52,8 @@ vi.mock("@/bindings", () => ({
     loginStatus: (harness: string) => loginStatus(harness),
     loginSet: (harness: string, value: string) => loginSet(harness, value),
     loginClear: (harness: string) => loginClear(harness),
+    bridgeStatus: (id: string) => bridgeStatus(id),
+    bridgeApprove: (id: string) => bridgeApprove(id),
   },
 }));
 
@@ -112,12 +117,37 @@ const globalFields = [
   field("pm-effort", null, "kelpie"),
   field("host", "http://one", "global"),
   field("read-anywhere", false, "kelpie"),
+  field("bridge-updates", null, "kelpie"),
 ];
 
 function resolved(project: FieldView[] = globalFields): ResolvedView {
   return {
     global: globalFields,
     project: { id: "p1", path: "/work/project", fields: project },
+  };
+}
+
+/** Both tabs with the Claude Code bridge's update setting set to `policy`. */
+function withPolicy(policy: Value, from: string): ResolvedView {
+  const fields = globalFields.map((f) =>
+    f.key === "bridge-updates" ? field("bridge-updates", policy, from) : f,
+  );
+  return {
+    global: fields,
+    project: { id: "p1", path: "/work/project", fields },
+  };
+}
+
+/** What the engine says about one bridge, with `over` changed. */
+function bridge(over: Partial<BridgeStatus> = {}): BridgeStatus {
+  return {
+    in_use: "0.101.1",
+    source: "kelpies-pin",
+    ready: null,
+    approved: null,
+    held_back: [],
+    bad: [],
+    ...over,
   };
 }
 
@@ -152,6 +182,8 @@ beforeEach(() => {
   loginStatus.mockResolvedValue(ok(false));
   loginSet.mockResolvedValue(ok(null));
   loginClear.mockResolvedValue(ok(null));
+  bridgeStatus.mockResolvedValue(ok(bridge()));
+  bridgeApprove.mockResolvedValue(ok(null));
 });
 
 afterEach(() => {
@@ -334,5 +366,134 @@ describe("the settings page", () => {
 
     await waitFor(() => expect(loginClear).toHaveBeenCalledWith("claude"));
     expect(await within(login).findByText("not set")).toBeTruthy();
+  });
+});
+
+describe("the bridge row", () => {
+  const bridgeRow = async () =>
+    await screen.findByRole("group", { name: "claude-agent-acp bridge" });
+
+  it("a bridge shows its version and where it came from", async () => {
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ in_use: "0.102.0", source: "registry" })),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText("0.102.0")).toBeTruthy();
+    expect(within(row).getByText("registry")).toBeTruthy();
+    expect(bridgeStatus).toHaveBeenCalledWith("claude-acp");
+  });
+
+  it("a held back version shows its reason", async () => {
+    bridgeStatus.mockResolvedValue(
+      ok(
+        bridge({
+          held_back: [
+            {
+              version: "0.102.0",
+              reason: "it never answered initialize",
+            },
+          ],
+          bad: [
+            {
+              version: "0.101.2",
+              reason: "the session could not resume",
+            },
+          ],
+        }),
+      ),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText(/it never answered initialize/)).toBeTruthy();
+    expect(within(row).getByText(/the session could not resume/)).toBeTruthy();
+  });
+
+  it("ask first shows a ready version with Update", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
+    );
+    bridgeStatus.mockResolvedValueOnce(ok(bridge({ ready: "0.102.0" })));
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.102.0", approved: "0.102.0" })),
+    );
+    bridgeApprove.mockResolvedValue(ok("0.102.0"));
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText("from global")).toBeTruthy();
+    fireEvent.click(within(row).getByRole("button", { name: "Update" }));
+
+    await waitFor(() =>
+      expect(bridgeApprove).toHaveBeenCalledWith("claude-acp"),
+    );
+    expect(
+      await within(row).findByText(/used at your next message/),
+    ).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("an approved version stays approved when the row is read again", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
+    );
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.102.0", approved: "0.102.0" })),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText(/used at your next message/)).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("an approval for a version no longer ready asks again", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
+    );
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.103.0", approved: "0.102.0" })),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText("0.103.0")).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "Update" })).toBeTruthy();
+  });
+
+  it("kelpie's pin shows no ready version", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "kelpies-pin" }, "global")),
+    );
+    bridgeStatus.mockResolvedValue(ok(bridge({ ready: "0.102.0" })));
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+    expect(within(row).queryByText("0.102.0")).toBeNull();
+    expect(within(row).getByText("kelpie's pin")).toBeTruthy();
+  });
+
+  it("choosing a policy writes only this bridge's entry", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "codex-acp": "kelpies-pin" }, "global")),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    fireEvent.keyDown(within(row).getByRole("combobox"), { key: "Enter" });
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Registry, ask first" }),
+    );
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(
+        { kind: "global" },
+        "bridge-updates",
+        { "codex-acp": "kelpies-pin", "claude-acp": "registry-ask-first" },
+      ),
+    );
   });
 });
