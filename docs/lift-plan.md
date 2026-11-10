@@ -2,7 +2,7 @@
 
 Every SK module, with what happens to it: lifted, adapted, left behind or replaced. SK is shep-pm/shep-kelpie, read at `1dc51c040`. `docs/process-and-sk.md` (SK: a treasure chest) says why kelpie lifts instead of starting over; this file says what, where it lands and when. `.claude/skills/lift-from-sk` has the steps for one lift, and `docs/lifted.md` records each lift once it lands.
 
-**Status:** draft for the maintainer, 2026-11-09. Mapped by Hob's traces of SK, with their file and line citations spot-checked.
+**Status:** confirmed by the maintainer on 2026-11-09. Mapped by Hob's traces of SK, with their file and line citations spot-checked.
 
 ## How to use it
 
