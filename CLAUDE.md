@@ -40,6 +40,8 @@ A feature's issues go `ready-for-agent` only once its design note in `docs/desig
 
 Each issue links its note. Workspace, CI and other plumbing with no behaviour of its own need no note.
 
+Grill the maintainer on new decisions only. An internal behaviour SK already settled, in its code, its ADRs or `docs/lift-plan.md`, comes over settled: the note states it and cites SK, and the maintainer reads it there. Ask about one only where kelpie has a reason to differ (New UX, SK's internals).
+
 ## Commands
 
 The Rust workspace is `crates/*` plus `src-tauri`, with `kelpie-engine` and `kelpie-app`. CI runs the four commands below (`.github/workflows/test.yml`), plus `cargo +1.93 check --workspace --all-targets --locked` for the `rust-version` in `Cargo.toml`, plus `pnpm tauri build --no-bundle` in the `app` job.
