@@ -37,9 +37,14 @@ const WAIT: Duration = Duration::from_secs(20);
 fn main() {
     run_from_args();
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some(SLEEP) {
-        sleep_in_the_sandbox(args.next().map(PathBuf::from));
-        return;
+    match args.next().as_deref() {
+        Some(SLEEP) => {
+            sleep_in_the_sandbox(args.next().map(PathBuf::from));
+            return;
+        }
+        // One of the escapes, in the copy of this binary its test started
+        Some(escapes::IN_OWN_HOME) => escapes::run_case(&args.next().expect("a case's tag")),
+        _ => {}
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let selection = Selection::of(&args);
