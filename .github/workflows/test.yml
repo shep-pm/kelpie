@@ -83,6 +83,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Make the user the tests run as
         run: |
+          # The workspace is the host runner's folder, bind-mounted in, so its
+          # owner is noted here and handed back by the last step
+          echo "WORKSPACE_OWNER=$(stat -c %u:%g "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
           useradd --create-home kelpie
           chown -R kelpie "$GITHUB_WORKSPACE"
       - name: Install the toolchain as that user
@@ -106,6 +109,13 @@ jobs:
       - name: Test as that user
         run: |
           runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" CARGO_TERM_COLOR=always cargo test --workspace --locked
+      # The checkout and `target/` are the user's now. The next job on this host
+      # checks out into the same folder as the runner's own user, which cannot
+      # clean files it does not own, so they go back, pass or fail.
+      - name: Give the workspace back to the runner's user
+        if: always()
+        run: |
+          [ -z "$WORKSPACE_OWNER" ] || chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
 
   docs:
     runs-on: [self-hosted]
