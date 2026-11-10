@@ -272,7 +272,10 @@ pub fn parse_token(body: &str) -> Result<IssuedToken, ApiError> {
 }
 
 // GitHub's times are UTC whole seconds, `YYYY-MM-DDTHH:MM:SSZ`, which is the
-// only shape its answers carry. Anything else reads as no time.
+// only shape its answers carry. Anything else reads as no time, a time before
+// 1970-01-01 with it: kelpie counts whole seconds from the epoch and holds no
+// negative count, so a token said to lapse before it began is no time to keep it
+// by.
 fn epoch_seconds(text: &str) -> Option<Timestamp> {
     let [year, month, day, hour, minute, second] = clock_parts(text)?;
     let shaped = year != 0
@@ -282,7 +285,7 @@ fn epoch_seconds(text: &str) -> Option<Timestamp> {
     if !shaped {
         return None;
     }
-    let days = days_from_civil(year, month, day);
+    let days = days_from_civil(year, month, day)?;
     Some(Timestamp::from_secs(
         days * 86_400 + hour * 3_600 + minute * 60 + second,
     ))
@@ -321,17 +324,19 @@ fn days_in_month(year: u64, month: u64) -> u64 {
 }
 
 // Days from 1970-01-01 to `year-month-day`, counting March first so a leap
-// day lands at the end of the year.
-fn days_from_civil(year: u64, month: u64, day: u64) -> u64 {
+// day lands at the end of the year. `None` for a day before 1970-01-01, which
+// kelpie holds no number for: the count is u64, and a wrapped one reads as a
+// token that never lapses.
+fn days_from_civil(year: u64, month: u64, day: u64) -> Option<u64> {
     let (year, month) = match month <= 2 {
-        true => (year - 1, month + 9),
+        true => (year.checked_sub(1)?, month + 9),
         false => (year, month - 3),
     };
     let era = year / 400;
     let within = year % 400;
     let day_of_year = (153 * month + 2) / 5 + day - 1;
     let day_of_era = within * 365 + within / 4 - within / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    (era * 146_097 + day_of_era).checked_sub(719_468)
 }
 
 #[cfg(test)]
@@ -372,6 +377,21 @@ mod tests {
         ] {
             assert_eq!(at(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_time_before_the_epoch_is_no_time_to_keep_a_token_by() {
+        for before in [
+            "1969-12-31T23:59:59Z",
+            "1969-12-31T00:00:00Z",
+            "1900-01-01T00:00:00Z",
+            "0001-01-01T00:00:00Z",
+        ] {
+            assert_eq!(epoch_seconds(before), None, "{before}");
+        }
+        let err = parse_token(r#"{"token":"ghs_x","expires_at":"1969-12-31T23:59:59Z"}"#)
+            .expect_err("a token cannot lapse before it began");
+        assert_eq!(err, ApiError::Unreadable("expires_at"), "{err}");
     }
 
     #[test]
