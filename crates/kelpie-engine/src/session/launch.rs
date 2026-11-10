@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::DynConnectTo;
 
 use crate::sandbox::Sandbox;
+use crate::tools::Reach;
 use crate::tree::{Child, ProcessTree};
 
 use super::{Harness, Launch, Link, lock, stderr};
@@ -44,6 +45,12 @@ pub(super) struct ProcessLauncher {
 impl Launch for ProcessLauncher {
     fn sandboxed(&self) -> bool {
         self.sandbox.is_some()
+    }
+
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        self.sandbox
+            .as_ref()
+            .map(|sandbox| Arc::new(sandbox.network()) as Arc<dyn Reach>)
     }
 
     fn launch(&mut self) -> io::Result<Link> {

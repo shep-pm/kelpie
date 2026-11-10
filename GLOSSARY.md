@@ -92,6 +92,10 @@ _Avoid_: process, chat
 What confines an agent session's reads, writes and network. Every agent runs in one, the PM included.
 _Avoid_: fence, jail, container
 
+**Sandbox setup**:
+The one-time change a machine needs before any sandbox can start on it: an AppArmor profile on Ubuntu 24.04 and later, crabpot's install on Windows.
+_Avoid_: sandbox install, permissions
+
 **Sandbox request**:
 An agent asking the maintainer to let its sandbox reach something it refused. Allowed once, for the project, or denied.
 _Avoid_: permission prompt (the harness's own, which is off)

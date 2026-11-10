@@ -7,15 +7,18 @@ use std::io::{self, BufRead, BufReader, Write, pipe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use super::network::REQUEST_NETWORK;
 use super::relay::{is_relay, relay, settings};
 use super::*;
-use crate::session::fake::FakeAgent;
-use crate::session::{Choice, SessionEvent};
+use crate::sandbox::{Project, Reads, Sandbox};
+use crate::session::fake::{FakeAgent, Turn};
+use crate::session::{Choice, Harness, SandboxAnswer, SessionEvent};
 
 /// How long a test waits for something it forced to happen
 const WAIT: Duration = Duration::from_secs(10);
@@ -138,7 +141,13 @@ fn the_relay_carries_mcp_to_kelpie_and_back() {
         "{initialized}"
     );
     assert_eq!(listed["id"], 2);
-    assert_eq!(listed["result"]["tools"], json!([]), "{listed}");
+    let names: Vec<&Value> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| &tool["name"])
+        .collect();
+    assert_eq!(names, [REQUEST_NETWORK], "{listed}");
     relayed
         .finish()
         .expect("the relay ends once its input does");
@@ -502,4 +511,394 @@ mod macos {
 
         assert!(!socket.exists(), "{} was left behind", socket.display());
     }
+}
+
+/// The hosts a sandbox lets through, as a list
+#[derive(Debug, Default)]
+struct Hosts(Mutex<Vec<String>>);
+
+impl Hosts {
+    fn allowing(hosts: &[&str]) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(
+            hosts.iter().map(|host| (*host).to_owned()).collect(),
+        )))
+    }
+
+    fn list(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl Reach for Hosts {
+    fn allows(&self, host: &str) -> bool {
+        self.list().iter().any(|allowed| allowed == host)
+    }
+
+    fn allow(&self, host: &str) -> bool {
+        self.0.lock().unwrap().push(host.to_owned());
+        true
+    }
+}
+
+/// A session's agent calling kelpie's `request_network`, with the turn's sink and
+/// the sandbox standing by
+struct Asking {
+    relayed: Relayed,
+    events: Receiver<SessionEvent>,
+    hosts: Arc<Hosts>,
+    session: SessionTools,
+    // Dropped last: the door and the scratch folder it sits in outlive the rest
+    _tools: Tools,
+    _scratch: Scratch,
+}
+
+/// The agent's end, in a turn, on a sandbox that already lets `allowed` through
+fn asking(allowed: &[&str]) -> Asking {
+    let scratch = Scratch::new();
+    let tools = started(&scratch);
+    let session = tools.session();
+    let hosts = Hosts::allowing(allowed);
+    let (sender, events) = channel();
+    session.asks().bind(hosts.clone());
+    session
+        .asks()
+        .emit_to(Some(Arc::new(move |event| sender.send(event).is_ok())));
+    let mut relayed = relayed(session.door(), session.token());
+    relayed.open();
+    Asking {
+        relayed,
+        events,
+        hosts,
+        session,
+        _tools: tools,
+        _scratch: scratch,
+    }
+}
+
+impl Asking {
+    /// The agent calls `request_network`
+    fn calls(&mut self, arguments: &Value) {
+        self.relayed.say(&json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": REQUEST_NETWORK, "arguments": arguments},
+        }));
+    }
+
+    /// The agent asks for `host`, and says why
+    fn asks_for(&mut self, host: &str, why: &str) {
+        self.calls(&json!({"host": host, "why": why}));
+    }
+
+    /// The request the maintainer is shown: its id, host and why
+    fn shown(&self) -> (String, String, String) {
+        match self.events.recv_timeout(WAIT) {
+            Ok(SessionEvent::SandboxRequest { id, host, why }) => (id, host, why),
+            other => panic!("no request was shown: {other:?}"),
+        }
+    }
+
+    /// What the agent hears back, as the tool's one line, and whether it is an error
+    fn heard(&self) -> (String, bool) {
+        let reply = self.relayed.hear();
+        assert_eq!(reply["id"], 7, "{reply}");
+        let result = &reply["result"];
+        (
+            result["content"][0]["text"].as_str().unwrap().to_owned(),
+            result["isError"].as_bool().unwrap_or(false),
+        )
+    }
+}
+
+#[test]
+fn request_network_waits_for_the_answer() {
+    let mut agent = asking(&[]);
+
+    agent.asks_for("docs.rs", "to read the crate's docs");
+
+    let (id, host, why) = agent.shown();
+    assert_eq!(
+        (host.as_str(), why.as_str()),
+        ("docs.rs", "to read the crate's docs")
+    );
+    // Nothing is said until the maintainer answers
+    assert!(agent.relayed.lines.try_recv().is_err());
+    assert!(agent.session.asks().answer(&id, SandboxAnswer::Once));
+    assert_eq!(
+        agent.heard(),
+        ("docs.rs is allowed for this session".to_owned(), false)
+    );
+    assert_eq!(agent.hosts.list(), ["docs.rs"]);
+}
+
+#[test]
+fn allow_for_the_project_tells_the_agent_it_was_saved() {
+    let mut agent = asking(&[]);
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+
+    agent.session.asks().answer(&id, SandboxAnswer::Project);
+
+    assert_eq!(
+        agent.heard().0,
+        "docs.rs is allowed and saved for this project"
+    );
+    assert_eq!(agent.hosts.list(), ["docs.rs"]);
+}
+
+#[test]
+fn deny_changes_nothing() {
+    let mut agent = asking(&["api.anthropic.com"]);
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+
+    agent.session.asks().answer(&id, SandboxAnswer::Deny);
+
+    assert_eq!(
+        agent.heard(),
+        ("denied by the maintainer".to_owned(), false)
+    );
+    assert_eq!(agent.hosts.list(), ["api.anthropic.com"]);
+}
+
+#[test]
+fn a_host_already_allowed_asks_nothing() {
+    let mut agent = asking(&["docs.rs"]);
+
+    agent.asks_for("Docs.rs", "to read the crate's docs");
+
+    assert_eq!(
+        agent.heard(),
+        ("docs.rs is already allowed".to_owned(), false)
+    );
+    assert!(agent.events.try_recv().is_err(), "the maintainer was asked");
+}
+
+#[test]
+fn a_url_or_port_is_not_a_host() {
+    let mut agent = asking(&[]);
+
+    for (given, form) in [
+        ("https://docs.rs/serde", "a URL"),
+        ("docs.rs/serde", "a path"),
+        ("docs.rs:8080", "a port"),
+        ("[::1]:8080", "a port"),
+    ] {
+        agent.asks_for(given, "to read the crate's docs");
+
+        let (line, failed) = agent.heard();
+        assert!(failed, "{given} was taken as a host: {line}");
+        assert!(line.contains(form), "{given}: {line}");
+        assert!(agent.events.try_recv().is_err(), "{given}: asked anyway");
+    }
+    // The control: a host alone is asked about, so the refusals above are the form's
+    agent.asks_for("*.docs.rs", "to read the crate's docs");
+    assert_eq!(agent.shown().1, "*.docs.rs");
+}
+
+#[test]
+fn a_call_that_is_not_a_request_is_told_what_it_lacks() {
+    let mut agent = asking(&[]);
+
+    agent.calls(&json!({"host": "docs.rs"}));
+
+    let (line, failed) = agent.heard();
+    assert!(failed && line.contains("`why`"), "{line}");
+}
+
+/// The relay's end of a session whose agent is inside a turn that waits for its cancel
+struct InATurn {
+    asking: Asking,
+    session: crate::session::Session,
+    sink: Receiver<SessionEvent>,
+    _agent: FakeAgent,
+}
+
+fn in_a_turn() -> InATurn {
+    let scratch = Scratch::new();
+    let tools = started(&scratch);
+    let session_tools = tools.session();
+    let hosts = Hosts::allowing(&[]);
+    session_tools.asks().bind(hosts.clone());
+    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
+    let session = agent
+        .session(PathBuf::from("/project"), None, Choice::default())
+        .with_tools(session_tools.clone());
+    let (sender, sink) = channel();
+    session.send("Go", move |event| {
+        let _ = sender.send(event);
+    });
+    // The harness has opened the session: the turn is in flight
+    while !matches!(
+        sink.recv_timeout(WAIT).unwrap(),
+        SessionEvent::Started { .. }
+    ) {}
+    let mut relayed = relayed(session_tools.door(), session_tools.token());
+    relayed.open();
+    InATurn {
+        asking: Asking {
+            relayed,
+            events: channel().1,
+            hosts,
+            session: session_tools,
+            _tools: tools,
+            _scratch: scratch,
+        },
+        session,
+        sink,
+        _agent: agent,
+    }
+}
+
+impl InATurn {
+    /// The request the turn's sink was handed
+    fn shown(&self) -> String {
+        loop {
+            if let SessionEvent::SandboxRequest { id, .. } = self.sink.recv_timeout(WAIT).unwrap() {
+                return id;
+            }
+        }
+    }
+}
+
+#[test]
+fn an_interrupt_answers_denied() {
+    let mut turn = in_a_turn();
+    turn.asking.asks_for("docs.rs", "to read the crate's docs");
+    let id = turn.shown();
+
+    turn.session.cancel();
+
+    assert_eq!(turn.asking.heard().0, "denied by the maintainer");
+    assert!(
+        !turn.session.answer(&id, SandboxAnswer::Once),
+        "a cancelled request was still waiting"
+    );
+    assert!(turn.asking.hosts.list().is_empty());
+}
+
+#[test]
+fn a_dropped_session_answers_denied() {
+    let mut turn = in_a_turn();
+    turn.asking.asks_for("docs.rs", "to read the crate's docs");
+    turn.shown();
+
+    drop(turn.session);
+
+    assert_eq!(turn.asking.heard().0, "denied by the maintainer");
+    assert!(turn.asking.hosts.list().is_empty());
+}
+
+#[test]
+fn a_turn_that_ended_answers_what_it_left_waiting_denied() {
+    let mut turn = in_a_turn();
+    turn.asking.asks_for("docs.rs", "to read the crate's docs");
+    let id = turn.shown();
+
+    // The agent ended its turn with the call still open
+    turn.session.cancel();
+    while !matches!(
+        turn.sink.recv_timeout(WAIT).unwrap(),
+        SessionEvent::TurnEnded { .. }
+    ) {}
+
+    assert_eq!(turn.asking.heard().0, "denied by the maintainer");
+    assert!(!turn.session.answer(&id, SandboxAnswer::Once));
+}
+
+#[test]
+fn an_answer_through_the_session_widens_the_sandbox() {
+    let mut turn = in_a_turn();
+    turn.asking.hosts.allow("api.anthropic.com");
+    turn.asking.asks_for("docs.rs", "to read the crate's docs");
+    let id = turn.shown();
+    assert!(
+        !turn.asking.hosts.allows("docs.rs"),
+        "refused before the answer"
+    );
+
+    assert!(turn.session.answer(&id, SandboxAnswer::Once));
+
+    assert_eq!(turn.asking.heard().0, "docs.rs is allowed for this session");
+    assert_eq!(turn.asking.hosts.list(), ["api.anthropic.com", "docs.rs"]);
+}
+
+#[test]
+fn allow_once_widens_the_running_sandbox() {
+    let mut agent = asking(&[]);
+    let scratch = Scratch::new();
+    let allowed = ["api.anthropic.com".to_owned()];
+    let project = Project {
+        folder: &scratch.0,
+        network_allowlist: &allowed,
+        reads: Reads::Project,
+        sessions_root: &scratch.0.join("sessions"),
+    };
+    // A real sandbox, started as a session's is, whose lists the answer widens
+    let sandbox = Sandbox::start(&Harness::new("/bin/sh"), &project, &scratch.0.join("state"))
+        .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"));
+    let network = sandbox.network();
+    agent.session.asks().bind(Arc::new(network.clone()));
+    assert!(!network.allows("docs.rs"), "refused before the answer");
+
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+    assert!(!network.allows("docs.rs"), "refused while it is asked");
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+
+    assert_eq!(agent.heard().0, "docs.rs is allowed for this session");
+    assert!(network.allows("docs.rs"), "reached after the answer");
+    assert!(
+        network.allows("api.anthropic.com"),
+        "what was allowed stays"
+    );
+    assert!(!network.allows("example.com"), "only the host asked for");
+    drop(sandbox);
+}
+
+#[test]
+fn a_sandbox_that_replaces_the_one_before_gets_what_was_allowed() {
+    let mut agent = asking(&[]);
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+    agent.heard();
+    agent.asks_for("example.com", "to fetch a file");
+    let (id, ..) = agent.shown();
+    agent.session.asks().answer(&id, SandboxAnswer::Deny);
+    agent.heard();
+
+    // A newer harness's launch starts a sandbox of its own
+    let replacement = Hosts::allowing(&[]);
+    agent.session.asks().bind(replacement.clone());
+
+    assert_eq!(replacement.list(), ["docs.rs"]);
+}
+
+/// A sandbox that cannot take a host: it has dropped, or cannot list it
+#[derive(Debug)]
+struct Gone;
+
+impl Reach for Gone {
+    fn allows(&self, _host: &str) -> bool {
+        false
+    }
+
+    fn allow(&self, _host: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+fn an_allow_the_sandbox_could_not_take_is_not_told_as_allowed() {
+    let mut agent = asking(&[]);
+    agent.session.asks().bind(Arc::new(Gone));
+    agent.asks_for("docs.rs", "to read the crate's docs");
+    let (id, ..) = agent.shown();
+
+    agent.session.asks().answer(&id, SandboxAnswer::Once);
+
+    let (line, failed) = agent.heard();
+    assert!(!failed);
+    assert!(line.contains("still refused"), "{line}");
+    assert!(!line.contains("is allowed"), "{line}");
 }

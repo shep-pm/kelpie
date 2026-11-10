@@ -418,6 +418,19 @@ status: ToolStatus;
  *  Absent on every other step, and on a call refused with no reason given.
  */
 reason?: string | null } | 
+/**
+ *  The agent asked to reach a host the sandbox refuses, and waits for the maintainer
+ * 
+ *  Answered with `Session::answer`. A turn that ends, or a session that
+ *  stops, while it waits answers it denied.
+ */
+{ kind: "sandbox_request"; 
+/**  The request's id, which the answer names */
+id: string; 
+/**  The host the agent wants to reach, a name as the sandbox's network lists take it */
+host: string; 
+/**  Why the agent wants it, in its own words */
+why: string } | 
 /**  The turn is over */
 { kind: "turn_ended"; 
 /**  Why it ended */

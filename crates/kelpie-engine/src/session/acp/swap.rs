@@ -66,6 +66,7 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
     match &setup.source {
         Source::Fixed { harness, launcher } => {
             let mut launcher = lock(launcher);
+            bind_network(setup, &**launcher);
             let link = launcher.launch().map_err(|error| DidNotStart {
                 version: None,
                 from: None,
@@ -90,6 +91,7 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
             };
             let Started { harness, launch } = (bridge.start)(&version).map_err(not_started)?;
             let mut launch = launch;
+            bind_network(setup, &*launch);
             let mode = mode_of(setup, &*launch, &harness);
             let Link {
                 transport,
@@ -120,6 +122,13 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
                 link,
             ))
         }
+    }
+}
+
+/// Hand the session's `request_network` calls the sandbox `launch` runs the agent in
+fn bind_network(setup: &Setup, launch: &dyn Launch) {
+    if let Some(network) = launch.network() {
+        setup.asks.bind(network);
     }
 }
 
