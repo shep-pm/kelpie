@@ -36,15 +36,16 @@ fn main() {
         sleep_in_the_sandbox(args.next().map(PathBuf::from));
         return;
     }
-    let filter = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let selection = Selection::of(&args);
     let mut failed = false;
+    let (mut ran, mut filtered) = (0_usize, 0_usize);
     for (name, test) in TESTS {
-        if filter
-            .as_ref()
-            .is_some_and(|filter| !name.contains(filter.as_str()))
-        {
+        if !selection.runs(name) {
+            filtered += 1;
             continue;
         }
+        ran += 1;
         let skipped = SKIPPED.load(Ordering::SeqCst);
         match panic::catch_unwind(AssertUnwindSafe(test)) {
             Ok(()) if SKIPPED.load(Ordering::SeqCst) > skipped => {
@@ -57,10 +58,79 @@ fn main() {
             }
         }
     }
+    println!("ran {ran} tests, {filtered} filtered out");
     std::process::exit(i32::from(failed));
 }
 
-const TESTS: [(&str, fn()); 4] = [
+/// Which tests an invocation names, read as `libtest` reads its arguments
+///
+/// A bare word is a name filter, `--skip` names tests to leave out and `--exact`
+/// makes a filter match a whole name. The other options `libtest` takes are
+/// ignored, and those that take a value (`--test-threads 1`) keep it from
+/// being read as a filter.
+struct Selection {
+    filters: Vec<String>,
+    skips: Vec<String>,
+    exact: bool,
+}
+
+/// The options `libtest` takes a value for, as `--name value`
+const VALUED: [&str; 7] = [
+    "--test-threads",
+    "--skip",
+    "--format",
+    "--color",
+    "--logfile",
+    "--report-time",
+    "--shuffle-seed",
+];
+
+impl Selection {
+    fn of(args: &[String]) -> Self {
+        let mut selection = Self {
+            filters: Vec::new(),
+            skips: Vec::new(),
+            exact: false,
+        };
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            let (option, value) = match arg.split_once('=') {
+                Some((option, value)) if arg.starts_with("--") => (option, Some(value.to_owned())),
+                _ => (arg.as_str(), None),
+            };
+            if option == "--exact" {
+                selection.exact = true;
+            } else if VALUED.contains(&option) {
+                let value = value.or_else(|| args.next().cloned());
+                if let (true, Some(value)) = (option == "--skip", value) {
+                    selection.skips.push(value);
+                }
+            } else if !arg.starts_with('-') {
+                selection.filters.push(arg.clone());
+            }
+        }
+        selection
+    }
+
+    fn matches(&self, name: &str, word: &str) -> bool {
+        if self.exact {
+            name == word
+        } else {
+            name.contains(word)
+        }
+    }
+
+    fn runs(&self, name: &str) -> bool {
+        (self.filters.is_empty() || self.filters.iter().any(|word| self.matches(name, word)))
+            && !self.skips.iter().any(|word| self.matches(name, word))
+    }
+}
+
+const TESTS: [(&str, fn()); 5] = [
+    (
+        "the_value_of_a_libtest_option_is_not_a_filter",
+        the_value_of_a_libtest_option_is_not_a_filter,
+    ),
     (
         "a_kernel_without_user_namespaces_is_told_from_a_command_that_failed",
         a_kernel_without_user_namespaces_is_told_from_a_command_that_failed,
@@ -302,4 +372,27 @@ fn a_kernel_without_user_namespaces_is_told_from_a_command_that_failed() {
     assert_eq!(host_refuses_sandboxes(refused), cfg!(target_os = "linux"));
     assert!(!host_refuses_sandboxes("sh: true: not found"));
     assert!(!host_refuses_sandboxes(""));
+}
+
+fn the_value_of_a_libtest_option_is_not_a_filter() {
+    let words =
+        |args: &[&str]| -> Vec<String> { args.iter().map(|arg| (*arg).to_owned()).collect() };
+    let name = "the_sweep_finds_a_sandboxed_process";
+
+    let threads = Selection::of(&words(&["--test-threads", "1", "--nocapture"]));
+    assert!(threads.runs(name), "a thread count filtered the tests out");
+
+    let skip = Selection::of(&words(&["--skip", "sweep"]));
+    assert!(!skip.runs(name), "--skip sweep ran the sweep");
+    assert!(skip.runs("a_write_outside_the_state_dir_is_refused"));
+
+    let skip_equals = Selection::of(&words(&["--skip=sweep", "--format=terse"]));
+    assert!(!skip_equals.runs(name));
+
+    let filter = Selection::of(&words(&["--test-threads", "1", "refused"]));
+    assert!(filter.runs("a_write_outside_the_state_dir_is_refused"));
+    assert!(!filter.runs(name));
+
+    let exact = Selection::of(&words(&["--exact", "refused"]));
+    assert!(!exact.runs("a_write_outside_the_state_dir_is_refused"));
 }
