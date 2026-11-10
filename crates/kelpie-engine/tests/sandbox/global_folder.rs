@@ -1,19 +1,19 @@
 //! The Harness global folder setting, tried against a real sandbox
 //!
 //! A session reads the one entry of the person's own global folder its harness
-//! linked into it, and nothing else there (ADR 0006). A child of
-//! `tests/sandbox.rs`, which is its own `main` (crabpot's Linux helper is this
-//! binary run again).
+//! linked into it, and nothing else there, at either setting for how far a
+//! project reads (ADR 0005, ADR 0006). A child of `tests/sandbox.rs`, which is
+//! its own `main` (crabpot's Linux helper is this binary run again).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
 use kelpie_engine::harness::global;
-use kelpie_engine::sandbox::Reads;
+use kelpie_engine::sandbox::{Project, Reads, policy};
 
-use super::{SKIPPED, Scratch, sandbox_in, sh, working};
+use super::{SKIPPED, Scratch, harness_in, sandbox_in, sh, working};
 
 /// The argument that makes this binary run the global folder checks with `HOME` moved
 /// into the scratch folder, which is how a test reaches a path the policy denies
@@ -31,9 +31,9 @@ const CHILD_SKIPPED: i32 = 3;
 /// named to the child instead of set here.
 pub fn the_global_folder_is_read_only_when_on() {
     let scratch = Scratch::new("global-folder");
-    // The person's own folder, kept out of the folders beside the project so only
-    // what is linked can be read
-    let global = scratch.folder("home/.claude");
+    // The person's own Claude Code folder, under the home folder the child is run
+    // with, which is where the harness keeps the global config the setting links
+    let global = scratch.folder(".claude");
     let (login, linked) = (global.join(".credentials.json"), global.join("CLAUDE.md"));
     fs::write(&login, "their login\n").unwrap();
     fs::write(&linked, "the person's own instructions\n").unwrap();
@@ -62,8 +62,11 @@ pub fn the_global_folder_is_read_only_when_on() {
 
 /// The checks of [`the_global_folder_is_read_only_when_on`], with `root` as this home folder
 pub fn in_the_persons_home(root: &Path) -> i32 {
+    // The person's own Claude Code folder, under the home folder this child is run
+    // with: the policy closes their login by its own name under the home folder,
+    // so a global folder anywhere else names nothing the policy denies
     let (global, project, state, sessions_root) = (
-        root.join("home/.claude"),
+        root.join(".claude"),
         root.join("work/project"),
         root.join("state"),
         root.join("data/projects"),
@@ -75,87 +78,57 @@ pub fn in_the_persons_home(root: &Path) -> i32 {
         panic!("the person's entry was not linked into the session: {error}")
     });
 
-    let Some(on) = working(
-        sandbox_in(
-            Path::new("/bin/sh"),
-            &project,
-            &state,
-            &sessions_root,
-            Reads::Project,
-            &entries,
-            None,
-        ),
-        "the_global_folder_is_read_only_when_on",
-    ) else {
-        return CHILD_SKIPPED;
-    };
+    // The policy is what every check below leans on, and reading it needs no
+    // sandbox, so it is read first: on a host that cannot start one, this is the
+    // part of the test that still says whether the scratch is a world the policy
+    // closes
+    denies_the_login(&project, &state, &sessions_root, &entries, &login);
 
-    let read = sh(&on, &format!("cat {}", through.display()));
-    assert!(
-        read.status.success(),
-        "the linked entry was not read through the session's name for it: {read:?}"
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&read.stdout),
-        "the person's own instructions\n"
-    );
-
-    let login_read = sh(&on, &format!("cat {}", login.display()));
-    assert!(
-        !login_read.status.success(),
-        "the person's login was read through their global folder: {login_read:?}"
-    );
-
-    let written = sh(&on, &format!("echo nope > {}", through.display()));
-    assert!(
-        !written.status.success(),
-        "a write through the linked entry was not refused: {written:?}"
-    );
-    assert_eq!(
-        fs::read_to_string(&linked).unwrap(),
-        "the person's own instructions\n",
-        "a sandboxed write changed the person's own file"
-    );
-    drop(on);
-
-    // The same session with *Read anywhere by default* on: the home folder is open,
-    // and the login beside the linked entry is still closed by its own name
-    let Some(wide) = working(
-        sandbox_in(
-            Path::new("/bin/sh"),
-            &project,
-            &state,
-            &sessions_root,
-            Reads::Anywhere,
-            &entries,
-            None,
-        ),
-        "the_global_folder_is_read_only_when_on",
-    ) else {
-        return CHILD_SKIPPED;
-    };
-
-    let read = sh(&wide, &format!("cat {}", through.display()));
-    assert!(
-        read.status.success(),
-        "the linked entry was not read with Read anywhere on: {read:?}"
-    );
-    let login_read = sh(&wide, &format!("cat {}", login.display()));
-    assert!(
-        !login_read.status.success(),
-        "the person's login was read with Read anywhere on: {login_read:?}"
-    );
-    let written = sh(&wide, &format!("echo nope > {}", through.display()));
-    assert!(
-        !written.status.success(),
-        "a write through the linked entry was not refused with Read anywhere on: {written:?}"
-    );
-    assert_eq!(
-        fs::read_to_string(&linked).unwrap(),
-        "the person's own instructions\n",
-        "a sandboxed write with Read anywhere on changed the person's own file"
-    );
-    drop(wide);
+    // A session on the linked entry, at each setting for how far it reads
+    for reads in [Reads::Project, Reads::Anywhere] {
+        let Some(session) = working(
+            sandbox_in(
+                Path::new("/bin/sh"),
+                &project,
+                &state,
+                &sessions_root,
+                reads,
+                &entries,
+                None,
+            ),
+            "the_global_folder_is_read_only_when_on",
+        ) else {
+            return CHILD_SKIPPED;
+        };
+        let (read, login_read, written) = (
+            sh(&session, &format!("cat {}", through.display())),
+            sh(&session, &format!("cat {}", login.display())),
+            sh(&session, &format!("echo nope > {}", through.display())),
+        );
+        assert!(
+            read.status.success(),
+            "the linked entry was not read through the session's name for it, at {reads:?}: {read:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&read.stdout),
+            "the person's own instructions\n",
+            "the entry read at {reads:?} is not the person's own file"
+        );
+        assert!(
+            !login_read.status.success(),
+            "the person's login was read through their global folder, at {reads:?}: {login_read:?}"
+        );
+        assert!(
+            !written.status.success(),
+            "a write through the linked entry was not refused, at {reads:?}: {written:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&linked).unwrap(),
+            "the person's own instructions\n",
+            "a sandboxed write at {reads:?} changed the person's own file"
+        );
+        drop(session);
+    }
 
     // The same session with the setting off: the link is taken back, and the person's
     // own file is closed again
@@ -178,11 +151,47 @@ pub fn in_the_persons_home(root: &Path) -> i32 {
     ) else {
         return CHILD_SKIPPED;
     };
-
     let read = sh(&off, &format!("cat {}", linked.display()));
     assert!(
         !read.status.success(),
         "the person's own file was read with nothing linked into the session: {read:?}"
     );
     0
+}
+
+/// Refuse the scratch when its global folder is nowhere the policy closes a login
+///
+/// Each check of [`in_the_persons_home`] leans on the policy, and reading it needs
+/// no sandbox, so it is read first: on a host that cannot start one, this is the
+/// part of the test that still says whether the person's folder is one the policy
+/// names. With *Read anywhere by default* on the home folder is open and only a
+/// login closed by its own name stays shut, which is the setting that shows a
+/// global folder put anywhere else names nothing the policy denies at all.
+fn denies_the_login(
+    project: &Path,
+    state: &Path,
+    sessions_root: &Path,
+    entries: &[PathBuf],
+    login: &Path,
+) {
+    let harness = harness_in(Path::new("/bin/sh"), entries);
+    let allowlist: Vec<String> = Vec::new();
+    let confined = Project {
+        folder: project,
+        network_allowlist: &allowlist,
+        reads: Reads::Anywhere,
+        sessions_root,
+    };
+    let settings = policy(&harness, &confined, state)
+        .unwrap_or_else(|error| panic!("the policy could not be built: {error}"));
+    let denied = settings
+        .filesystem
+        .read_denies()
+        .unwrap_or_else(|error| panic!("the policy's read denies could not be read: {error}"));
+    let wanted = login.to_string_lossy().into_owned();
+    assert!(
+        denied.iter().any(|rule| rule.path() == wanted),
+        "the policy closes no login named {wanted}, so the scratch's global folder \
+         is not the one the harness keeps under its home folder: {denied:?}"
+    );
 }

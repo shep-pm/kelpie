@@ -333,14 +333,7 @@ fn sandbox_in(
     global_reads: &[PathBuf],
     door: Option<&Door>,
 ) -> Sandbox {
-    let mut harness = Harness::new(program);
-    // The harness's own install is read, as a real one's is
-    harness.installs = program
-        .parent()
-        .map(Path::to_path_buf)
-        .into_iter()
-        .collect();
-    harness.global_reads = global_reads.to_vec();
+    let harness = harness_in(program, global_reads);
     let allowlist: Vec<String> = Vec::new();
     let confined = Project {
         folder: project,
@@ -350,6 +343,20 @@ fn sandbox_in(
     };
     Sandbox::start_with_door(&harness, &confined, state, door)
         .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
+}
+
+/// The harness of a test's session: `program`, whose own install the session reads,
+/// reading `global_reads` of the person's own global folder
+fn harness_in(program: &Path, global_reads: &[PathBuf]) -> Harness {
+    let mut harness = Harness::new(program);
+    // The harness's own install is read, as a real one's is
+    harness.installs = program
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect();
+    harness.global_reads = global_reads.to_vec();
+    harness
 }
 
 /// A folder under the home folder, removed when it drops
