@@ -5,25 +5,26 @@
 //! process: the engine's session does, through the process tree (ADR 0001), and
 //! the app only forwards what it says.
 //!
-//! The PM runs on [`PM_DEFAULT`] until the settings page holds the choice
-//! (ADR 0006). Its bridge is installed on the first send, and whatever goes
-//! wrong before the session can start reaches the chat as a
+//! The PM runs on what the settings resolve to at each send ([`plan`]): the
+//! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
+//! built-in layer (ADR 0006). Its bridge is installed on the first send, and
+//! whatever goes wrong before the session can start reaches the chat as a
 //! [`SessionEvent::Failed`], like a failure mid-turn.
 
 use std::fs;
 use std::sync::Arc;
 
-use kelpie_engine::agents::{Agents, PM};
+use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
 use kelpie_engine::session::{Choice, Session, SessionEvent};
-use kelpie_engine::settings::Harness;
+use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::state::{AppState, Opening};
 
-/// What the PM runs on
+/// What the PM runs on when no layer says
 #[derive(Debug, Clone, Copy)]
 pub struct PmDefault {
     /// The harness
@@ -36,15 +37,122 @@ pub struct PmDefault {
     pub effort: &'static str,
 }
 
-/// The built-in default (ADR 0006): kelpie ships it, and the settings page
-/// replaces it
+/// The built-in layer (ADR 0006): kelpie ships it, and the global `pm` agent
+/// and the project's setting replace it
+///
+/// The model and effort belong to the harness here. They stand only while the
+/// PM is on this harness, since another harness names its models its own way.
 pub const PM_DEFAULT: PmDefault = PmDefault {
     harness: Harness::ClaudeCode,
     model: "opus",
     effort: "high",
 };
 
-/// The app's [`Opener`](crate::state::Opener): the PM on [`PM_DEFAULT`]
+/// What a PM session is opened on, resolved from the settings
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PmPlan {
+    /// The harness
+    pub harness: Harness,
+
+    /// The model and effort the harness is asked for
+    pub choice: Choice,
+
+    /// The PM's instructions with the reply style after them, `None` when both are blank
+    pub instructions: Option<String>,
+
+    /// Where the harness's model runs, for a harness that reaches one through a server.
+    /// No harness kelpie runs the PM on reads it yet.
+    pub provider: Option<String>,
+
+    /// The host the provider runs on
+    pub host: Option<String>,
+}
+
+/// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Defaulted {
+    /// The harness
+    pub harness: Sourced<Harness>,
+
+    /// The model
+    pub model: Sourced<Option<String>>,
+
+    /// The effort
+    pub effort: Sourced<Option<String>>,
+}
+
+/// `binding` with the built-in layer under it, each value still naming the layer it came from
+///
+/// The default model and effort stand only while the PM is on the default
+/// harness: another harness names its models its own way.
+#[must_use]
+pub fn with_defaults(binding: &Binding) -> Defaulted {
+    let harness = match binding.harness.value {
+        Some(value) => Sourced {
+            value,
+            from: binding.harness.from.clone(),
+        },
+        None => Sourced {
+            value: PM_DEFAULT.harness,
+            from: Origin::BuiltIn,
+        },
+    };
+    let on_default = harness.value == PM_DEFAULT.harness;
+    let or_default = |own: &Sourced<Option<String>>, default: &str| match &own.value {
+        Some(_) => own.clone(),
+        None if on_default => Sourced {
+            value: Some(default.to_owned()),
+            from: Origin::BuiltIn,
+        },
+        None => own.clone(),
+    };
+    Defaulted {
+        model: or_default(&binding.model, PM_DEFAULT.model),
+        effort: or_default(&binding.effort, PM_DEFAULT.effort),
+        harness,
+    }
+}
+
+/// What the PM runs on for the project `project_id`, from the files in `config`
+///
+/// Read on every send, so a change made on the settings page applies to the next
+/// message. The layers are kelpie's built-in default, the global `pm` agent
+/// (`~/.config/kelpie/agents/pm.md`), then the project's own setting.
+///
+/// # Errors
+///
+/// A settings file or the PM's agent file cannot be used. The text names the
+/// file and what is wrong with it.
+pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
+    let settings = Settings::load(config, project_id).map_err(|error| error.to_string())?;
+    let agents = Agents::load(config).map_err(|error| error.to_string())?;
+    let binding = agents
+        .pm_binding(&settings)
+        .map_err(|error| error.to_string())?;
+    let Defaulted {
+        harness,
+        model,
+        effort,
+    } = with_defaults(&binding);
+    let style = settings.reply_style.value.instructions();
+    let instructions = [binding.body.value.as_deref(), style]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Ok(PmPlan {
+        harness: harness.value,
+        choice: Choice {
+            model: model.value,
+            effort: effort.value,
+        },
+        instructions: (!instructions.trim().is_empty()).then_some(instructions),
+        provider: settings.provider.value,
+        host: settings.host.value,
+    })
+}
+
+/// The app's [`Opener`](crate::state::Opener): the PM on what `opening.pm` says
 ///
 /// Installs the bridge if it is not yet, and builds the session on it.
 ///
@@ -59,32 +167,28 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         project,
         state_dir,
         logins,
+        pm,
     } = *opening;
     // parity: harness.pm
-    let harness = match PM_DEFAULT.harness {
+    let harness = match pm.harness {
         Harness::ClaudeCode => {
             fs::create_dir_all(state_dir)
                 .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
             let bridge = bridge::ensure(data_dir, claude::pin()).map_err(|e| e.to_string())?;
             claude::harness(bridge, state_dir, logins).map_err(|e| e.to_string())?
         }
-        // `Harness` grows with each harness's slice, and none but the default is built here
+        // `Harness` grows with each harness's slice, and none but Claude Code is built here
         other => return Err(format!("{other:?} is not wired to the PM yet")),
-    };
-    let choice = Choice {
-        model: Some(PM_DEFAULT.model.to_owned()),
-        effort: Some(PM_DEFAULT.effort.to_owned()),
     };
     let session = Session::new(
         Arc::clone(tree),
         harness,
         project.path.clone(),
         project.pm_session.clone(),
-        choice,
+        pm.choice.clone(),
     );
-    // kelpie:pm is the PM's instructions until the agent editor holds them
-    Ok(match Agents::built_in(PM).and_then(|pm| pm.body.value) {
-        Some(body) => session.with_instructions(body),
+    Ok(match &pm.instructions {
+        Some(instructions) => session.with_instructions(instructions.clone()),
         None => session,
     })
 }
@@ -175,12 +279,14 @@ mod tests {
     use kelpie_engine::run::RunId;
     use kelpie_engine::session::SessionId;
     use kelpie_engine::session::fake::{FakeAgent, Turn};
+    use kelpie_engine::settings::ConfigDir;
     use kelpie_protocol::{StopReason, ToolStatus};
     use tauri::ipc::InvokeResponseBody;
     use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
     use tauri::{App, Manager as _};
 
     use super::*;
+    use crate::settings::{Target, settings_set};
     use crate::state::{Opener, Picker, Projects};
 
     /// How long a test waits for something it forced to happen
@@ -205,6 +311,22 @@ mod tests {
             Self::with(Self::opener(agent), Box::new(|| Ok(None)), Some(saved))
         }
 
+        /// A chat whose PM is asked for the model and effort the settings resolve to
+        fn planned(agent: &FakeAgent) -> Self {
+            let agent = agent.clone();
+            let opener: Opener = Box::new(move |opening| {
+                Ok(agent.session(
+                    opening.project.path.clone(),
+                    opening.project.pm_session.clone(),
+                    opening.pm.choice.clone(),
+                ))
+            });
+            let chat = Self::with(opener, Box::new(|| Ok(None)), None);
+            chat.state().set_project(chat.dir.clone()).unwrap();
+            chat
+        }
+
+        /// An opener whose session asks the harness for no model or effort
         fn opener(agent: &FakeAgent) -> Opener {
             let agent = agent.clone();
             Box::new(move |opening| {
@@ -226,7 +348,9 @@ mod tests {
                 );
                 fs::write(dir.join("projects.json"), list).unwrap();
             }
-            let state = AppState::open(dir.clone(), Store::memory(), opener, picker, None).unwrap();
+            let config = ConfigDir::at(dir.join("config"));
+            let state =
+                AppState::open(dir.clone(), config, Store::memory(), opener, picker, None).unwrap();
             let app = mock_builder()
                 .manage(state)
                 .build(mock_context(noop_assets()))
@@ -348,6 +472,126 @@ mod tests {
             ),
             "{events:?}"
         );
+    }
+
+    #[test]
+    fn the_next_send_uses_the_new_model() {
+        let agent = FakeAgent::new()
+            .offers_models("small", &["small", "large"])
+            .turn(Turn::new().text("one"))
+            .turn(Turn::new().text("two"));
+        let chat = Chat::planned(&agent);
+        let project = chat.state().project_id(None).unwrap();
+        let layer = || Target::Project {
+            id: project.clone(),
+        };
+        settings_set(chat.state(), layer(), "pm-model".to_owned(), "small".into()).unwrap();
+        chat.send("First").until_turn_ends();
+
+        settings_set(chat.state(), layer(), "pm-model".to_owned(), "large".into()).unwrap();
+        chat.send("Second").until_turn_ends();
+
+        assert_eq!(agent.launches(), 1, "the same session carries on");
+        assert_eq!(
+            agent.params("session/set_config_option"),
+            [
+                serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "small"}),
+                serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "large"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_model_the_global_pm_agent_sets_reaches_the_first_send() {
+        let agent = FakeAgent::new()
+            .offers_models("small", &["small", "large"])
+            .turn(Turn::new().text("one"));
+        let chat = Chat::planned(&agent);
+        settings_set(
+            chat.state(),
+            Target::Global,
+            "pm-model".to_owned(),
+            "large".into(),
+        )
+        .unwrap();
+
+        chat.send("First").until_turn_ends();
+
+        assert_eq!(
+            agent.params("session/set_config_option"),
+            [serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "large"})]
+        );
+    }
+
+    #[test]
+    fn with_nothing_set_the_pm_runs_on_kelpies_default() {
+        let chat = Chat::on(&FakeAgent::new());
+        let project = chat.state().project_id(None).unwrap();
+
+        let plan = plan(chat.state().config(), &project).unwrap();
+
+        assert_eq!(plan.harness, PM_DEFAULT.harness);
+        assert_eq!(plan.choice.model.as_deref(), Some(PM_DEFAULT.model));
+        assert_eq!(plan.choice.effort.as_deref(), Some(PM_DEFAULT.effort));
+    }
+
+    #[test]
+    fn another_harness_gets_no_model_kelpie_named_for_the_default_one() {
+        let chat = Chat::on(&FakeAgent::new());
+        let project = chat.state().project_id(None).unwrap();
+        settings_set(
+            chat.state(),
+            Target::Project {
+                id: project.clone(),
+            },
+            "pm-harness".to_owned(),
+            "goose".into(),
+        )
+        .unwrap();
+
+        let plan = plan(chat.state().config(), &project).unwrap();
+
+        assert_eq!(plan.harness, Harness::Goose);
+        assert_eq!(plan.choice, Choice::default());
+    }
+
+    #[test]
+    fn the_reply_style_is_part_of_the_instructions_unless_the_harness_default_is_chosen() {
+        let chat = Chat::on(&FakeAgent::new());
+        let project = chat.state().project_id(None).unwrap();
+        let instructions = || {
+            plan(chat.state().config(), &project)
+                .unwrap()
+                .instructions
+                .unwrap()
+        };
+        assert!(instructions().contains("## Replies"));
+        assert!(instructions().contains("decisions.md"));
+
+        settings_set(
+            chat.state(),
+            Target::Global,
+            "reply-style".to_owned(),
+            "harness-default".into(),
+        )
+        .unwrap();
+
+        assert!(!instructions().contains("## Replies"));
+        assert!(instructions().contains("decisions.md"));
+    }
+
+    #[test]
+    fn a_settings_file_that_cannot_be_used_reaches_the_chat_as_failed() {
+        let chat = Chat::on(&FakeAgent::new());
+        let file = chat.dir.join("config").join("settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{ not json").unwrap();
+
+        let SessionEvent::Failed { message } = chat.send("Hi").next() else {
+            panic!("the chat should hear a Failed");
+        };
+
+        assert!(message.contains("settings.json"), "{message}");
     }
 
     #[test]

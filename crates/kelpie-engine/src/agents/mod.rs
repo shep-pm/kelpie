@@ -48,6 +48,9 @@ use serde::Deserialize;
 use crate::settings::{ConfigDir, Harness, Layer, Resolved};
 
 mod extends;
+mod write;
+
+pub use write::PmKey;
 
 #[cfg(test)]
 mod tests;
@@ -489,6 +492,14 @@ pub enum AgentsError {
         kind: io::ErrorKind,
     },
 
+    /// A file could not be written
+    Write {
+        /// The file or folder
+        path: PathBuf,
+        /// What writing it failed with
+        kind: io::ErrorKind,
+    },
+
     /// A file has no frontmatter, a key unknown or malformed, or a parent it cannot use
     File {
         /// The file
@@ -502,6 +513,9 @@ impl fmt::Display for AgentsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Read { path, kind } => write!(f, "agent files: {}: {kind}", path.display()),
+            Self::Write { path, kind } => {
+                write!(f, "agent files: cannot write {}: {kind}", path.display())
+            }
             Self::File { path, message } => {
                 write!(f, "agent file {}: {message}", path.display())
             }

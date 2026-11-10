@@ -19,6 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use kelpie_engine::login::Store;
+use kelpie_engine::settings::ConfigDir;
 
 use tauri::{Manager as _, RunEvent, Runtime};
 use tauri_plugin_dialog::DialogExt as _;
@@ -45,6 +46,10 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::login_status,
             settings::login_clear,
             settings::harness_options,
+            settings::settings_get,
+            settings::settings_set,
+            settings::settings_reset,
+            settings::settings_schema,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
@@ -88,11 +93,28 @@ pub fn builder_with<R: Runtime>(
     logins: Store,
     reaper: Option<PathBuf>,
 ) -> tauri::Builder<R> {
+    builder_in(app, logins, None, reaper)
+}
+
+/// [`builder_with`], reading settings and agent files from `config` instead of
+/// `~/.config/kelpie` when it is given
+///
+/// A test passes a folder of its own, so it never reads or writes the person's.
+pub fn builder_in<R: Runtime>(
+    app: tauri::Builder<R>,
+    logins: Store,
+    config: Option<ConfigDir>,
+    reaper: Option<PathBuf>,
+) -> tauri::Builder<R> {
     app.manage(logins.clone())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(commands::<R>().invoke_handler())
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
+            let config = match &config {
+                Some(config) => config.clone(),
+                None => ConfigDir::from_env()?,
+            };
             let handle = app.handle().clone();
             let picker = Box::new(move || {
                 handle
@@ -104,6 +126,7 @@ pub fn builder_with<R: Runtime>(
             });
             app.manage(AppState::open(
                 data_dir,
+                config,
                 logins,
                 Box::new(pm::open),
                 picker,

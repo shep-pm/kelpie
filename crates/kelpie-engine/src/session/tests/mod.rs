@@ -949,4 +949,5 @@ fn a_harness_gone_before_the_first_write_is_explained() {
     assert!(message.contains(EXPLANATION), "{message}");
 }
 
+mod choose;
 mod instructions;

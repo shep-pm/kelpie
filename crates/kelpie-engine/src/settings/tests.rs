@@ -579,3 +579,32 @@ fn a_layer_shows_what_a_form_needs_to_offer_a_reset() {
     assert_eq!(Field::ReplyStyle.layers(), &[Layer::Global, Layer::Project]);
     assert!(Layer::BuiltIn < Layer::Global && Layer::Global < Layer::Project);
 }
+
+#[test]
+fn the_global_view_ignores_every_project_layer() {
+    let dir = Dir::new();
+    dir.put(LayerFile::Global, r#"{"reply-style": "harness-default"}"#);
+    dir.put(
+        LayerFile::Project("web"),
+        r#"{"reply-style": "concise-plus", "host": "http://localhost:11434"}"#,
+    );
+
+    let global = Settings::load_global(&dir.config()).unwrap();
+
+    assert_eq!(
+        global.reply_style,
+        Layered {
+            value: ReplyStyle::HarnessDefault,
+            from: Layer::Global,
+        }
+    );
+    assert_eq!(global.host.from, Layer::BuiltIn);
+}
+
+#[test]
+fn a_reply_style_says_what_it_adds_to_the_instructions() {
+    let concise = ReplyStyle::ConcisePlus.instructions().unwrap();
+    assert!(concise.starts_with("## Replies"), "{concise}");
+    assert!(concise.contains("table"), "{concise}");
+    assert_eq!(ReplyStyle::HarnessDefault.instructions(), None);
+}
