@@ -47,6 +47,7 @@ use crabpot::{ConfigError, StartError, WrapError};
 
 use crate::session::Harness;
 
+pub mod fence;
 mod policy;
 
 pub use policy::{Project, denied, policy};
