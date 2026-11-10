@@ -379,3 +379,134 @@ fn the_reaper_starts_before_the_pm() {
         "the reaper exits when the tree is dropped"
     );
 }
+
+#[test]
+fn a_launch_marks_every_worker_mid_turn_as_paused() {
+    use kelpie_engine::worker::{Record, Seat, Status};
+
+    let dir = Dir::new();
+    let data = dir.0.join("data");
+    let paths = Paths::new(&data, "p1");
+    fs::create_dir_all(paths.project()).unwrap();
+    fs::write(
+        paths.records(),
+        r#"[
+            {"ticket":"74","branch":"kelpie/74","session":"s-1","status":"running","seat":"held"},
+            {"ticket":"75","branch":"kelpie/75","session":null,"status":"running","seat":"waiting"},
+            {"ticket":"76","branch":"kelpie/76","session":"s-3","status":"paused","seat":"without"}
+        ]"#,
+    )
+    .unwrap();
+    let projects = [Project {
+        id: "p1".to_owned(),
+        path: PathBuf::from("/work/web"),
+        pm_session: None,
+        pm_ran: None,
+    }];
+
+    pause_mid_turn_workers(&data, &projects);
+
+    let kept = Records::load(paths.records()).unwrap();
+    assert_eq!(
+        kept.list(),
+        [
+            Record {
+                ticket: "74".to_owned(),
+                branch: "kelpie/74".to_owned(),
+                session: Some("s-1".into()),
+                status: Status::Paused,
+                seat: Seat::Without,
+            },
+            Record {
+                ticket: "75".to_owned(),
+                branch: "kelpie/75".to_owned(),
+                session: None,
+                status: Status::Running,
+                seat: Seat::Waiting,
+            },
+            Record {
+                ticket: "76".to_owned(),
+                branch: "kelpie/76".to_owned(),
+                session: Some("s-3".into()),
+                status: Status::Paused,
+                seat: Seat::Without,
+            },
+        ],
+        "the worker mid-turn is Paused and holds no slot; the one waiting for a \
+         slot keeps its place in line"
+    );
+    assert!(
+        kept.get("74")
+            .is_some_and(|record| record.session.is_some()),
+        "the session id stays, so the maintainer can resume it"
+    );
+}
+
+#[test]
+fn a_launch_with_no_workers_keeps_nothing() {
+    let dir = Dir::new();
+    let data = dir.0.join("data");
+    let projects = [Project {
+        id: "p1".to_owned(),
+        path: PathBuf::from("/work/web"),
+        pm_session: None,
+        pm_ran: None,
+    }];
+
+    pause_mid_turn_workers(&data, &projects);
+
+    assert!(
+        !Paths::new(&data, "p1").records().exists(),
+        "no records file is written for a project that never started a worker"
+    );
+}
+
+#[test]
+fn one_projects_records_file_it_cannot_read_leaves_the_rest_paused() {
+    use kelpie_engine::worker::Status;
+
+    let dir = Dir::new();
+    let data = dir.0.join("data");
+    let broken = Paths::new(&data, "broken");
+    let kept = Paths::new(&data, "kept");
+    fs::create_dir_all(broken.project()).unwrap();
+    fs::create_dir_all(kept.project()).unwrap();
+    // A status this build does not know, which is what a downgrade leaves behind
+    fs::write(
+        broken.records(),
+        r#"[{"ticket":"74","branch":"kelpie/74","session":null,"status":"queued","seat":"waiting"}]"#,
+    )
+    .unwrap();
+    fs::write(
+        kept.records(),
+        r#"[{"ticket":"75","branch":"kelpie/75","session":"s-2","status":"running","seat":"held"}]"#,
+    )
+    .unwrap();
+    let projects = [
+        Project {
+            id: "broken".to_owned(),
+            path: PathBuf::from("/work/broken"),
+            pm_session: None,
+            pm_ran: None,
+        },
+        Project {
+            id: "kept".to_owned(),
+            path: PathBuf::from("/work/kept"),
+            pm_session: None,
+            pm_ran: None,
+        },
+    ];
+
+    pause_mid_turn_workers(&data, &projects);
+
+    assert_eq!(
+        fs::read_to_string(broken.records()).unwrap(),
+        r#"[{"ticket":"74","branch":"kelpie/74","session":null,"status":"queued","seat":"waiting"}]"#,
+        "a file kelpie cannot read is left as it is"
+    );
+    assert_eq!(
+        Records::load(kept.records()).unwrap().list()[0].status,
+        Status::Paused,
+        "the other project's worker is paused all the same"
+    );
+}

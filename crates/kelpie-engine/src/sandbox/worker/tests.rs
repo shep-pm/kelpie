@@ -180,6 +180,41 @@ fn a_linked_entry_of_the_persons_global_folder_is_read_and_never_written() {
     }
 }
 
+#[test]
+fn a_workers_gooses_config_is_read_and_the_secrets_beside_it_stay_denied() {
+    // Under the real home folder, where the policy's login denial really applies
+    let folder = home()
+        .expect("the OS names a home folder")
+        .join(".config/goose");
+    let config_yaml = text(&folder.join("config.yaml"));
+    let harness = linked(on(&[]), &[folder.join("config.yaml")]);
+
+    for read_anywhere in [false, true] {
+        let config = built(&harness, &[], read_anywhere);
+        let allowed = config.filesystem.allow_read.unwrap();
+
+        let opened =
+            |path: &str| allowed.contains(&entries(&[path]).filesystem.allow_read.unwrap()[0]);
+        assert!(
+            opened(&config_yaml),
+            "goose's config.yaml is not read with read_anywhere {read_anywhere}"
+        );
+        for closed in [text(&folder.join("secrets.yaml")), text(&folder)] {
+            assert!(
+                !opened(&closed),
+                "{closed:?} was opened with read_anywhere {read_anywhere}"
+            );
+        }
+        assert!(
+            config
+                .filesystem
+                .deny_read
+                .contains(&entries(&["~/.config/goose/**"]).filesystem.deny_read[0]),
+            "goose's config folder is no longer denied with read_anywhere {read_anywhere}"
+        );
+    }
+}
+
 /// The policy for a person whose home folder is `home`, with `vars` as the
 /// environment their tools read
 fn at(home: &Path, vars: &[(&'static str, String)], read_anywhere: bool) -> Config {
