@@ -21,10 +21,10 @@ fn on(hosts: &[&str]) -> Harness {
 }
 
 /// A harness installed in `folders`, which the session reads
-fn installed(mut harness: Harness, folders: &[&str]) -> Harness {
+fn installed(mut harness: Harness, folders: &[impl AsRef<Path>]) -> Harness {
     harness.installs = folders
         .iter()
-        .map(|folder| (*folder).to_owned().into())
+        .map(|folder| folder.as_ref().to_path_buf())
         .collect();
     harness
 }
@@ -280,6 +280,71 @@ fn no_allow_lands_on_the_home_folder() {
     }
 }
 
+/// The home folder, the folder holding it, and the folder holding every
+/// session's state, each reachable through a link as well as by name
+///
+/// As `/home` linked to `/data/home` spells one folder two ways, `/home/<name>`
+/// and `/data/home/<name>`. The scratch folder is removed when this drops, links
+/// included: a link is removed as the name it is, not as what it names.
+#[cfg(unix)]
+struct Linked {
+    scratch: PathBuf,
+}
+
+#[cfg(unix)]
+impl Linked {
+    fn new(test: &str) -> Self {
+        let scratch = std::env::temp_dir().join(format!(
+            "kelpie-sandbox-linked-{test}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&scratch);
+        for folder in ["real/projects", "project"] {
+            fs::create_dir_all(scratch.join(folder)).expect("the scratch folders are made");
+        }
+        for (link, named) in [
+            ("home", home()),
+            ("above", above_home()),
+            ("state", scratch.join("real")),
+        ] {
+            std::os::unix::fs::symlink(named, scratch.join(link)).expect("the link is made");
+        }
+        Self { scratch }
+    }
+
+    /// The home folder, named through a link
+    fn home(&self) -> PathBuf {
+        self.scratch.join("home")
+    }
+
+    /// The folder holding the home folder, named through a link
+    fn above(&self) -> PathBuf {
+        self.scratch.join("above")
+    }
+
+    /// The folder holding every session's state, named through a link
+    fn sessions_root(&self) -> PathBuf {
+        self.scratch.join("state/projects")
+    }
+
+    /// That same folder, named as the OS names it
+    fn real_sessions_root(&self) -> PathBuf {
+        self.scratch.join("real/projects")
+    }
+
+    /// A folder of its own, holding nothing the policy closes
+    fn project(&self) -> PathBuf {
+        self.scratch.join("project")
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Linked {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.scratch);
+    }
+}
+
 /// The folder holding the home folder, such as `/Users`
 fn above_home() -> PathBuf {
     home()
@@ -361,6 +426,106 @@ fn a_project_at_the_root_is_refused() {
 
     for reads in [Reads::Project, Reads::Anywhere] {
         refuses("at-root", &root, reads);
+    }
+}
+
+/// A project that reaches the home folder through a link is the home folder
+///
+/// `Sandbox::start` compares the folder a project really names, as crabpot
+/// matches it, and not the folder as it was spelled.
+#[cfg(unix)]
+#[test]
+fn a_project_that_links_to_the_home_folder_is_refused() {
+    let linked = Linked::new("at-home");
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses("links-to-home", &linked.home(), reads);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_project_that_links_to_the_folder_holding_home_is_refused() {
+    let linked = Linked::new("above-home");
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses("links-above-home", &linked.above(), reads);
+    }
+}
+
+/// The second line, on every folder an allow could name through a link
+///
+/// A policy built without `Sandbox::start` still keeps the home folder and the
+/// sessions root closed, whichever way the project reads.
+#[cfg(unix)]
+#[test]
+fn no_allow_lands_on_a_closed_folder_through_a_link() {
+    let linked = Linked::new("closed");
+    let (folder, sessions_root) = (linked.project(), linked.sessions_root());
+    let state = sessions_root.join("pm");
+    // The home folder, the folder holding it, and the sessions root the link
+    // above names, each spelled the way the OS does not
+    let installs = [linked.home(), linked.above(), linked.real_sessions_root()];
+    let harness = installed(on(&[]), &installs);
+    let allowlist: Vec<String> = Vec::new();
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        let project = Project {
+            folder: &folder,
+            network_allowlist: &allowlist,
+            reads,
+            sessions_root: &sessions_root,
+        };
+        let config = policy(&harness, &project, &state).unwrap();
+
+        for named in &installs {
+            assert!(
+                !allows(&config, &named.to_string_lossy()),
+                "{named:?} is read back with {reads:?}"
+            );
+        }
+        assert!(
+            allows(&config, &folder.to_string_lossy()),
+            "the project is not read with {reads:?}"
+        );
+        assert!(
+            allows(&config, &state.to_string_lossy()),
+            "the session's own state is not read with {reads:?}"
+        );
+        assert!(denies(&config, "~/.ssh/**"), "{reads:?}");
+    }
+}
+
+/// The second line, on the project itself
+///
+/// A policy built without `Sandbox::start` leaves the project's own allow out
+/// when the project links to the home folder, so the home folder stays closed.
+#[cfg(unix)]
+#[test]
+fn a_project_that_links_to_the_home_folder_is_not_read_back() {
+    let linked = Linked::new("project-at-home");
+    let (folder, sessions_root) = (linked.home(), linked.sessions_root());
+    let state = sessions_root.join("pm");
+    let allowlist: Vec<String> = Vec::new();
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        let project = Project {
+            folder: &folder,
+            network_allowlist: &allowlist,
+            reads,
+            sessions_root: &sessions_root,
+        };
+        let config = policy(&on(&[]), &project, &state).unwrap();
+
+        assert!(
+            !allows(&config, &folder.to_string_lossy()),
+            "the project opens the home folder back with {reads:?}"
+        );
+        assert!(
+            !allows(&config, &home().to_string_lossy()),
+            "the home folder is opened back with {reads:?}"
+        );
+        assert!(denies(&config, "~/.ssh/**"), "{reads:?}");
     }
 }
 

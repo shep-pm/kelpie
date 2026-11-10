@@ -20,7 +20,9 @@
 //! harness's login is closed to every other harness's session (ADR 0006). A
 //! project whose folder is the home folder or a folder above it holds them all,
 //! so [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses it before the
-//! session starts.
+//! session starts. Folders are compared as crabpot matches them, with their
+//! links resolved: a project reaches the home folder through a link as surely
+//! as by name.
 
 use std::collections::HashSet;
 use std::env;
@@ -196,11 +198,12 @@ pub fn policy(
 /// folder, so a sandbox over it would read them along with the project.
 /// [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses one before the
 /// session starts, and the guard in `reads` keeps any other allow off the home
-/// folder.
+/// folder. The refusal names the folder as the person chose it, and both compare
+/// the folder it really names, as crabpot matches it.
 #[must_use]
 pub fn holds_home(project: &Project<'_>) -> Option<PathBuf> {
     home()
-        .filter(|home| home.starts_with(project.folder))
+        .filter(|home| real(home).starts_with(real(project.folder)))
         .map(|_| project.folder.to_path_buf())
 }
 
@@ -210,6 +213,9 @@ pub fn holds_home(project: &Project<'_>) -> Option<PathBuf> {
 /// one would open what it hides: the logins under the home folder, or the state
 /// of every other session. This is the second line: [`holds_home`] refuses the
 /// project folder itself when it holds the home folder.
+///
+/// An allow is kept off a closed folder by the folder it really names, since
+/// crabpot matches real paths, and is named as the session was given it.
 fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let closed = closed(project);
     let mut folders = vec![project.folder];
@@ -227,17 +233,19 @@ fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<Stri
     let mut seen = HashSet::new();
     folders
         .into_iter()
-        .filter(|folder| !closed.iter().any(|held| held.starts_with(folder)))
-        .filter(|folder| seen.insert(folder.to_path_buf()))
+        .filter(|folder| {
+            let reached = real(folder);
+            !closed.iter().any(|held| held.starts_with(&reached)) && seen.insert(reached)
+        })
         .map(text)
         .collect()
 }
 
 /// The folders an allow may not sit at or above, each of which holds something
-/// the policy denies under it
+/// the policy denies under it, as crabpot matches them
 fn closed(project: &Project<'_>) -> Vec<PathBuf> {
-    let mut closed = vec![project.sessions_root.to_path_buf()];
-    closed.extend(home());
+    let mut closed = vec![real(project.sessions_root)];
+    closed.extend(home().map(|home| real(&home)));
     closed
 }
 
@@ -251,6 +259,20 @@ fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
         .filter(|host| seen.insert(host.as_str()))
         .cloned()
         .collect()
+}
+
+/// `path` as a sandbox matches it: every link on the way to it resolved
+///
+/// A folder reaches a closed folder through a link as surely as by name: `HOME`
+/// is `/home/<name>`, `/home` is a link to `/data/home`, and the project is
+/// `/data/home/<name>`. crabpot resolves the paths it matches, so a comparison
+/// written as the paths are spelled sees no match and lets the allow through.
+///
+/// A folder that is not there yet is left as written, since it can hold no
+/// folder that is. A Windows verbatim prefix is not stripped, as kelpie has no
+/// Windows sandbox yet.
+fn real(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
 /// The person's home folder

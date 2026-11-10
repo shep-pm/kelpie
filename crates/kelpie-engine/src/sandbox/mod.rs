@@ -6,8 +6,9 @@
 //! wraps the harness's command into one that runs inside it. The process tree
 //! spawns the wrapped command as it spawns anything else, so the run's mark
 //! reaches it and the sweep finds it (ADR 0001). A project whose folder is the
-//! home folder or a folder above it is refused at [`Sandbox::start`], since such
-//! a folder holds the logins and secrets the policy denies.
+//! home folder or a folder above it, by name or through a link, is refused at
+//! [`Sandbox::start`], since such a folder holds the logins and secrets the
+//! policy denies.
 //!
 //! crabpot's proxy lives in kelpie until the [`Sandbox`] drops, so it stops with
 //! the session, and with kelpie. On Linux and Windows crabpot runs the host's
@@ -69,10 +70,11 @@ pub fn run_from_args() {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SandboxError {
-    /// The project folder is the home folder or a folder above it, which holds
-    /// every harness's login and every secret the sandbox denies
+    /// The project folder is the home folder or a folder above it, by name or
+    /// through a link, which holds every harness's login and every secret the
+    /// sandbox denies
     ProjectAtHome {
-        /// The project's folder, which holds the home folder
+        /// The project's folder, which holds the home folder, as it was given
         folder: PathBuf,
     },
 
@@ -146,9 +148,9 @@ impl Sandbox {
     /// [`Reads`] for how far it reads.
     ///
     /// A project whose folder is the home folder or a folder above it is refused
-    /// before anything is made or started: such a folder holds the logins and
-    /// secrets the sandbox denies, so a sandbox over it would read them with the
-    /// project.
+    /// before anything is made or started, whether it reaches the home folder by
+    /// name or through a link: such a folder holds the logins and secrets the
+    /// sandbox denies, so a sandbox over it would read them with the project.
     ///
     /// # Errors
     ///
