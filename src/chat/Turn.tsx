@@ -19,7 +19,13 @@ function useField<K extends keyof TurnData>(id: number, key: K) {
 
 function Dividers({ id }: { id: number }) {
   const dividers = useField(id, "dividers");
-  return dividers?.map((text) => <Divider key={text} text={text} />);
+  // A retried turn can hold the same text twice: the repeat count keeps keys unique.
+  const seen = new Map<string, number>();
+  return dividers?.map((text) => {
+    const nth = seen.get(text) ?? 0;
+    seen.set(text, nth + 1);
+    return <Divider key={`${text}#${nth}`} text={text} />;
+  });
 }
 
 function UserBubble({ id }: { id: number }) {

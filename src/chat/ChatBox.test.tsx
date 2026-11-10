@@ -294,6 +294,26 @@ describe("the chat box", () => {
     ).toBeTruthy();
   });
 
+  it("shows the same divider twice without a duplicate key", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "divider", text: "Couldn't resume, started a new session" },
+        { entry: "user", text: "cut off" },
+        { entry: "divider", text: "Couldn't resume, started a new session" },
+      ],
+    });
+
+    await openBox();
+
+    expect(
+      await screen.findAllByText("Couldn't resume, started a new session"),
+    ).toHaveLength(2);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("retry sends the interrupted message again", async () => {
     pmHistory.mockResolvedValue({
       status: "ok",

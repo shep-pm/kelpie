@@ -7,7 +7,7 @@
 //! first process so a crash or a `SIGKILL` still stops what the run started.
 //!
 //! `projects.json` is a list from the start, each entry
-//! `{ "id", "path", "pm_session" }`, so the rail can add projects later without
+//! `{ "id", "path", "pm_session", "pm_ran" }`, so the rail can add projects later without
 //! a migration. Phase 1 has one: the folder the maintainer picks once. Each
 //! project keeps its harness state in `<data_dir>/projects/<id>/pm/`.
 
@@ -94,6 +94,11 @@ pub struct Project {
     /// The id the harness gave the PM's session, kept to resume it. `None`
     /// until the first message.
     pub pm_session: Option<SessionId>,
+
+    /// The harness and model the PM last ran on, which says whose session
+    /// `pm_session` is. `None` in a file from before this was kept.
+    #[serde(default)]
+    pub pm_ran: Option<Ran>,
 }
 
 /// The projects, and the file that keeps them
@@ -163,6 +168,32 @@ impl Projects {
         project.pm_session = Some(session);
         write(&self.file, &self.list)
     }
+
+    /// Keep `ran` as what the project `id`'s PM last ran on, when it is not already
+    ///
+    /// Another harness's session id cannot be resumed, so when the harness is
+    /// not the one kept before, the saved session id is dropped in the same write.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn set_pm_ran(&mut self, id: &str, ran: &Ran) -> io::Result<()> {
+        let Some(project) = self.list.iter_mut().find(|project| project.id == id) else {
+            return Ok(());
+        };
+        if project.pm_ran.as_ref() == Some(ran) {
+            return Ok(());
+        }
+        if project
+            .pm_ran
+            .as_ref()
+            .is_some_and(|before| before.harness != ran.harness)
+        {
+            project.pm_session = None;
+        }
+        project.pm_ran = Some(ran.clone());
+        write(&self.file, &self.list)
+    }
 }
 
 /// Write `list` beside `file` and rename it into place, so a crash leaves the
@@ -211,11 +242,15 @@ pub struct Opening<'a> {
 /// scripted agent. The text of an error is for the maintainer to read.
 pub type Opener = Box<dyn Fn(&Opening<'_>) -> Result<Session, String> + Send + Sync>;
 
-/// What the PM's open session runs on, kept to say what a switch left
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Held {
-    harness: Harness,
-    model: Option<String>,
+/// What the PM runs on: the harness and the model, kept to say what a switch left
+// wire format: `projects.json` holds this as `pm_ran`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ran {
+    /// The harness the PM runs on
+    pub harness: Harness,
+
+    /// The model it was asked for, `None` for the harness's own default
+    pub model: Option<String>,
 }
 
 /// What Tauri manages: the process tree, the projects and the PM's session
@@ -227,7 +262,7 @@ pub struct AppState {
     projects: Arc<Mutex<Projects>>,
     /// The first project's PM and the harness it was opened on, `None` until
     /// the first send. Held only for a look or a swap, never while the opener runs.
-    session: Mutex<Option<(Held, Arc<Session>)>>,
+    session: Mutex<Option<(Ran, Arc<Session>)>>,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -359,6 +394,7 @@ impl AppState {
             id: new_id()?,
             path,
             pm_session: None,
+            pm_ran: None,
         };
         let _opening = lock(&self.opening);
         lock(&self.projects).replace_all(project)?;
@@ -395,20 +431,39 @@ impl AppState {
         };
         let plan = pm::plan(&self.config, &project.id)?;
         let held = lock(&self.session).clone();
+        let now = Ran {
+            harness: plan.harness,
+            model: plan.choice.model.clone(),
+        };
         if let Some((was, session)) = &held
             && was.harness == plan.harness
         {
             session.choose(plan.choice.clone());
+            if *was != now {
+                self.keep_ran(&project.id, &now)?;
+                if let Some((ran, _)) = lock(&self.session).as_mut() {
+                    *ran = now;
+                }
+            }
             return Ok((Arc::clone(session), handle, None));
         }
+        // What the PM ran on before this send: the open session, or what the
+        // last launch kept. A session id belongs to the harness that gave it.
+        let before = match &held {
+            Some((was, _)) => Some(was.clone()),
+            None => project.pm_ran.clone(),
+        }
+        .filter(|was| was.harness != plan.harness);
         let state_dir = self.pm_dir(&project.id);
         let log = Log::open(state_dir.join(PM_LOG_FILE))
             .map_err(|error| format!("could not open the PM's log: {error}"))?;
         let decisions = state_dir.join(DECISIONS_FILE);
-        // Another harness cannot resume the old harness's session id
         let on = Project {
-            pm_session: held.as_ref().map_or(project.pm_session.clone(), |_| None),
-            ..project
+            pm_session: match before {
+                Some(_) => None,
+                None => project.pm_session.clone(),
+            },
+            ..project.clone()
         };
         let session = (self.opener)(&Opening {
             tree: &self.tree,
@@ -419,16 +474,16 @@ impl AppState {
             pm: &plan,
         })?
         .with_log(log.clone());
-        let now = Held {
-            harness: plan.harness,
-            model: plan.choice.model.clone(),
-        };
+        // Kept before the old session stops, so a failed write leaves it running
+        self.keep_ran(&project.id, &now)?;
         let mut divider = None;
-        let session = match held {
+        let session = match before {
             None => session.with_seed(decisions),
-            Some((was, old)) => {
+            Some(was) => {
                 // The new session is built, so a failure above kept the old one
-                old.stop();
+                if let Some((_, old)) = &held {
+                    old.stop();
+                }
                 let text = format!(
                     "Switched from {} to {}",
                     pm::describe(was.harness, was.model.as_deref()),
@@ -443,6 +498,13 @@ impl AppState {
         let session = Arc::new(session);
         *lock(&self.session) = Some((now, Arc::clone(&session)));
         Ok((session, handle, divider))
+    }
+
+    /// Keep `ran` as what the project `id`'s PM runs on
+    fn keep_ran(&self, id: &str, ran: &Ran) -> Result<(), String> {
+        lock(&self.projects)
+            .set_pm_ran(id, ran)
+            .map_err(|error| format!("could not write projects.json: {error}"))
     }
 
     /// The folder of the PM's harness state and log for the project `id`
@@ -568,6 +630,7 @@ mod tests {
             id: "p1".to_owned(),
             path: PathBuf::from("/work/web"),
             pm_session: None,
+            pm_ran: None,
         };
         projects.replace_all(first.clone()).unwrap();
         projects
@@ -602,6 +665,42 @@ mod tests {
     }
 
     #[test]
+    fn another_harness_drops_the_saved_session_in_the_same_write() {
+        let dir = Dir::new();
+        let file = dir.0.join("projects.json");
+        let mut projects = Projects::load(file.clone()).unwrap();
+        projects
+            .replace_all(Project {
+                id: "p1".to_owned(),
+                path: PathBuf::from("/work/web"),
+                pm_session: Some("s-1".into()),
+                pm_ran: None,
+            })
+            .unwrap();
+        let ran = |harness, model: &str| Ran {
+            harness,
+            model: Some(model.to_owned()),
+        };
+
+        // A file from before `pm_ran` was kept does not say whose id this is
+        projects
+            .set_pm_ran("p1", &ran(Harness::ClaudeCode, "opus"))
+            .unwrap();
+        projects
+            .set_pm_ran("p1", &ran(Harness::ClaudeCode, "sonnet"))
+            .unwrap();
+        assert_eq!(projects.list()[0].pm_session, Some("s-1".into()));
+
+        projects
+            .set_pm_ran("p1", &ran(Harness::Goose, "qwen"))
+            .unwrap();
+
+        let reloaded = Projects::load(file).unwrap();
+        assert_eq!(reloaded.list()[0].pm_session, None);
+        assert_eq!(reloaded.list()[0].pm_ran, Some(ran(Harness::Goose, "qwen")));
+    }
+
+    #[test]
     fn a_list_that_cannot_be_written_is_not_kept_in_memory() {
         let dir = Dir::new();
         let file = dir.0.join("projects.json");
@@ -610,6 +709,7 @@ mod tests {
             id: "old".to_owned(),
             path: PathBuf::from("/work/old"),
             pm_session: None,
+            pm_ran: None,
         };
         projects.replace_all(old.clone()).unwrap();
         // A folder where the partial file goes, so the write fails
@@ -619,6 +719,7 @@ mod tests {
             id: "new".to_owned(),
             path: PathBuf::from("/work/new"),
             pm_session: None,
+            pm_ran: None,
         };
         projects.replace_all(new).unwrap_err();
 
