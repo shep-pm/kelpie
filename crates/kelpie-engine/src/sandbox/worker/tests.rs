@@ -35,6 +35,20 @@ fn project<'a>(allowlist: &'a [String], read_anywhere: bool) -> Project<'a> {
     }
 }
 
+/// The lease door of the worker under test: its state folder's socket, or on
+/// Linux the loopback address the same door names
+fn lease() -> &'static Door {
+    static HELD: std::sync::OnceLock<Door> = std::sync::OnceLock::new();
+    HELD.get_or_init(|| {
+        let text = if cfg!(target_os = "linux") {
+            LEASE_ADDRESS.to_owned()
+        } else {
+            format!("{STATE}/{LEASE_SOCKET}")
+        };
+        Door::parse(&text).unwrap()
+    })
+}
+
 fn worker(door: Option<&Door>) -> Worker<'_> {
     Worker {
         worktree: Path::new(WORKTREE),
@@ -43,7 +57,7 @@ fn worker(door: Option<&Door>) -> Worker<'_> {
         state_dir: Path::new(STATE),
         kelpie_home: Path::new(KELPIE_HOME),
         door,
-        lease_address: Some(LEASE_ADDRESS.parse().unwrap()),
+        lease: Some(lease()),
     }
 }
 
@@ -315,7 +329,7 @@ fn the_lease_socket_and_the_door_are_the_only_sockets() {
 
     assert_eq!(
         with.network.allow_tcp,
-        network(json!({"allowTcp": ["127.0.0.1:41999", "127.0.0.1:41998"]}))
+        network(json!({"allowTcp": ["127.0.0.1:41998", "127.0.0.1:41999"]}))
             .network
             .allow_tcp
     );

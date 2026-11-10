@@ -55,6 +55,7 @@ use semver::Version;
 
 pub use kelpie_protocol::{LogEntry, SandboxAnswer, SessionEvent, SessionId};
 
+use crate::lease::SessionLease;
 use crate::permission::{Judge, ReadCall};
 use crate::sandbox::Sandbox;
 use crate::tools::{Asks, Reach, SessionTools};
@@ -460,6 +461,9 @@ pub struct Session {
     instructions: Option<String>,
     /// The kelpie tools the session's harness is handed as an MCP server
     tools: Option<SessionTools>,
+    /// The session's lease socket, kept open for the session's life
+    /// ([`crate::lease::SessionLease`])
+    lease: Option<SessionLease>,
     /// The session's waiting `request_network` calls, which its tools server and
     /// its worker share
     asks: Asks,
@@ -581,6 +585,7 @@ impl Session {
             choice: Arc::new(Mutex::new(choice)),
             instructions: None,
             tools: None,
+            lease: None,
             asks: Asks::default(),
             mode: None,
             judge: None,
@@ -639,6 +644,20 @@ impl Session {
     pub fn with_tools(mut self, tools: SessionTools) -> Self {
         self.asks = tools.asks().clone();
         self.tools = Some(tools);
+        self
+    }
+
+    /// Give the session its own lease socket, held open for its life
+    ///
+    /// The socket is the one the worker's sandbox policy names
+    /// ([`crate::sandbox::worker::LEASE_SOCKET`]) and the one its harness's
+    /// environment names ([`crate::lease::SOCKET_VAR`]), so a `kelpie lease run`
+    /// the harness starts reaches kelpie there. The socket closes when the
+    /// session drops, which gives back every place its connections held. Call
+    /// this before the first send.
+    #[must_use]
+    pub fn with_lease(mut self, lease: SessionLease) -> Self {
+        self.lease = Some(lease);
         self
     }
 

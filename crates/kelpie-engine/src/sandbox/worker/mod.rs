@@ -9,7 +9,7 @@
 //! - **Reads:** the PM's, plus the worktree and its git dirs, kelpie's own binary
 //!   and the toolchain homes a build runs from, with cargo's credentials denied.
 //! - **Network:** the PM's, plus GitHub, which a push reaches.
-//! - **Sockets:** kelpie's tools door, and the lease socket in the state folder.
+//! - **Sockets:** kelpie's tools door, and this session's lease socket.
 //!
 //! Every harness's login, the secrets any tool keeps in the home folder and the
 //! keychain are denied as for the PM, and kelpie's own data folder is closed but
@@ -17,7 +17,6 @@
 
 use std::collections::HashSet;
 use std::env;
-use std::net::SocketAddr;
 use std::path::Path;
 
 use crabpot::{Config, ConfigError};
@@ -51,10 +50,11 @@ pub struct Worker<'a> {
     pub kelpie_home: &'a Path,
     /// Kelpie's tools door
     pub door: Option<&'a Door>,
-    /// The loopback address the lease is served on, for a platform whose sandbox
-    /// reaches no Unix socket (Linux). Elsewhere the lease is [`LEASE_SOCKET`]
-    /// and this is ignored.
-    pub lease_address: Option<SocketAddr>,
+    /// The door this session's lease is served on, which `kelpie lease run`
+    /// reaches kelpie through ([`crate::lease::Leases::session`]). The policy
+    /// names whichever socket or address it is. `None` where the worker has no
+    /// lease, which leaves every command it runs unleased.
+    pub lease: Option<&'a Door>,
 }
 
 /// What a clone's own git dir denies the worker: the parts that run code outside
@@ -68,9 +68,11 @@ const GITHUB: [&str; 2] = ["github.com", "api.github.com"];
 /// The socket in the state folder that `kelpie lease run` reaches kelpie through,
 /// so a worker's `cargo test` waits its turn behind the others'
 ///
-/// The name is short: a Unix socket's path is limited to about a hundred bytes.
-/// Linux cannot reach a Unix socket from the sandbox, so there the lease is
-/// [`Worker::lease_address`] instead.
+/// The name is short: a Unix socket's path is limited to about a hundred bytes,
+/// and a state folder too deep for one gets its socket under the temporary
+/// folder instead ([`crate::lease::Leases::session`]). Linux cannot reach a Unix
+/// socket from the sandbox, so there the lease is a loopback address on the same
+/// door ([`Door`]).
 pub const LEASE_SOCKET: &str = "lease.sock";
 
 /// What SK's `CREDENTIALS` holds beyond the secrets the PM's policy denies: the
@@ -176,19 +178,26 @@ fn compose(
         // (`tests/sandbox/escapes.rs`), so the door and the lease are both
         // loopback addresses, as the PM's door is
         let addresses: Vec<String> = worker
-            .door
+            .lease
             .and_then(Door::tcp)
             .into_iter()
-            .chain(worker.lease_address)
+            .chain(worker.door.and_then(Door::tcp))
             .map(|address| address.to_string())
             .collect();
         if !addresses.is_empty() {
             network["allowTcp"] = json!(addresses);
         }
     } else {
-        let mut sockets = vec![text(&worker.state_dir.join(LEASE_SOCKET))];
-        sockets.extend(worker.door.and_then(Door::socket).map(text));
-        network["allowUnixSockets"] = json!(sockets);
+        let sockets: Vec<String> = worker
+            .lease
+            .and_then(Door::socket)
+            .into_iter()
+            .chain(worker.door.and_then(Door::socket))
+            .map(text)
+            .collect();
+        if !sockets.is_empty() {
+            network["allowUnixSockets"] = json!(sockets);
+        }
     }
     // Only macOS has a keychain to ask
     if cfg!(target_os = "macos") {
