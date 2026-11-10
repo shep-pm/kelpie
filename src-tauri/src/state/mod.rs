@@ -563,6 +563,9 @@ impl AppState {
     /// be written. The text is for the maintainer to read.
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
+        // A refusal belongs to the start that found it: whatever fails before
+        // the opener probes the sandbox again must not leave it on the chat
+        self.sandbox_setup.record(None);
         let project = lock(&self.projects)
             .first()
             .cloned()
