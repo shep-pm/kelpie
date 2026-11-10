@@ -56,6 +56,7 @@ pub mod confine;
 pub mod github;
 pub mod guard;
 pub mod harness;
+pub mod lease;
 pub mod local_paths;
 pub mod login;
 pub mod pacer;

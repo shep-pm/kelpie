@@ -50,7 +50,8 @@ use crate::run::{ENV, RunId};
 
 pub mod reaper;
 pub mod run_file;
-mod sweep;
+// `pub(crate)` so a leased run's tests can tell whether a command's child is gone
+pub(crate) mod sweep;
 
 pub use reaper::Reaper;
 pub use sweep::{sweep_leftovers, sweep_marked, sweep_record};

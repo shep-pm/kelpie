@@ -373,6 +373,12 @@ impl Capacity {
     pub fn places(self) -> usize {
         usize::try_from(self.0.get()).unwrap_or(usize::MAX)
     }
+
+    /// The count itself, for the lease that holds this many commands at once
+    #[must_use]
+    pub(crate) const fn count(self) -> NonZeroU32 {
+        self.0
+    }
 }
 
 /// The most a settings file may name, past which it is a typo

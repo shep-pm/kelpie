@@ -20,6 +20,7 @@ use super::*;
 use crate::agents::{Binding, Origin, Sourced};
 use crate::github::fake::{FakeClock, FakeGithub};
 use crate::github::{AppTokens, TokenError};
+use crate::lease::Leases;
 use crate::sandbox::{self, Reads};
 use crate::session::fake::{FakeAgent, Turn};
 use crate::session::{Harness, Session};
@@ -179,6 +180,17 @@ impl Rig {
         open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
         slots: usize,
     ) -> Project<'a> {
+        self.project_with(binding, open, slots, None)
+    }
+
+    /// The same, with `leases` holding each worker's lease socket
+    fn project_with<'a>(
+        &'a self,
+        binding: &'a Binding,
+        open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
+        slots: usize,
+        leases: Option<&'a Leases>,
+    ) -> Project<'a> {
         Project {
             paths: &self.paths,
             folder: &self.repo,
@@ -193,6 +205,7 @@ impl Rig {
             tools: None,
             tokens: self.tokens.as_ref(),
             gh: self.gh.as_deref(),
+            leases,
             open,
         }
     }
@@ -642,7 +655,7 @@ fn the_record_sits_outside_every_folder_the_worker_writes() {
         state_dir: &rig.paths.state_dir("74"),
         kelpie_home: &rig.paths.data_dir,
         door: None,
-        lease_address: None,
+        lease: None,
     };
     let policy = sandbox::worker::policy(&harness, &reach, &folders).unwrap();
 
@@ -921,3 +934,4 @@ fn entries(paths: &[&str]) -> Config {
 }
 
 mod credential;
+mod lease;
