@@ -597,7 +597,8 @@ impl AppState {
 
     /// The folder holding every session's state folder, which no session reads
     /// but its own
-    fn sessions_root(&self) -> PathBuf {
+    #[must_use]
+    pub fn sessions_root(&self) -> PathBuf {
         self.data_dir.join(PROJECTS_FOLDER)
     }
 
