@@ -33,7 +33,8 @@ export type SettingsContext = {
   layers?: string[];
 };
 
-const LAYERS: Record<Tab, string[]> = {
+/** The layers each tab's values can come from, lowest first. */
+export const LAYERS: Record<Tab, string[]> = {
   global: ["kelpie", "global"],
   project: ["kelpie", "global", "project"],
   agent: [],
@@ -74,6 +75,63 @@ const OWN: Record<Exclude<Tab, "agent">, string> = {
 };
 
 /**
+ * The layer a value came from: how far up it reached, a word for it, and the
+ * reset that hands the field back to the layer below.
+ *
+ * Every row that shows a layered value draws it the same way, whether rjsf drew
+ * the field or kelpie did.
+ */
+export function LayerTrace({
+  from,
+  tab,
+  layers,
+  own,
+  onReset,
+  inherited = null,
+}: {
+  from: string;
+  tab: Tab;
+  layers: string[];
+  own: boolean;
+  onReset?: () => void;
+  inherited?: string | null;
+}) {
+  const reached = depth(from, layers);
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-0.5">
+      <span
+        className="inline-flex gap-0.5"
+        role="img"
+        aria-label={`layer ${reached + 1} of ${layers.length}`}
+        title={layers.join(" · ")}
+      >
+        {layers.map((layer, step) => (
+          <span
+            key={layer}
+            className={cn(
+              "h-1 w-3.5 rounded-sm",
+              step <= reached ? "bg-foreground" : "bg-border-strong/40",
+            )}
+          />
+        ))}
+      </span>
+      <Badge variant={own ? "secondary" : "outline"}>
+        {chip(from, tab, own)}
+      </Badge>
+      {own && onReset && (
+        <Button type="button" variant="link" size="xs" onClick={onReset}>
+          <RotateCcw />
+          Reset to {below(tab, layers)}
+          {inherited !== null && (
+            <span className="font-mono text-xs">({inherited})</span>
+          )}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
  * A setting's row: its label and help, the control, and under it the layer the
  * value comes from with a reset to the layer below.
  *
@@ -88,7 +146,6 @@ export function LayeredField(props: FieldTemplateProps) {
   if (key === null || view === undefined) return <Plain {...props} />;
 
   const layers = context.layers ?? LAYERS[context.tab];
-  const reached = depth(view.from, layers);
   // An agent file's own layer is the last one: its name
   const own =
     context.tab === "agent"
@@ -116,41 +173,14 @@ export function LayeredField(props: FieldTemplateProps) {
       </div>
       <div className="flex min-w-0 flex-col gap-1">
         {children}
-        <div className="flex flex-wrap items-center gap-2 px-0.5">
-          <span
-            className="inline-flex gap-0.5"
-            role="img"
-            aria-label={`layer ${reached + 1} of ${layers.length}`}
-            title={layers.join(" · ")}
-          >
-            {layers.map((layer, step) => (
-              <span
-                key={layer}
-                className={cn(
-                  "h-1 w-3.5 rounded-sm",
-                  step <= reached ? "bg-foreground" : "bg-border-strong/40",
-                )}
-              />
-            ))}
-          </span>
-          <Badge variant={own ? "secondary" : "outline"}>
-            {chip(view.from, context.tab, own)}
-          </Badge>
-          {own && (
-            <Button
-              type="button"
-              variant="link"
-              size="xs"
-              onClick={() => context.onReset(key)}
-            >
-              <RotateCcw />
-              Reset to {below(context.tab, layers)}
-              {inherited !== null && (
-                <span className="font-mono text-xs">({inherited})</span>
-              )}
-            </Button>
-          )}
-        </div>
+        <LayerTrace
+          from={view.from}
+          tab={context.tab}
+          layers={layers}
+          own={own}
+          onReset={() => context.onReset(key)}
+          inherited={inherited}
+        />
         {errors}
       </div>
     </fieldset>
