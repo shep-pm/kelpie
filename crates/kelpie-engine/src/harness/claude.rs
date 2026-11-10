@@ -278,11 +278,12 @@ pub(super) fn harness_on_path(
     let config_dir = state_dir.join(CONFIG_FOLDER);
     let global_reads = match (global, harness_global_folder) {
         (Some(folder), true) => global::link(folder, &config_dir, &GLOBAL_ENTRIES)?,
-        (Some(folder), false) => {
-            global::link(folder, &config_dir, &[])?;
+        // Off, or no folder to name: take back every link a past start made, from
+        // whichever folder it linked
+        _ => {
+            global::unlink(&config_dir, &GLOBAL_ENTRIES)?;
             Vec::new()
         }
-        (None, _) => Vec::new(),
     };
     Ok(Harness {
         program: bridge,

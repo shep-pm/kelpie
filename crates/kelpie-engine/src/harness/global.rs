@@ -78,7 +78,9 @@ impl core::error::Error for GlobalError {}
 /// whatever the setting says, since kelpie cannot tell its own file there from
 /// one the harness wrote over a link. Every link under `session` that points into
 /// `global` and is not one of `entries` is removed, which is how turning the
-/// setting off takes back what a session linked with it on.
+/// setting off takes back what a session linked with it on. A link at the name of
+/// an entry the person's folder lacks is removed too, wherever it points, which is
+/// how a start that names another folder takes back what the last one linked.
 ///
 /// The paths it linked, which are the ones the sandbox has to open for the
 /// harness to read them. A name that stands is not among them: the harness reads
@@ -94,6 +96,12 @@ pub fn link(global: &Path, session: &Path, entries: &[Entry]) -> Result<Vec<Path
         .copied()
         .filter(|name| global.join(name).exists())
         .collect();
+    let gone: Vec<Entry> = entries
+        .iter()
+        .copied()
+        .filter(|name| !wanted.contains(name))
+        .collect();
+    unlink(session, &gone)?;
     unhook(global, session, &wanted)?;
     let mut linked = Vec::new();
     for name in wanted {
@@ -102,6 +110,33 @@ pub fn link(global: &Path, session: &Path, entries: &[Entry]) -> Result<Vec<Path
         }
     }
     Ok(linked)
+}
+
+/// Remove the link at each of `entries` under `session`, whatever it points at
+///
+/// For a session that turns the setting off, or whose global folder cannot be
+/// named at all (`HOME` unset): [`link`] finds a link by where it points, which
+/// is the folder named on this start, and the folder a past start linked from
+/// may be another one (`CLAUDE_CONFIG_DIR` set since). A link at an entry's own
+/// name in kelpie's config folder is kelpie's, so it goes by that name. A name
+/// held as anything but a link stands.
+///
+/// # Errors
+///
+/// [`GlobalError`] when a link cannot be read or removed.
+pub fn unlink(session: &Path, entries: &[Entry]) -> Result<(), GlobalError> {
+    for name in entries {
+        let path = session.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(held) if held.is_symlink() => {
+                fs::remove_file(&path).map_err(|source| refused(&path, &source))?;
+            }
+            Ok(_) => {}
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(refused(&path, &source)),
+        }
+    }
+    Ok(())
 }
 
 /// Remove every link under `session` that points into `global` and is not wanted
