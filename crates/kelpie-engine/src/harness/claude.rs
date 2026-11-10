@@ -174,8 +174,8 @@ pub(super) fn harness_on_path(
         harness: NAME.to_owned(),
         setup: SETUP.to_owned(),
     })?;
-    let mut installs = install_folders(&bridge);
-    installs.extend(install_folders(&claude));
+    let mut installs = install_folders(&bridge, path);
+    installs.extend(install_folders(&claude, path));
     installs.dedup();
     Ok(Harness {
         program: bridge,

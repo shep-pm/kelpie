@@ -100,7 +100,7 @@ pub(super) fn harness_on_path(
     if let Some(host) = &provider.host {
         env.push((host_env(&provider.name), host.clone().into()));
     }
-    let installs = install_folders(&goose);
+    let installs = install_folders(&goose, path);
     Ok(Harness {
         program: goose,
         args: vec![ACP.into()],

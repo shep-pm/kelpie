@@ -563,3 +563,75 @@ fn an_address_with_a_bare_host_name_names_none_for_the_sandbox_refuses_one() {
         assert!(harness.hosts.is_empty(), "{address}: {:?}", harness.hosts);
     }
 }
+
+/// A runnable file `name` in `dir` holding `text`
+#[cfg(unix)]
+fn script(dir: &Path, name: &str, text: &str) -> PathBuf {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt as _;
+    let file = dir.join(name);
+    fs::write(&file, text).unwrap();
+    fs::set_permissions(&file, Permissions::from_mode(0o755)).unwrap();
+    file
+}
+
+#[cfg(unix)]
+#[test]
+fn a_script_run_by_env_opens_the_folder_of_the_interpreter_it_names() {
+    // Claude Code from npm under nvm: a link in `bin/` to a `cli.js` that starts
+    // with `#!/usr/bin/env node`, and a `node` in a folder of its own on the PATH
+    let package = temp("harness-package");
+    let cli = script(&package, "cli.js", "#!/usr/bin/env node\nconsole.log(1)\n");
+    let bin = temp("harness-bin");
+    std::os::unix::fs::symlink(&cli, bin.join("claude")).unwrap();
+    let node_dir = temp("harness-node");
+    script(&node_dir, "node", "#!/bin/sh\n");
+
+    let harness = build(&path_of([bin.clone(), node_dir.clone()]), &logged_in()).unwrap();
+
+    for folder in [&bin, &package, &node_dir] {
+        assert!(
+            harness.installs.contains(folder),
+            "{folder:?} is read: {:?}",
+            harness.installs
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_interpreter_named_by_its_path_and_one_behind_a_flag_are_opened_too() {
+    let interpreters = temp("harness-interpreters");
+    script(&interpreters, "tool", "#!/bin/sh\n");
+    let node_dir = temp("harness-node");
+    script(&node_dir, "node", "#!/bin/sh\n");
+    let by_path = temp("harness-by-path");
+    script(
+        &by_path,
+        "claude",
+        &format!("#!{} -e\n", interpreters.join("tool").display()),
+    );
+    let by_flag = temp("harness-by-flag");
+    script(
+        &by_flag,
+        "claude",
+        "#!/usr/bin/env -S NODE_ENV=x node --no-warnings\n",
+    );
+
+    let by_path_harness = build(&path_of([by_path]), &logged_in()).unwrap();
+    let by_flag_harness = build(&path_of([by_flag, node_dir.clone()]), &logged_in()).unwrap();
+
+    assert!(by_path_harness.installs.contains(&interpreters));
+    assert!(by_flag_harness.installs.contains(&node_dir));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_interpreter_that_is_not_on_the_path_adds_no_folder() {
+    let bin = temp("harness-bin");
+    script(&bin, "claude", "#!/usr/bin/env nodeless\n");
+
+    let harness = build(&path_of([bin.clone()]), &logged_in()).unwrap();
+
+    assert!(harness.installs.contains(&bin));
+}
