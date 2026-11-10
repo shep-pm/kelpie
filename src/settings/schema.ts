@@ -18,6 +18,9 @@ const LABELS: Record<string, string> = {
   "network-allowlist": "Allowed domains",
 };
 
+/** Fields the form leaves out: each bridge's update row, on the harness's login row, is a slice of its own. */
+const HIDDEN = new Set(["$schema", "bridge-updates"]);
+
 /** The order a person meets the fields in; a key it does not name follows. */
 const ORDER = Object.keys(LABELS);
 
@@ -90,7 +93,7 @@ export function formSchema(raw: Value, keys: string[]): Json {
   const all = isObject(root.properties) ? root.properties : {};
   const properties: Json = {};
   for (const key of keys) {
-    if (key === "$schema" || !(key in all)) continue;
+    if (HIDDEN.has(key) || !(key in all)) continue;
     properties[key] = field(key, all[key] as Value, defs);
   }
   return { type: "object", properties };

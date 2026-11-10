@@ -14,14 +14,18 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::Duration;
 
+use kelpie_engine::bridge::{self, CheckOutcome, Pin};
+use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{Session, SessionId};
-use kelpie_engine::settings::{ConfigDir, Harness};
+use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +48,9 @@ const PM_LOG_FILE: &str = "log.jsonl";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long kelpie waits between two looks for a newer version of each bridge
+const BRIDGE_CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The reaper's name, as `bundle.externalBin` in `tauri.conf.json` names it
 ///
@@ -221,6 +228,8 @@ pub struct AppState {
     opening: Mutex<()>,
     opener: Opener,
     picker: Picker,
+    /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
+    bridge_checks: Mutex<Option<Sender<()>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -281,7 +290,46 @@ impl AppState {
             opening: Mutex::new(()),
             opener,
             picker,
+            bridge_checks: Mutex::new(None),
         })
+    }
+
+    /// Look for a newer version of each installed bridge now, and again every 24 hours
+    ///
+    /// The checks run on a thread of their own, since each one waits on the
+    /// network and on a probe. A bridge kelpie has not installed is skipped, and
+    /// a quit ends them: [`AppState::stop_all`] wakes the thread, which then
+    /// starts nothing more. Does nothing when they already run.
+    pub fn start_bridge_checks(&self) {
+        let mut held = lock(&self.bridge_checks);
+        if held.is_some() {
+            return;
+        }
+        let (stop, quit) = mpsc::channel();
+        *held = Some(stop);
+        let (data_dir, config, tree) = (self.data_dir.clone(), self.config.clone(), self.tree());
+        let check = move |pin: &Pin<'_>| {
+            let policy = Settings::load_global(&config)
+                .map_err(|error| error.to_string())?
+                .bridge_updates_for(pin.id);
+            Ok(bridge::check(
+                &data_dir,
+                &tree,
+                pin,
+                policy,
+                claude::REQUIRES,
+            ))
+        };
+        let data_dir = self.data_dir.clone();
+        thread::spawn(move || {
+            run_bridge_checks(
+                &[claude::pin()],
+                &data_dir,
+                BRIDGE_CHECK_EVERY,
+                &quit,
+                &check,
+            );
+        });
     }
 
     /// The app's data folder
@@ -458,7 +506,47 @@ impl AppState {
         if let Some(session) = self.held_session() {
             session.close_log();
         }
+        // Before the tree stops, so no check starts a probe the stop would miss
+        lock(&self.bridge_checks).take();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
+    }
+}
+
+/// Check each installed bridge in `pins`, then wait `every` and do it again
+///
+/// Ends when `quit`'s sender is dropped, whether it is waiting or about to check.
+/// A failed check is logged and the next one runs on schedule.
+fn run_bridge_checks(
+    pins: &[&Pin<'_>],
+    data_dir: &Path,
+    every: Duration,
+    quit: &Receiver<()>,
+    check: &dyn Fn(&Pin<'_>) -> Result<CheckOutcome, String>,
+) {
+    loop {
+        for pin in pins {
+            if matches!(quit.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                return;
+            }
+            if !data_dir.join("bridges").join(pin.id).is_dir() {
+                continue;
+            }
+            match check(pin) {
+                Ok(CheckOutcome::Failed { reason }) | Err(reason) => {
+                    eprintln!(
+                        "kelpie: could not check {} for a newer version: {reason}",
+                        pin.id
+                    );
+                }
+                Ok(CheckOutcome::HeldBack { version, reason }) => {
+                    eprintln!("kelpie: {} {version} is held back: {reason}", pin.id);
+                }
+                Ok(_) => {}
+            }
+        }
+        if !matches!(quit.recv_timeout(every), Err(RecvTimeoutError::Timeout)) {
+            return;
+        }
     }
 }
 
@@ -629,6 +717,58 @@ mod tests {
             dir.0.join("run.json").exists(),
             "the tree wrote its run file"
         );
+    }
+
+    /// Run the checks on a thread, counting what each one is asked, until `quit` drops
+    fn run_checks(
+        dir: &Dir,
+        every: Duration,
+    ) -> (Sender<()>, thread::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
+        let (stop, quit) = mpsc::channel();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let handle = {
+            let (asked, data_dir) = (Arc::clone(&asked), dir.0.clone());
+            thread::spawn(move || {
+                run_bridge_checks(&[claude::pin()], &data_dir, every, &quit, &|pin| {
+                    lock(&asked).push(pin.id.to_owned());
+                    Ok(CheckOutcome::Current)
+                });
+            })
+        };
+        (stop, handle, asked)
+    }
+
+    /// Wait until `asked` holds `count` entries
+    fn wait_for(asked: &Mutex<Vec<String>>, count: usize) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while lock(asked).len() < count {
+            assert!(std::time::Instant::now() < deadline, "the check never ran");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn an_installed_bridge_is_checked_at_once_and_again_every_interval() {
+        let dir = Dir::new();
+        fs::create_dir_all(dir.0.join("bridges").join(claude::pin().id)).unwrap();
+
+        let (stop, handle, asked) = run_checks(&dir, Duration::from_millis(20));
+        wait_for(&asked, 3);
+        drop(stop);
+        handle.join().unwrap();
+
+        assert!(lock(&asked).iter().all(|id| id == claude::pin().id));
+    }
+
+    #[test]
+    fn a_bridge_never_installed_is_not_checked_and_a_quit_ends_the_wait() {
+        let dir = Dir::new();
+
+        let (stop, handle, asked) = run_checks(&dir, Duration::from_secs(24 * 60 * 60));
+        drop(stop);
+        handle.join().unwrap();
+
+        assert!(lock(&asked).is_empty(), "{:?}", lock(&asked));
     }
 
     #[test]
