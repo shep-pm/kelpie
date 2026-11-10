@@ -126,6 +126,18 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: None,
                 from: Layer::BuiltIn,
             },
+            worker_harness: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            worker_model: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            worker_effort: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
             provider: Layered {
                 value: None,
                 from: Layer::BuiltIn,
@@ -662,4 +674,81 @@ fn a_reply_style_says_what_it_adds_to_the_instructions() {
     assert!(concise.starts_with("## Replies"), "{concise}");
     assert!(concise.contains("table"), "{concise}");
     assert_eq!(ReplyStyle::HarnessDefault.instructions(), None);
+}
+
+#[test]
+fn worker_harness_model_and_effort_resolve_project_over_global() {
+    let dir = Dir::new();
+
+    // Nothing set: kelpie names no worker harness, model or effort (ADR 0006)
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    for value in [&settings.worker_model, &settings.worker_effort] {
+        assert_eq!(
+            *value,
+            Layered {
+                value: None,
+                from: Layer::BuiltIn
+            }
+        );
+    }
+    assert_eq!(settings.worker_harness.value, None);
+    assert_eq!(settings.worker_harness.from, Layer::BuiltIn);
+
+    // The global value is the global `worker` agent's own keys, so the global
+    // settings file does not take one
+    let refused = Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::WorkerModel,
+        &json!("global-model"),
+    );
+    assert!(refused.is_err());
+    let agents = dir.0.join("agents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(
+        agents.join("worker.md"),
+        "---\nharness: goose\nmodel: global-model\neffort: low\n---\n",
+    )
+    .unwrap();
+    dir.put(
+        LayerFile::Project("web"),
+        r#"{"worker-harness": "claude-code", "worker-model": "project-model", "worker-effort": "high"}"#,
+    );
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        settings.worker_harness,
+        Layered {
+            value: Some(Harness::ClaudeCode),
+            from: Layer::Project
+        }
+    );
+    assert_eq!(
+        settings.worker_model,
+        Layered {
+            value: Some("project-model".to_owned()),
+            from: Layer::Project
+        }
+    );
+    assert_eq!(
+        settings.worker_effort,
+        Layered {
+            value: Some("high".to_owned()),
+            from: Layer::Project
+        }
+    );
+
+    // The worker's binding takes the project's three over the global file's
+    let agents = crate::agents::Agents::load(&dir.config()).unwrap();
+    let binding = agents.worker_binding(&settings).unwrap();
+    assert_eq!(binding.harness.value, Some(Harness::ClaudeCode));
+    assert_eq!(binding.model.value.as_deref(), Some("project-model"));
+    assert_eq!(binding.effort.value.as_deref(), Some("high"));
+
+    // Another project that sets none sees the global file's
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+    let binding = agents.worker_binding(&other).unwrap();
+    assert_eq!(binding.harness.value, Some(Harness::Goose));
+    assert_eq!(binding.model.value.as_deref(), Some("global-model"));
+    assert_eq!(binding.effort.value.as_deref(), Some("low"));
 }
