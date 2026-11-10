@@ -93,7 +93,9 @@ From `crates/tauri/src/app.rs` (source).
 From `develop/sidecar.mdx`.
 
 - `bundle.externalBin: ["binaries/reaper"]` is relative to `tauri.conf.json`, and the file must be `binaries/reaper-<target triple>[.exe]`. `rustc --print host-tuple` gives the triple.
-- Kelpie starts the reaper from the engine with `std::process::Command`, so it resolves the path itself. Where the bundler puts the sidecar inside each OS bundle is not recorded here yet; the Phase 1 slice that adds the reaper confirms it and adds it to this file.
+- Kelpie starts the reaper from the engine with `std::process::Command`, so it resolves the path itself, as `kelpie-reaper` beside `std::env::current_exe()`. The bundler strips the triple from the name.
+- macOS puts the sidecar at `Kelpie.app/Contents/MacOS/kelpie-reaper`, beside the app binary. A `--no-bundle` build puts `kelpie-reaper` beside the binary in `$CARGO_TARGET_DIR/debug` or `.../release`, on macOS and Linux (#57).
+- Where the Linux packages (deb, rpm, AppImage) put it is not recorded yet. Record it here once someone runs those bundles.
 
 ## Dev, build and CI
 

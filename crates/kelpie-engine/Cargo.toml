@@ -40,3 +40,7 @@ zip.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+
+[dev-dependencies]
+# The parity check reads `docs/parity.toml`
+toml.workspace = true
