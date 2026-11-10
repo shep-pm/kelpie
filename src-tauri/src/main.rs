@@ -16,6 +16,11 @@ fn main() {
     // the relay that carries its MCP to kelpie, and that run must not open a
     // window.
     kelpie_engine::tools::run_from_args();
+    // And for the same reason: a worker runs `kelpie lease run <name> -- <cmd>`
+    // to wait its turn for a lease before its command runs, and that run must
+    // not open a window either (`docs/design/workers.md`, Slots, pacing and
+    // leases).
+    kelpie_engine::lease::run::run_from_args();
     if let Err(error) = kelpie_app::run() {
         sys::failure(&error.to_string());
         std::process::exit(1);
