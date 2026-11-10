@@ -15,7 +15,7 @@
 
 use std::fs;
 
-use kelpie_engine::agents::{Agents, Binding, Origin, PmKey};
+use kelpie_engine::agents::{Agents, Binding, Origin, PM, PmKey, WORKER};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
@@ -161,10 +161,10 @@ pub enum Target {
     },
 }
 
-/// The layer a value's origin is shown as: the global `pm` agent is the global layer
+/// The layer a value's origin is shown as: the global `pm` and `worker` agents are the global layer
 fn from(origin: &Origin) -> String {
     match origin {
-        Origin::File(name) if name == kelpie_engine::agents::PM => Layer::Global.name().to_owned(),
+        Origin::File(name) if name == PM || name == WORKER => Layer::Global.name().to_owned(),
         other => other.to_string(),
     }
 }
@@ -177,8 +177,15 @@ fn layered<T: Serialize>(field: Field, value: &T, layer: Layer) -> FieldView {
     }
 }
 
-/// The form's fields in order, from the settings and the PM's resolved binding
-fn fields(resolved: &Resolved, pm: &Defaulted, only: impl Fn(Field) -> bool) -> Vec<FieldView> {
+/// The form's fields in order, from the settings and the PM's and the worker's resolved bindings
+///
+/// Without a worker binding, the worker's fields show what the settings alone say.
+fn fields(
+    resolved: &Resolved,
+    pm: &Defaulted,
+    worker: Option<&Binding>,
+    only: impl Fn(Field) -> bool,
+) -> Vec<FieldView> {
     let sourced = |field: Field, value: Value, origin: &Origin| FieldView {
         key: field.key().to_owned(),
         value,
@@ -191,6 +198,30 @@ fn fields(resolved: &Resolved, pm: &Defaulted, only: impl Fn(Field) -> bool) -> 
             Field::PmHarness => sourced(field, json_of(&Some(pm.harness.value)), &pm.harness.from),
             Field::PmModel => sourced(field, json_of(&pm.model.value), &pm.model.from),
             Field::PmEffort => sourced(field, json_of(&pm.effort.value), &pm.effort.from),
+            Field::WorkerHarness => match worker {
+                Some(w) => sourced(field, json_of(&w.harness.value), &w.harness.from),
+                None => layered(
+                    field,
+                    &resolved.worker_harness.value,
+                    resolved.worker_harness.from,
+                ),
+            },
+            Field::WorkerModel => match worker {
+                Some(w) => sourced(field, json_of(&w.model.value), &w.model.from),
+                None => layered(
+                    field,
+                    &resolved.worker_model.value,
+                    resolved.worker_model.from,
+                ),
+            },
+            Field::WorkerEffort => match worker {
+                Some(w) => sourced(field, json_of(&w.effort.value), &w.effort.from),
+                None => layered(
+                    field,
+                    &resolved.worker_effort.value,
+                    resolved.worker_effort.from,
+                ),
+            },
             Field::Provider => layered(field, &resolved.provider.value, resolved.provider.from),
             Field::Host => layered(field, &resolved.host.value, resolved.host.from),
             Field::ReplyStyle => layered(
@@ -260,6 +291,7 @@ pub fn settings_get(
     let global = fields(
         &global_settings,
         &pm::with_defaults(&global_binding),
+        None,
         |field| field.layers().contains(&Layer::Global) || is_pm(field),
     );
     let project = match state.project_id(project.as_deref()) {
@@ -268,6 +300,9 @@ pub fn settings_get(
             let binding = agents
                 .pm_binding(&settings)
                 .map_err(|error| error.to_string())?;
+            let worker = agents
+                .worker_binding(&settings)
+                .map_err(|error| error.to_string())?;
             let path = state
                 .project_path_of(&id)
                 .map(|path| path.to_string_lossy().into_owned())
@@ -275,7 +310,12 @@ pub fn settings_get(
             Some(ProjectView {
                 id,
                 path,
-                fields: fields(&settings, &pm::with_defaults(&binding), |_| true),
+                fields: fields(
+                    &settings,
+                    &pm::with_defaults(&binding),
+                    Some(&worker),
+                    |_| true,
+                ),
             })
         }
         // No project yet: the Project tab has nothing to show
@@ -640,6 +680,47 @@ mod tests {
         // The global tab holds only what the global layer can hold, and never a project's value
         assert_eq!(field(&seen.global, "reply-style").from, "kelpie");
         assert!(seen.global.iter().all(|f| f.key != "network-allowlist"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_worker_fields_on_the_project_tab_are_what_a_worker_runs_as() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+        let project = state.project_id(None).unwrap();
+        let agents = dir.join("config").join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(
+            agents.join("worker.md"),
+            "---\nharness: goose\nmodel: global-model\neffort: low\n---\n",
+        )
+        .unwrap();
+
+        // The global `worker.md`'s keys show as the global layer's
+        let seen = settings_get(state.clone(), None).unwrap();
+        let fields = seen.project.unwrap().fields;
+        assert_eq!(field(&fields, "worker-model").value, "global-model");
+        assert_eq!(field(&fields, "worker-model").from, "global");
+        assert_eq!(field(&fields, "worker-harness").value, "goose");
+        assert_eq!(field(&fields, "worker-harness").from, "global");
+        assert_eq!(field(&fields, "worker-effort").value, "low");
+        assert_eq!(field(&fields, "worker-effort").from, "global");
+
+        // The project's own setting wins, and says so
+        settings_set(
+            state.clone(),
+            Target::Project { id: project },
+            "worker-model".into(),
+            "project-model".into(),
+        )
+        .unwrap();
+        let seen = settings_get(state.clone(), None).unwrap();
+        let fields = seen.project.unwrap().fields;
+        assert_eq!(field(&fields, "worker-model").value, "project-model");
+        assert_eq!(field(&fields, "worker-model").from, "project");
+        assert_eq!(field(&fields, "worker-effort").from, "global");
         fs::remove_dir_all(dir).unwrap();
     }
 

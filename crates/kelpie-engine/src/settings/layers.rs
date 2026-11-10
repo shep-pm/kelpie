@@ -81,16 +81,21 @@ impl LayerFile<'_> {
 impl Field {
     /// The layers that may set this field
     ///
-    /// The PM's harness, model and effort are a project's setting only: their
-    /// global value is the global `pm` agent's own keys, so one value is never
-    /// kept in two files.
+    /// The PM's and the worker's harness, model and effort are a project's
+    /// setting only: their global value is the global `pm` or `worker` agent's
+    /// own keys, so one value is never kept in two files.
     #[must_use]
     pub fn layers(self) -> &'static [Layer] {
         const PROJECT: &[Layer] = &[Layer::Project];
         const GLOBAL: &[Layer] = &[Layer::Global];
         const GLOBAL_AND_PROJECT: &[Layer] = &[Layer::Global, Layer::Project];
         match self {
-            Self::PmHarness | Self::PmModel | Self::PmEffort => PROJECT,
+            Self::PmHarness
+            | Self::PmModel
+            | Self::PmEffort
+            | Self::WorkerHarness
+            | Self::WorkerModel
+            | Self::WorkerEffort => PROJECT,
             Self::Provider | Self::Host | Self::ReplyStyle => GLOBAL_AND_PROJECT,
             Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
             Self::BridgeUpdates => GLOBAL,
@@ -121,6 +126,17 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             global,
             project,
             BUILT_IN.pm_effort.map(str::to_string),
+        )?,
+        worker_harness: Field::WorkerHarness.resolve(global, project, BUILT_IN.worker_harness)?,
+        worker_model: Field::WorkerModel.resolve(
+            global,
+            project,
+            BUILT_IN.worker_model.map(str::to_string),
+        )?,
+        worker_effort: Field::WorkerEffort.resolve(
+            global,
+            project,
+            BUILT_IN.worker_effort.map(str::to_string),
         )?,
         provider: Field::Provider.resolve(
             global,
