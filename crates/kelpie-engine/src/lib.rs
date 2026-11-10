@@ -41,7 +41,7 @@
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
 //! runs on; [`login`] holds those logins; [`sandbox`] builds the policy a
 //! session runs under and starts its sandbox; [`guard`] splits a command, takes
-//! off its wrappers and reads its scripts; [`local_paths`] is the one check for
+//! off its wrappers, reads its scripts and judges its git calls; [`local_paths`] is the one check for
 //! what must not leave this machine; [`pacer`] holds a turn while a limit's window
 //! is spent; [`worker`] counts how many of a project's workers may run at once;
 //! [`worktree`] reads a ticket's worktree; [`worker_folder`] reads and writes a
