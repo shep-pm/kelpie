@@ -55,6 +55,8 @@ pub(super) fn unwrap(mut words: &[String]) -> Result<Option<Unwrapped<'_>>, Stri
     let mut moved = false;
     let mut git_redirected = false;
     let mut git_configured = false;
+    // Whether `xargs` runs the command, which then takes words from stdin too.
+    let mut fed = false;
     loop {
         let Some(first) = words.first() else {
             return Ok(None);
@@ -145,16 +147,12 @@ pub(super) fn unwrap(mut words: &[String]) -> Result<Option<Unwrapped<'_>>, Stri
                         "-a", "-d", "-E", "-e", "-I", "-i", "-L", "-l", "-n", "-P", "-s",
                     ],
                 );
-                if rest
-                    .get(skip)
-                    .is_some_and(|w| matches!(program(w), "git" | "gh"))
-                {
-                    return Err(
-                        "kelpie cannot check git or gh run through `xargs`: run it directly."
-                            .into(),
-                    );
+                // With no command, it runs `echo`.
+                if skip == rest.len() {
+                    return Ok(None);
                 }
-                return Ok(None);
+                fed = true;
+                &rest[skip..]
             }
             "eval" => {
                 return Err(
@@ -166,6 +164,13 @@ pub(super) fn unwrap(mut words: &[String]) -> Result<Option<Unwrapped<'_>>, Stri
                 && !matches!(shell(words), Shell::File(_) | Shell::Nothing) =>
             {
                 return Err(other_shell(name));
+            }
+            // Stdin adds words to the command, so git or gh behind `xargs` could run any
+            // subcommand, however many wrappers sit between.
+            name if fed && matches!(name, "git" | "gh") => {
+                return Err(
+                    "kelpie cannot check git or gh run through `xargs`: run it directly.".into(),
+                );
             }
             _ => {
                 return Ok(Some(Unwrapped {
@@ -271,34 +276,50 @@ fn options(rest: &[String], valued: &[&str]) -> usize {
 }
 
 // `env`'s own options, and whether one moves the command (`-C`).
+//
+// A short option takes the rest of its word as its value, or else the next word:
+// `-C/x`, `-iC/x` and `-C /x` all name a folder. Long options may be cut short
+// to a name nothing else starts with, as `--split` or `--ch`.
 fn env_options(rest: &[String]) -> Result<(usize, bool), String> {
+    const SPLIT: &str = "kelpie cannot check a command `env -S` splits: run it directly.";
     let mut i = 0;
     let mut chdir = false;
     while let Some(word) = rest.get(i) {
-        match word.as_str() {
-            "--" => return Ok((i + 1, chdir)),
-            "-S" | "--split-string" => {
-                return Err(
-                    "kelpie cannot check a command `env -S` splits: run it directly.".into(),
-                );
+        if word == "--" {
+            return Ok((i + 1, chdir));
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((name, _)) => (name, true),
+                None => (long, false),
+            };
+            let named = |full: &str| !name.is_empty() && full.starts_with(name);
+            if named("split-string") {
+                return Err(SPLIT.into());
             }
-            w if w.starts_with("-S") || w.starts_with("--split-string=") => {
-                return Err(
-                    "kelpie cannot check a command `env -S` splits: run it directly.".into(),
-                );
+            chdir |= named("chdir");
+            // These take a value: attached, or the next word.
+            let valued = named("chdir") || named("unset") || named("argv0");
+            i += if valued && !attached { 2 } else { 1 };
+        } else if let Some(shorts) = word.strip_prefix('-') {
+            let mut value = false;
+            for (at, option) in shorts.char_indices() {
+                match option {
+                    'S' => return Err(SPLIT.into()),
+                    'u' | 'P' | 'a' | 'C' => {
+                        chdir |= option == 'C';
+                        // Anything after it in the word is its value.
+                        value = shorts[at + 1..].is_empty();
+                        break;
+                    }
+                    _ => {}
+                }
             }
-            "-u" | "--unset" | "-P" => i += 2,
-            "-C" | "--chdir" => {
-                chdir = true;
-                i += 2;
-            }
-            w if w.starts_with("--chdir=") => {
-                chdir = true;
-                i += 1;
-            }
-            w if w.starts_with('-') => i += 1,
-            w if assignment(w).is_some() => i += 1,
-            _ => return Ok((i, chdir)),
+            i += 1 + usize::from(value);
+        } else if assignment(word).is_some() {
+            i += 1;
+        } else {
+            return Ok((i, chdir));
         }
     }
     Ok((i, chdir))
@@ -350,6 +371,15 @@ mod tests {
             "function f",
             "ksh < f",
             "script -qc x f",
+            "xargs env git push",
+            "xargs timeout 5 git push",
+            "xargs -n 1 env -i gh pr create",
+            "env -iS x",
+            "env -S x",
+            "env -vS x",
+            "env --split x",
+            "env --spl=x",
+            "env --split-string=x",
         ] {
             assert!(unwrap(&w(line)).is_err(), "{line}");
         }
@@ -371,7 +401,13 @@ mod tests {
         ] {
             assert!(unwrap(&w(line)).unwrap().unwrap().git_redirected, "{line}");
         }
+        for line in ["GIT_DIR+=/x git push", "env GIT_DIR+=/x git push"] {
+            assert!(unwrap(&w(line)).unwrap().unwrap().git_redirected, "{line}");
+        }
+        assert_eq!(runs("GIT_DIR+=/x git push"), w("git push"));
         for line in [
+            "export GIT_DIR+=/x",
+            "GIT_DIR+=/x",
             "export GIT_DIR=/x",
             "declare -x GIT_WORK_TREE=.",
             "export GIT_DIR",
@@ -386,6 +422,40 @@ mod tests {
         }
         let words = w("GIT_PAGER=cat git log");
         assert!(!unwrap(&words).unwrap().unwrap().git_redirected);
+    }
+
+    #[test]
+    fn a_move_is_seen_however_env_is_given_the_folder() {
+        for line in [
+            "env -C /x git push",
+            "env -C/x git push",
+            "env -iC/x git push",
+            "env -i -C /x git push",
+            "env --chdir /x git push",
+            "env --chdir=/x git push",
+            "env --ch=/x git push",
+        ] {
+            assert!(unwrap(&w(line)).unwrap().unwrap().moved, "{line}");
+            assert_eq!(runs(line), w("git push"), "{line}");
+        }
+        // A folder named by another option's value is no move.
+        assert!(!unwrap(&w("env -u C git push")).unwrap().unwrap().moved);
+        assert!(!unwrap(&w("env -uC git push")).unwrap().unwrap().moved);
+        assert_eq!(runs("env -uHOME -iv git push"), w("git push"));
+    }
+
+    #[test]
+    fn xargs_runs_the_command_after_its_own_options() {
+        let words = vec![
+            "xargs".to_owned(),
+            "sh".into(),
+            "-c".into(),
+            "git push -f".into(),
+        ];
+        let run = unwrap(&words).unwrap().unwrap();
+        assert_eq!(run.words, &words[1..]);
+        assert_eq!(runs("xargs -n 1 echo"), w("echo"));
+        assert_eq!(unwrap(&w("xargs")), Ok(None));
     }
 
     #[test]
@@ -416,6 +486,12 @@ mod tests {
             ("bash <push.sh", "Stdin { asked: true }"),
             ("sh 0<push.sh", "Stdin { asked: true }"),
             ("bash --version", "Nothing"),
+            ("bash push.sh -c true", "File(\"push.sh\")"),
+            ("bash push.sh -s", "File(\"push.sh\")"),
+            ("bash -x -c y", "Text([\"y\"])"),
+            ("bash -c -x y", "Text([\"y\"])"),
+            ("bash -ec y z", "Text([\"y\"])"),
+            ("bash -- -c y", "File(\"-c\")"),
         ] {
             assert_eq!(shell_of(line), runs, "{line}");
         }
@@ -423,7 +499,7 @@ mod tests {
 
     #[test]
     fn what_runs_nothing_is_nothing() {
-        for line in ["command -v git", "env", "xargs echo"] {
+        for line in ["command -v git", "env", "xargs"] {
             assert_eq!(unwrap(&w(line)), Ok(None), "{line}");
         }
         assert_eq!(

@@ -22,6 +22,8 @@ pub(super) struct Command {
     pub defines_function: bool,
     /// Whether a `|` feeds it the output of the command before
     pub piped: bool,
+    // The heredocs its text names, until `commands` has read their substitutions.
+    marks: Vec<usize>,
 }
 
 /// How one word was written, which its text with quotes removed no longer says
@@ -79,12 +81,20 @@ const MAX_LEN: usize = 1 << 20;
 ///
 /// [`Unreadable`] when `line` is too deep or too long to read.
 pub(super) fn commands(line: &str) -> Result<Vec<Command>, Unreadable> {
+    commands_at(line, 0)
+}
+
+// `commands`, `depth` heredoc bodies down: an unquoted body's substitutions are read too.
+fn commands_at(line: &str, depth: usize) -> Result<Vec<Command>, Unreadable> {
     if line.len() > MAX_LEN {
         return Err(Unreadable::TooLong);
     }
+    if depth > MAX_DEPTH {
+        return Err(Unreadable::TooDeep);
+    }
     let (text, bodies) = lift_heredocs(line);
     let chars: Vec<char> = text.chars().collect();
-    Ok(split(&chars)?
+    let found: Vec<Command> = split(&chars)?
         .into_iter()
         .filter_map(|range| {
             let piped = piped(&chars, range.start);
@@ -101,13 +111,32 @@ pub(super) fn commands(line: &str) -> Result<Vec<Command>, Unreadable> {
                 piped,
                 heredocs: marks(segment)
                     .into_iter()
-                    .filter_map(|i| bodies.get(i).cloned())
+                    .filter_map(|i| bodies.get(i).map(|b| b.text.clone()))
                     .collect(),
                 words,
                 quoting,
+                marks: marks(segment),
             })
         })
-        .collect())
+        .collect();
+    // The shell expands an unquoted heredoc's `$( )` and backticks where the
+    // command that reads it runs, so their commands come before it.
+    let mut out = Vec::new();
+    let mut read = vec![false; bodies.len()];
+    for mut command in found {
+        for i in std::mem::take(&mut command.marks) {
+            let Some(body) = bodies.get(i).filter(|b| b.expands) else {
+                continue;
+            };
+            if !std::mem::replace(&mut read[i], true) {
+                for inner in substitutions(&body.text) {
+                    out.extend(commands_at(&inner, depth + 1)?);
+                }
+            }
+        }
+        out.push(command);
+    }
+    Ok(out)
 }
 
 // Where a scan stands: inside quotes, or in a command list.
@@ -120,12 +149,27 @@ enum Context {
     Backtick(usize),
 }
 
+// A heredoc's body, and whether the shell expands it: its delimiter had no quote.
+struct Body {
+    text: String,
+    expands: bool,
+}
+
+// Whether a `#` at `at` starts a comment: at a word's start, which a separator or
+// a parenthesis also makes.
+fn comment_at(chars: &[char], at: usize) -> bool {
+    chars[at] == '#'
+        && at.checked_sub(1).is_none_or(|p| {
+            chars[p].is_whitespace() || matches!(chars[p], ';' | '&' | '|' | '(' | ')')
+        })
+}
+
 // Replaces each heredoc body with a mark naming it, and returns the bodies.
-fn lift_heredocs(line: &str) -> (String, Vec<String>) {
+fn lift_heredocs(line: &str) -> (String, Vec<Body>) {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::new();
     let mut bodies = Vec::new();
-    let mut pending: Vec<(String, bool)> = Vec::new();
+    let mut pending: Vec<(String, bool, bool)> = Vec::new();
     let mut stack: Vec<char> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -153,7 +197,7 @@ fn lift_heredocs(line: &str) -> (String, Vec<String>) {
         } else if top != Some('"') {
             match ch {
                 // A comment's apostrophes are not quotes, as in `split`.
-                '#' if i == 0 || chars[i - 1].is_whitespace() => {
+                '#' if comment_at(&chars, i) => {
                     let end = chars[i..]
                         .iter()
                         .position(|c| *c == '\n')
@@ -168,9 +212,9 @@ fn lift_heredocs(line: &str) -> (String, Vec<String>) {
                     stack.pop();
                 }
                 '<' if chars.get(i + 1) == Some(&'<') && chars.get(i + 2) != Some(&'<') => {
-                    if let Some((delimiter, strip, end)) = delimiter(&chars, i + 2) {
+                    if let Some((delimiter, strip, quoted, end)) = delimiter(&chars, i + 2) {
                         out.push_str(&format!("<<{MARK}{}{MARK}", bodies.len() + pending.len()));
-                        pending.push((delimiter, strip));
+                        pending.push((delimiter, strip, !quoted));
                         i = end;
                         continue;
                     }
@@ -178,9 +222,9 @@ fn lift_heredocs(line: &str) -> (String, Vec<String>) {
                 '\n' if !pending.is_empty() => {
                     out.push('\n');
                     i += 1;
-                    for (delimiter, strip) in pending.drain(..) {
-                        let (body, next) = body(&chars, i, &delimiter, strip);
-                        bodies.push(body);
+                    for (delimiter, strip, expands) in pending.drain(..) {
+                        let (text, next) = body(&chars, i, &delimiter, strip);
+                        bodies.push(Body { text, expands });
                         i = next;
                     }
                     continue;
@@ -192,15 +236,17 @@ fn lift_heredocs(line: &str) -> (String, Vec<String>) {
         i += 1;
     }
     // A body with no newline before the end is still read to the end.
-    for (delimiter, strip) in pending.drain(..) {
-        let (body, _) = body(&chars, chars.len(), &delimiter, strip);
-        bodies.push(body);
+    for (delimiter, strip, expands) in pending.drain(..) {
+        let (text, _) = body(&chars, chars.len(), &delimiter, strip);
+        bodies.push(Body { text, expands });
     }
     (out, bodies)
 }
 
-// The delimiter after `<<` at `from`, whether `<<-` strips tabs, and where it ends.
-fn delimiter(chars: &[char], from: usize) -> Option<(String, bool, usize)> {
+// The delimiter after `<<` at `from`, whether `<<-` strips tabs, whether any of it
+// was quoted, and where it ends. The shell reads a whole word, up to a space or a
+// metacharacter, with its quotes and backslashes removed.
+fn delimiter(chars: &[char], from: usize) -> Option<(String, bool, bool, usize)> {
     let mut i = from;
     let strip = chars.get(i) == Some(&'-');
     if strip {
@@ -209,28 +255,84 @@ fn delimiter(chars: &[char], from: usize) -> Option<(String, bool, usize)> {
     while chars.get(i).is_some_and(|c| *c == ' ' || *c == '\t') {
         i += 1;
     }
-    let quote = chars.get(i).copied().filter(|c| *c == '\'' || *c == '"');
-    if quote.is_some() {
-        i += 1;
-    }
-    let start = i;
-    while chars
-        .get(i)
-        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
-    {
-        i += 1;
-    }
-    if i == start {
-        return None;
-    }
-    let word: String = chars[start..i].iter().collect();
-    if let Some(q) = quote {
-        if chars.get(i) != Some(&q) {
-            return None;
+    let mut word = String::new();
+    let mut quoted = false;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            _ if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '<' | '>') => break,
+            '\'' | '"' => {
+                let close = chars[i + 1..].iter().position(|q| *q == c)?;
+                word.extend(&chars[i + 1..i + 1 + close]);
+                quoted = true;
+                i += close + 2;
+            }
+            '\\' => {
+                // A backslash before a newline joins lines; before a character, quotes it.
+                quoted = true;
+                if let Some(&next) = chars.get(i + 1).filter(|n| **n != '\n') {
+                    word.push(next);
+                }
+                i += 2;
+            }
+            _ => {
+                word.push(c);
+                i += 1;
+            }
         }
-        i += 1;
     }
-    Some((word, strip, i))
+    (!word.is_empty()).then_some((word, strip, quoted, i.min(chars.len())))
+}
+
+// The bodies of the `$( )` and backtick substitutions in an unquoted heredoc's text.
+// A backslash holds the `$` or backtick after it literal.
+fn substitutions(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 2,
+            '$' if chars.get(i + 1) == Some(&'(') => {
+                let start = i + 2;
+                let mut depth = 1;
+                let mut j = start;
+                while j < chars.len() {
+                    match chars[j] {
+                        '\\' => j += 1,
+                        '\'' => {
+                            j = chars[j + 1..]
+                                .iter()
+                                .position(|c| *c == '\'')
+                                .map_or(chars.len(), |n| j + 1 + n);
+                        }
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                // Its own nested substitutions are read when its body is.
+                out.push(chars[start..j.min(chars.len())].iter().collect());
+                i = j + 1;
+            }
+            '`' => {
+                let start = i + 1;
+                let mut j = start;
+                while j < chars.len() && chars[j] != '`' {
+                    j += if chars[j] == '\\' { 2 } else { 1 };
+                }
+                out.push(chars[start..j.min(chars.len())].iter().collect());
+                i = j + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out
 }
 
 // The body's lines from `from` up to the delimiter's line, and where the text resumes.
@@ -306,10 +408,9 @@ fn split(chars: &[char]) -> Result<Vec<Range<usize>>, Unreadable> {
             i += 1;
             continue;
         }
-        let at_word = i == 0 || chars[i - 1].is_whitespace();
         match ch {
             // A comment runs to the newline, and its apostrophes are not quotes.
-            '#' if at_word => {
+            '#' if comment_at(chars, i) => {
                 i = chars[i..]
                     .iter()
                     .position(|c| *c == '\n')
@@ -631,5 +732,76 @@ mod tests {
         let all = commands("cat <<-END\n\tone\n\tEND\ngit push").unwrap();
         assert_eq!(all[0].heredocs, ["\tone"]);
         assert_eq!(all[1].words, w(&["git", "push"]));
+    }
+
+    #[test]
+    fn a_comment_after_a_separator_does_not_open_a_quote() {
+        for line in [
+            "true;# don't\ngit push\n# '",
+            "true&# don't\ngit push\n# '",
+            "true|# don't\ngit push\n# '",
+            "(true)# don't\ngit push\n# '",
+            "(# don't\ngit push\n)",
+        ] {
+            let all = words_of(line);
+            assert!(all.contains(&w(&["git", "push"])), "{line:?}: {all:?}");
+        }
+        // A `#` inside a word is not a comment.
+        let all = words_of("echo a#b; git push");
+        assert!(all.contains(&w(&["git", "push"])), "{all:?}");
+    }
+
+    #[test]
+    fn a_heredoc_ends_at_the_whole_word_the_shell_reads_as_its_delimiter() {
+        let all = commands("cat <<E\"OF\"\nx\nEOF\ngit push\nE\n").unwrap();
+        assert!(
+            all.iter().any(|c| c.words == w(&["git", "push"])),
+            "{all:?}"
+        );
+        assert_eq!(all[0].heredocs, ["x"]);
+        // The delimiter runs to a metacharacter, so `EOF` alone does not end it.
+        let all = commands("cat <<EOF.x\nEOF\ngit push\nEOF.x\ngit pull").unwrap();
+        assert_eq!(all[0].heredocs, ["EOF\ngit push"], "{all:?}");
+        assert!(all.iter().any(|c| c.words == w(&["git", "pull"])));
+        assert!(!all.iter().any(|c| c.words == w(&["git", "push"])));
+        let all = commands("cat <<END-1\nEND\nEND-1\ngit pull").unwrap();
+        assert_eq!(all[0].heredocs, ["END"], "{all:?}");
+        let all = commands("cat <<-'E'F\n\tx\n\tEF\ngit pull").unwrap();
+        assert_eq!(all[0].heredocs, ["\tx"], "{all:?}");
+    }
+
+    #[test]
+    fn a_substitution_in_an_unquoted_heredoc_runs_and_in_a_quoted_one_does_not() {
+        for line in [
+            "cat <<EOF\n$(git push --force)\nEOF",
+            "cat <<EOF\nsay ${x:-$(git push --force)}\nEOF",
+            "cat <<EOF\n`git push --force`\nEOF",
+            "cat <<EOF\n$(echo $(git push --force))\nEOF",
+            "cat <<EOF\n$(cat <<EOF2\n$(git push --force)\nEOF2\n)\nEOF",
+            "cat <<-EOF\n\t$(git push --force)\n\tEOF",
+        ] {
+            let all = words_of(line);
+            assert!(
+                all.contains(&w(&["git", "push", "--force"])),
+                "{line:?}: {all:?}"
+            );
+        }
+        for line in [
+            "cat <<'EOF'\n$(git push --force)\nEOF",
+            "cat <<\"EOF\"\n$(git push --force)\nEOF",
+            "cat <<\\EOF\n$(git push --force)\nEOF",
+            "cat <<EOF\n\\$(git push --force)\nEOF",
+        ] {
+            let all = words_of(line);
+            assert!(!all.iter().any(|c| c[0] == "git"), "{line:?}: {all:?}");
+        }
+    }
+
+    #[test]
+    fn a_substitution_in_a_heredoc_runs_where_its_command_does() {
+        let all = words_of("cd sub\ncat <<EOF\n$(git push)\nEOF\ngit pull");
+        let at = |c: &[&str]| all.iter().position(|x| *x == w(c)).unwrap();
+        assert!(at(&["cd", "sub"]) < at(&["git", "push"]), "{all:?}");
+        assert!(at(&["git", "push"]) < at(&["git", "pull"]), "{all:?}");
     }
 }

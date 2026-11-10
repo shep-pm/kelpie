@@ -21,9 +21,7 @@ pub(in crate::guard) enum Shell<'a> {
 
 /// What the shell `words` starts runs
 pub(in crate::guard) fn shell(words: &[String]) -> Shell<'_> {
-    if let Some(script) = script(words) {
-        return Shell::Text(vec![script]);
-    }
+    let mut command = false;
     let mut strings = Vec::new();
     let mut stdin = false;
     let mut operand = None;
@@ -54,7 +52,11 @@ pub(in crate::guard) fn shell(words: &[String]) -> Shell<'_> {
                 "--" => options = false,
                 "--version" | "--help" => return Shell::Nothing,
                 "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => i += 1,
-                w if !w.starts_with("--") && w.contains('s') => stdin = true,
+                w if !w.starts_with("--") => {
+                    // `-c` counts only among the options, before the script file.
+                    command |= is_c_flag(w);
+                    stdin |= w.contains('s');
+                }
                 _ => {}
             }
             continue;
@@ -62,6 +64,8 @@ pub(in crate::guard) fn shell(words: &[String]) -> Shell<'_> {
         operand = Some(word.as_str());
     }
     match operand {
+        // With `-c`, the first operand is the script, whatever else follows.
+        Some(script) if command => Shell::Text(vec![script]),
         Some(file) if !stdin && !stdin_path(file) => Shell::File(file),
         _ if strings.is_empty() => Shell::Stdin {
             asked: stdin || operand.is_some(),
@@ -70,12 +74,7 @@ pub(in crate::guard) fn shell(words: &[String]) -> Shell<'_> {
     }
 }
 
-/// The script a shell runs with `-c`, `-lc` and the like
-fn script(words: &[String]) -> Option<&str> {
-    let at = words[1..].iter().position(|w| is_c_flag(w))?;
-    words.get(at + 2).map(String::as_str)
-}
-
+/// Whether `word` is a short option group holding `-c`, as `-c` and `-lc`
 pub(super) fn is_c_flag(word: &str) -> bool {
     word.starts_with('-') && !word.starts_with("--") && word.contains('c')
 }

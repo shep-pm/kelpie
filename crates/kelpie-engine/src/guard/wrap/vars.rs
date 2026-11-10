@@ -66,6 +66,7 @@ pub(in crate::guard) fn sets(words: &[String], named: fn(&str) -> bool) -> bool 
     let names = |words: &[String]| {
         words.iter().filter(|w| !w.starts_with('-')).any(|w| {
             let name = w.split_once('=').map_or(w.as_str(), |(n, _)| n);
+            let name = name.strip_suffix('+').unwrap_or(name);
             !is_name(name) || named(name)
         })
     };
@@ -84,8 +85,10 @@ pub(in crate::guard) fn commands_assigned(words: &[String]) -> impl Iterator<Ite
         .map(|(_, value)| value)
 }
 
+// `NAME=value`, or `NAME+=value`, which appends to what the variable holds.
 pub(super) fn assignment(word: &str) -> Option<(&str, &str)> {
     let (name, value) = word.split_once('=')?;
+    let name = name.strip_suffix('+').unwrap_or(name);
     is_name(name).then_some((name, value))
 }
 
