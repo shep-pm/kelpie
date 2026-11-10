@@ -34,12 +34,12 @@ fn claudes_global() -> PathBuf {
     global
 }
 
-/// A person's goose root: its config, its secrets, and its own sessions beside them
+/// A person's goose config folder: their config, the secrets beside it, and their prompts
 ///
-/// The layout the goose on `PATH` (block-goose-cli 1.57.0) keeps: `config.yaml`
-/// and `secrets.yaml` sit directly under the home dir `GOOSE_PATH_ROOT` names,
-/// which is `~/.config/goose` when the person sets nothing.
-fn gooses_global() -> PathBuf {
+/// goose keeps this folder at `~/.config/goose` when the person sets nothing, and
+/// at `<GOOSE_PATH_ROOT>/config` when they set it, which is what
+/// `goose::global_folder` is for. Its secrets and its prompts are not entries.
+fn gooses_config() -> PathBuf {
     let global = temp("harness-global-goose");
     fs::write(global.join("config.yaml"), "GOOSE_MODEL: x\n").unwrap();
     fs::write(
@@ -47,7 +47,6 @@ fn gooses_global() -> PathBuf {
         "ANTHROPIC_API_KEY: never-read\n",
     )
     .unwrap();
-    fs::write(global.join("sessions.db"), "not kelpie's\n").unwrap();
     fs::create_dir_all(global.join("prompts")).unwrap();
     fs::write(
         global.join("prompts/compaction_summary.md"),
@@ -74,7 +73,7 @@ fn claudes_harness(
     )
 }
 
-/// goose on `state`, with the person's own goose root read when `on`
+/// goose on `state`, with the person's own goose config folder read when `on`
 fn gooses_harness(
     state: &Path,
     global: &Path,
@@ -136,15 +135,28 @@ fn claudes_global_folder_is_linked_when_on() {
 }
 
 #[test]
-fn gooses_global_config_is_linked_when_on() {
-    let (install, global, state) = (goose_installed(), gooses_global(), session_state());
+fn gooses_global_config_is_linked_where_goose_reads_it() {
+    let (install, global, state) = (goose_installed(), gooses_config(), session_state());
 
     let harness = gooses_harness(&state, &global, &install, true).unwrap();
 
+    // goose reads its config from `<root>/config/`, so the link has to sit there
+    // and not in the root it is given.
+    let config = state.join("goose").join("config");
     assert_eq!(
-        fs::read_link(state.join("goose").join("config.yaml")).unwrap(),
+        fs::read_link(config.join("config.yaml")).unwrap(),
         global.join("config.yaml"),
-        "goose's own config is not linked into its session root"
+        "goose's own config is not linked where goose looks for it"
+    );
+    assert_eq!(
+        fs::read_to_string(config.join("config.yaml")).unwrap(),
+        "GOOSE_MODEL: x\n",
+        "the link does not carry the person's own config"
+    );
+    assert_eq!(
+        names(&state.join("goose")),
+        ["config"],
+        "the session's goose root holds only the config folder goose reads"
     );
     assert_eq!(
         harness.global_reads,
@@ -161,10 +173,49 @@ fn gooses_global_config_is_linked_when_on() {
     }
 }
 
+/// Where the person's own goose keeps its config, by what they set
+#[test]
+fn gooses_config_folder_is_one_under_a_root_the_person_names() {
+    let (root, home) = (temp("harness-goose-root"), temp("harness-home"));
+    let (unset, empty) = (
+        Some(home.join(".config").join("goose")),
+        Some(home.join(".config").join("goose")),
+    );
+
+    assert_eq!(
+        goose::global_folder(Some(OsStr::new(&root)), Some(&home)),
+        Some(root.join("config")),
+        "a person who set GOOSE_PATH_ROOT keeps their config one folder under it"
+    );
+    assert_eq!(
+        goose::global_folder(None, Some(&home)),
+        unset,
+        "a person who set nothing keeps it in the goose folder under the OS's config folder"
+    );
+    assert_eq!(
+        goose::global_folder(Some(OsStr::new("")), Some(&home)),
+        empty,
+        "an empty root names no folder of its own"
+    );
+    assert_eq!(
+        goose::global_folder(Some(OsStr::new(&root)), None),
+        Some(root.join("config")),
+        "a root needs no home folder to be read under"
+    );
+    assert_eq!(
+        goose::global_folder(None, None),
+        None,
+        "nothing names a folder to read"
+    );
+    for dir in [root, home] {
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn nothing_is_linked_when_off() {
     let (install, global) = (installed(), claudes_global());
-    let (goose_install, goose_global) = (goose_installed(), gooses_global());
+    let (goose_install, goose_global) = (goose_installed(), gooses_config());
     let (claude_state, goose_state) = (session_state(), session_state());
 
     let claude = claudes_harness(&claude_state, &global, &install, false).unwrap();
@@ -174,6 +225,10 @@ fn nothing_is_linked_when_off() {
     assert!(goose.global_reads.is_empty(), "{:?}", goose.global_reads);
     assert_eq!(names(&claude_state.join("claude")), Vec::<String>::new());
     assert_eq!(names(&goose_state.join("goose")), Vec::<String>::new());
+    assert!(
+        !goose_state.join("goose").join("config").exists(),
+        "the config folder was made with nothing to link into it"
+    );
     for dir in [
         install,
         global,
@@ -214,7 +269,7 @@ fn turning_it_off_removes_the_links() {
 fn a_login_in_the_global_folder_is_never_linked() {
     let (install, global, state) = (installed(), claudes_global(), session_state());
     let (goose_install, goose_global, goose_state) =
-        (goose_installed(), gooses_global(), session_state());
+        (goose_installed(), gooses_config(), session_state());
 
     let claude = claudes_harness(&state, &global, &install, true).unwrap();
     let goose = gooses_harness(&goose_state, &goose_global, &goose_install, true).unwrap();
@@ -225,10 +280,11 @@ fn a_login_in_the_global_folder_is_never_linked() {
             "{name} reached the session's config folder"
         );
     }
-    for name in ["secrets.yaml", "sessions.db"] {
+    let goose_config = goose_state.join("goose").join("config");
+    for name in ["secrets.yaml", "prompts"] {
         assert!(
-            !goose_state.join("goose").join(name).exists(),
-            "{name} reached the session's goose root"
+            !goose_config.join(name).exists(),
+            "{name} reached the session's goose config folder"
         );
     }
     for read in claude.global_reads.iter().chain(goose.global_reads.iter()) {

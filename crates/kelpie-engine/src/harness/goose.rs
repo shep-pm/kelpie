@@ -5,9 +5,10 @@
 //! as readily as hosted ones, which is what makes it Phase 1's second harness
 //! (ADR 0006).
 //!
-//! Each session gets `<state_dir>/goose/` as its goose root, so the person's
-//! own goose config, `~/.config/goose`, stays out until they turn it on
-//! (ADR 0006). With the setting on, their own `config.yaml` is linked in;
+//! Each session gets `<state_dir>/goose/` as its goose root, and goose keeps
+//! its config one folder under that root, in `<state_dir>/goose/config/`, so the
+//! person's own goose config stays out until they turn it on (ADR 0006). With
+//! the setting on, their own `config.yaml` is linked into that folder;
 //! `secrets.yaml`, which holds their model keys, never is.
 //! The provider is named in the environment; the model and the effort are config
 //! options, as they are for every harness. goose answers a resume with
@@ -72,18 +73,30 @@ pub fn read_call(tool_call: &ToolCallUpdate) -> Call {
     read_acp(tool_call, &PATH_FIELDS)
 }
 
-/// The folder inside a session's state dir that goose keeps its files in
+/// The folder inside a session's state dir that kelpie gives goose as its root
 const CONFIG_FOLDER: &str = "goose";
 
-/// The folder inside the person's home folder that goose keeps its own files in
-const GLOBAL_FOLDER: &str = ".config/goose";
-
-/// Each entry of the person's global folder a session reads when they turn it on
+/// The folder inside a goose root that goose keeps its config in
 ///
-/// goose's own config, which holds its extensions and its default provider. It
-/// sits directly under the home dir `GOOSE_PATH_ROOT` names, as the goose on
-/// `PATH` keeps it. The secrets goose keeps beside it are not an entry, and the
-/// sandbox keeps them closed (ADR 0005).
+/// goose's path code names its root with `GOOSE_PATH_ROOT` and joins `config` to
+/// it for its config folder, with its `data` and `state` folders beside it, so
+/// `config.yaml` is one folder under the root and never in the root itself. The
+/// goose on `PATH` (block-goose-cli 1.57.0) carries `crates/goose/src/config/paths.rs`,
+/// whose read-only data holds `config` and `state` beside `GOOSE_PATH_ROOT` and
+/// the `goose requires a home dir` of the branch taken when it is unset.
+const ROOT_CONFIG: &str = "config";
+
+/// The folder goose keeps its config in when the person sets no root of their own
+///
+/// The `goose` folder under the OS's config folder, `~/.config/goose`, which is
+/// where the flat `~/.config/goose/config.yaml` of goose's own docs sits.
+const GLOBAL_CONFIG: &str = ".config/goose";
+
+/// Each entry of the person's goose config folder a session reads when they turn it on
+///
+/// goose's own config, which holds its extensions and its default provider. The
+/// secrets goose keeps beside it are not an entry, and the sandbox keeps them
+/// closed (ADR 0005).
 const GLOBAL_ENTRIES: [Entry; 1] = ["config.yaml"];
 
 /// What the sandbox's fence keeps a worker from changing of goose's, and from
@@ -127,10 +140,11 @@ pub struct Provider {
 /// The [`Harness`] that runs the person's own goose over ACP
 ///
 /// `state_dir` is the folder the caller keeps for this session, such as
-/// `<data_dir>/projects/<id>/pm/`; goose gets `<state_dir>/goose/`.
+/// `<data_dir>/projects/<id>/pm/`; goose gets `<state_dir>/goose/` as its root,
+/// and reads its config from `<state_dir>/goose/config/`.
 /// `provider` is where the person's model comes from.
 /// `harness_global_folder` is the project's resolved setting: on links the
-/// person's own goose config into the session's root, off takes back the links a
+/// person's own `config.yaml` into that config folder, off takes back the links a
 /// session made with it on.
 ///
 /// # Errors
@@ -143,7 +157,10 @@ pub fn harness(
     harness_global_folder: bool,
 ) -> Result<Harness, HarnessError> {
     let path = env::var_os("PATH").unwrap_or_default();
-    let folder = global_folder();
+    let folder = global_folder(
+        env::var_os(PATH_ROOT_ENV).as_deref(),
+        global::home().as_deref(),
+    );
     harness_on_path(
         state_dir,
         &provider,
@@ -154,7 +171,8 @@ pub fn harness(
 }
 
 /// [`harness`], searching `path` for the person's goose instead of this
-/// process's `PATH`, and reading their goose config from `global` when it has one
+/// process's `PATH`, and reading their `config.yaml` from their own config folder
+/// `global` when it has one
 pub(super) fn harness_on_path(
     state_dir: &Path,
     provider: &Provider,
@@ -166,19 +184,24 @@ pub(super) fn harness_on_path(
         harness: NAME.to_owned(),
         cmd: CMD.to_owned(),
     })?;
+    // The root goose is told to use, and the config folder goose reads inside it.
+    // A link belongs in the second: goose never looks in the root itself.
+    let (root, config_dir) = (
+        state_dir.join(CONFIG_FOLDER),
+        state_dir.join(CONFIG_FOLDER).join(ROOT_CONFIG),
+    );
     let mut env = vec![
-        (PATH_ROOT_ENV.into(), state_dir.join(CONFIG_FOLDER).into()),
+        (PATH_ROOT_ENV.into(), root.clone().into()),
         (PROVIDER_ENV.into(), provider.name.clone().into()),
     ];
     if let Some(host) = &provider.host {
         env.push((host_env(&provider.name), host.clone().into()));
     }
     let installs = install_folders(&goose, path);
-    let root = state_dir.join(CONFIG_FOLDER);
     let global_reads = match (global, harness_global_folder) {
-        (Some(folder), true) => global::link(folder, &root, &GLOBAL_ENTRIES)?,
+        (Some(folder), true) => global::link(folder, &config_dir, &GLOBAL_ENTRIES)?,
         (Some(folder), false) => {
-            global::link(folder, &root, &[])?;
+            global::link(folder, &config_dir, &[])?;
             Vec::new()
         }
         (None, _) => Vec::new(),
@@ -202,16 +225,17 @@ pub(super) fn harness_on_path(
     })
 }
 
-/// The folder the person's own goose keeps its files in
+/// The folder the person's own goose reads its config from
 ///
-/// `GOOSE_PATH_ROOT` when they set it for their own goose, else the `goose`
-/// folder under `~/.config`. `None` when the OS gives no home folder to name it
-/// under.
-fn global_folder() -> Option<PathBuf> {
-    env::var_os(PATH_ROOT_ENV)
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| global::home().map(|home| home.join(GLOBAL_FOLDER)))
+/// `root` is what their `GOOSE_PATH_ROOT` says, `home` what their OS does. goose
+/// keeps its config one folder under a root it names, and directly in the `goose`
+/// folder under the OS's config folder when it names no root. `None` when neither
+/// can be named.
+pub(super) fn global_folder(root: Option<&OsStr>, home: Option<&Path>) -> Option<PathBuf> {
+    match root.filter(|root| !root.is_empty()) {
+        Some(root) => Some(Path::new(root).join(ROOT_CONFIG)),
+        None => home.map(|home| home.join(GLOBAL_CONFIG)),
+    }
 }
 
 /// The hosts a sandboxed session on `provider` may reach
