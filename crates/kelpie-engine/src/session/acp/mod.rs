@@ -5,7 +5,7 @@
 //! [`SessionEvent`]s in the order they came, because the connection hands
 //! them over one at a time and before the turn's response.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -28,6 +28,9 @@ use agent_client_protocol::{
 use futures::StreamExt as _;
 use futures::future::{Either, select};
 use kelpie_protocol::{CacheLifetime, StopReason, ToolStatus, Usage};
+
+use crate::confine::Verdict;
+use crate::permission::{Judge, ReadCall};
 
 use super::raw;
 use super::seed;
@@ -227,8 +230,9 @@ struct State {
     replaying: bool,
     /// Each tool call's title and status as last sent
     steps: HashMap<String, (String, ToolStatus)>,
-    /// Calls kelpie refused, which stay refused when the agent reports them failed
-    refused: HashSet<String>,
+    /// Calls kelpie refused, and why when it said, which stay refused when the
+    /// agent reports them failed
+    refused: HashMap<String, Option<String>>,
     /// A request failed on a connection that still works, such as an error the
     /// harness answered with, so the harness's end is not what to explain
     request_failed: bool,
@@ -327,27 +331,77 @@ impl Shared {
         }
     }
 
+    /// Answer a permission request: ask `judge`, or refuse it when there is none
+    ///
+    /// A call the judge allows gets the allow option. A refusal gets the reject
+    /// option, and a refused step that keeps the judge's reason.
+    fn answer(
+        &self,
+        request: &RequestPermissionRequest,
+        judge: Option<&Judge>,
+        read: ReadCall,
+    ) -> RequestPermissionOutcome {
+        match judge.map(|judge| judge.judge(&read.read(&request.tool_call))) {
+            Some(Verdict::Allow) => self.allow(request),
+            Some(Verdict::Refuse(reason)) => self.refuse(request, Some(reason)),
+            None => self.refuse(request, None),
+        }
+    }
+
+    /// Allow a permission request: the allow option, or a refusal when it offers none
+    fn allow(&self, request: &RequestPermissionRequest) -> RequestPermissionOutcome {
+        match choose(
+            request,
+            [
+                PermissionOptionKind::AllowOnce,
+                PermissionOptionKind::AllowAlways,
+            ],
+        ) {
+            Some(outcome) => outcome,
+            None => self.refuse(
+                request,
+                Some("the harness offered no option to allow the call".to_owned()),
+            ),
+        }
+    }
+
     /// Refuse a permission request: the reject option, and a refused step
-    fn refuse(&self, request: &RequestPermissionRequest) -> RequestPermissionOutcome {
+    fn refuse(
+        &self,
+        request: &RequestPermissionRequest,
+        reason: Option<String>,
+    ) -> RequestPermissionOutcome {
         let id = request.tool_call.tool_call_id.0.to_string();
         let mut state = self.state();
-        state.refused.insert(id.clone());
+        state.refused.insert(id.clone(), reason);
         let event = state.step(id, request.tool_call.fields.title.clone(), None);
         if let (Some(event), Some(sink)) = (event, state.sink.as_mut()) {
             sink(event);
         }
-        [
-            PermissionOptionKind::RejectOnce,
-            PermissionOptionKind::RejectAlways,
-        ]
+        choose(
+            request,
+            [
+                PermissionOptionKind::RejectOnce,
+                PermissionOptionKind::RejectAlways,
+            ],
+        )
+        .unwrap_or(RequestPermissionOutcome::Cancelled)
+    }
+}
+
+/// The first option of the first of `kinds` the request offers, as the answer
+fn choose(
+    request: &RequestPermissionRequest,
+    kinds: [PermissionOptionKind; 2],
+) -> Option<RequestPermissionOutcome> {
+    kinds
         .iter()
         .find_map(|kind| request.options.iter().find(|option| option.kind == *kind))
-        .map_or(RequestPermissionOutcome::Cancelled, |option| {
+        .map(|option| {
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                 option.option_id.clone(),
             ))
         })
-    }
 }
 
 impl State {
@@ -359,21 +413,25 @@ impl State {
         title: Option<String>,
         status: Option<ToolCallStatus>,
     ) -> Option<SessionEvent> {
-        let refused = self.refused.contains(&id);
+        let refused = self.refused.get(&id).cloned();
         let (known_title, known_status) = self
             .steps
             .get(&id)
             .cloned()
             .unwrap_or_else(|| (String::new(), ToolStatus::Pending));
         let title = title.unwrap_or_else(|| known_title.clone());
-        let status = if refused {
-            ToolStatus::Refused
-        } else {
-            status.map_or(known_status, tool_status)
+        let (status, reason) = match refused {
+            Some(reason) => (ToolStatus::Refused, reason),
+            None => (status.map_or(known_status, tool_status), None),
         };
         let changed = self.steps.get(&id) != Some(&(title.clone(), status));
         self.steps.insert(id.clone(), (title.clone(), status));
-        changed.then_some(SessionEvent::ToolStep { id, title, status })
+        changed.then_some(SessionEvent::ToolStep {
+            id,
+            title,
+            status,
+            reason,
+        })
     }
 }
 
@@ -417,6 +475,8 @@ async fn connect(
     let permissions = Arc::clone(shared);
     let reads = Arc::clone(shared);
     let named = attempt.harness.extensions.clone();
+    let judge = setup.judge.clone();
+    let read_call = attempt.harness.read_call;
     Client
         .v1()
         .name("kelpie")
@@ -429,7 +489,7 @@ async fn connect(
         )
         .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _cx| {
-                let outcome = permissions.refuse(&request);
+                let outcome = permissions.answer(&request, judge.as_ref(), read_call);
                 responder.respond(RequestPermissionResponse::new(outcome))
             },
             on_receive_request!(),

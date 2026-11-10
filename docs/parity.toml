@@ -41,6 +41,11 @@ what = "usage per turn on `PromptResponse.usage`, with the cache read and the ca
 claude-code = "yes"
 goose = { cannot = "goose reports no cache counts in a turn's usage", doc = "docs/acp.md", says = "has total, input, output only. No cache counts." }
 
+[harness.permission]
+what = "each tool call is judged in process on its `session/request_permission`: the harness runs in its prompting mode, and its adapter reads the call's file or command"
+claude-code = "yes"
+goose = "yes"
+
 [harness.pm]
 what = "the app runs the PM on the harness, from its settings"
 claude-code = "yes"

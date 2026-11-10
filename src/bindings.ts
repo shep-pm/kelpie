@@ -411,7 +411,13 @@ id: string;
 /**  One line saying what the call does */
 title: string; 
 /**  How far the call got */
-status: ToolStatus } | 
+status: ToolStatus; 
+/**
+ *  Why kelpie refused the call, on a refused step
+ * 
+ *  Absent on every other step, and on a call refused with no reason given.
+ */
+reason?: string | null } | 
 /**
  *  The agent asked to reach a host the sandbox refuses, and waits for the maintainer
  * 
