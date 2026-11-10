@@ -25,6 +25,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
+use crate::sandbox::fence::OwnFiles;
 use crate::session::Harness;
 
 use super::{HarnessError, install_folders, on_path};
@@ -50,6 +51,27 @@ const UNPROMPTED: &str = "auto";
 
 /// The folder inside a session's state dir that goose keeps its files in
 const CONFIG_FOLDER: &str = "goose";
+
+/// What the sandbox's fence keeps a worker from changing of goose's, and from
+/// reading of its login
+///
+/// goose also loads `.goosehints` from the working folder. It is not listed
+/// here: kelpie sets `CONTEXT_FILE_NAMES` so goose never reads it.
+pub const OWN_FILES: OwnFiles = OwnFiles {
+    harness: NAME,
+    folders: &[".goose"],
+    // `settings.local.json` and `settings.json` there can disable a plugin by name
+    nested: &[[".config", "goose"]],
+    root_files: &[],
+    // Its config, secrets and session database sit in four places, by platform
+    credentials: &[
+        "~/.config/goose/**",
+        "~/.local/share/goose/**",
+        "~/.local/state/goose/**",
+        "~/Library/Application Support/Block/goose/**",
+    ],
+    program: CMD,
+};
 
 /// The provider a goose session runs on, and where it answers
 ///
