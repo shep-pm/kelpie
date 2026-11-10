@@ -90,6 +90,19 @@
         "null"
       ]
     },
+    "lease-capacity": {
+      "additionalProperties": {
+        "maximum": 64,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "default": null,
+      "description": "How many commands hold each lease at once, keyed by the lease's name such as `cargo-test`. A lease the map does not name takes kelpie's own capacity for it, and no lease holds zero.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "network-allowlist": {
       "default": null,
       "description": "Domains a sandbox request may reach, one saved with *Allow for this project*",
@@ -182,6 +195,16 @@
       "description": "Which model a worker runs on, named as the harness names it. Empty leaves the model to the harness.",
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "worker-slots": {
+      "default": null,
+      "description": "How many of this project's workers run at once. A worker that is Paused or waiting on the maintainer holds no slot. 0 holds every worker out of the project's slots.",
+      "maximum": 64,
+      "minimum": 0,
+      "type": [
+        "integer",
         "null"
       ]
     }

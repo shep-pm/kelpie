@@ -138,6 +138,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: None,
                 from: Layer::BuiltIn,
             },
+            worker_slots: Layered {
+                value: TWO_WORKERS,
+                from: Layer::BuiltIn,
+            },
             provider: Layered {
                 value: None,
                 from: Layer::BuiltIn,
@@ -166,10 +170,141 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: BTreeMap::new(),
                 from: Layer::BuiltIn,
             },
+            lease_capacity: Layered {
+                value: BTreeMap::from([(CARGO_TEST.to_string(), CARGO_TEST_CAPACITY)]),
+                from: Layer::BuiltIn,
+            },
         }
     );
     assert_eq!(BUILT_IN.reply_style, ReplyStyle::ConcisePlus);
     assert_eq!(BUILT_IN.network_allowlist, &[] as &[&str]);
+}
+
+#[test]
+fn worker_slots_default_to_two_and_cargo_test_capacity_to_three() {
+    let dir = Dir::new();
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        settings.worker_slots,
+        Layered {
+            value: Slots(2),
+            from: Layer::BuiltIn
+        }
+    );
+    assert_eq!(
+        settings.lease_capacity_for(CARGO_TEST),
+        Capacity(nonzero(3))
+    );
+    assert_eq!(
+        settings.lease_capacity_for("e2e"),
+        Capacity(nonzero(1)),
+        "a lease kelpie names no capacity for holds one command at a time"
+    );
+
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::WorkerSlots,
+        &json!(5),
+    )
+    .unwrap();
+    Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::LeaseCapacity,
+        &json!({ "cargo-test": 1, "e2e": 2 }),
+    )
+    .unwrap();
+
+    let raised = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        raised.worker_slots,
+        Layered {
+            value: Slots(5),
+            from: Layer::Project
+        }
+    );
+    assert_eq!(raised.lease_capacity_for(CARGO_TEST), Capacity(nonzero(1)));
+    assert_eq!(raised.lease_capacity_for("e2e"), Capacity(nonzero(2)));
+
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+    assert_eq!(
+        other.worker_slots,
+        Layered {
+            value: Slots(2),
+            from: Layer::BuiltIn
+        },
+        "the cap is one project's own"
+    );
+    assert_eq!(other.lease_capacity_for(CARGO_TEST), Capacity(nonzero(1)));
+
+    for (field, layer, value) in [
+        (Field::WorkerSlots, LayerFile::Project("web"), json!("3")),
+        (Field::WorkerSlots, LayerFile::Project("web"), json!(-1)),
+        (
+            Field::WorkerSlots,
+            LayerFile::Project("web"),
+            json!(MAX_COUNT + 1),
+        ),
+        (
+            Field::LeaseCapacity,
+            LayerFile::Global,
+            json!({ "cargo-test": "3" }),
+        ),
+        (
+            Field::LeaseCapacity,
+            LayerFile::Global,
+            json!({ "cargo-test": 0 }),
+        ),
+        (
+            Field::LeaseCapacity,
+            LayerFile::Global,
+            json!({ "e2e": MAX_COUNT + 1 }),
+        ),
+    ] {
+        let error = Settings::set(&dir.config(), layer, field, &value)
+            .expect_err("the schema refuses this");
+        assert!(
+            matches!(error, SettingsError::ValueRefused { .. }),
+            "{} refuses {value}",
+            field.key()
+        );
+    }
+    let kept = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(kept.worker_slots.value, Slots(5));
+    assert_eq!(kept.lease_capacity_for(CARGO_TEST), Capacity(nonzero(1)));
+
+    // A project may hold every worker out of its slots; a lease may not be emptied.
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("paper"),
+        Field::WorkerSlots,
+        &json!(0),
+    )
+    .unwrap();
+    let parked = Settings::load(&dir.config(), "paper").unwrap();
+    assert_eq!(
+        parked.worker_slots.value,
+        Slots(0),
+        "a project with no slots starts no worker"
+    );
+    assert_eq!(
+        parked.lease_capacity_for(CARGO_TEST),
+        Capacity(nonzero(1)),
+        "the project's cap never empties a lease"
+    );
+
+    // A file written by hand is refused the same way a write is
+    dir.put(
+        LayerFile::Global,
+        r#"{"lease-capacity": {"cargo-test": 0}}"#,
+    );
+    let error = Settings::load(&dir.config(), "web").expect_err("a lease with no place is refused");
+    assert!(
+        matches!(error, SettingsError::FileRefused { .. }),
+        "{error}"
+    );
 }
 
 #[test]
