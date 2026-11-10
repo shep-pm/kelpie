@@ -55,8 +55,11 @@ enum State {
     /// The turn runs and the clock counts
     Counting,
 
-    /// The ceiling ran out and the turn was cancelled
+    /// The ceiling ran out and the turn was cancelled, or the maintainer stopped it
     Expired,
+
+    /// The turn was cancelled so another could take its place
+    Replaced,
 
     /// The turn ended
     Done,
@@ -68,8 +71,11 @@ pub(super) enum Verdict {
     /// The turn ended by itself
     Ended,
 
-    /// The turn ended because it was cancelled at its ceiling
+    /// The turn ended because it was cancelled at its ceiling, or stopped
     Cancelled,
+
+    /// The turn ended because Stop and tell cancelled it for the turn after
+    Replaced,
 }
 
 /// One turn's clock, shared between the turn's events and the timer
@@ -93,14 +99,53 @@ impl Watch {
     pub(super) fn turn_ended(&self) -> Verdict {
         let (state, changed) = &*self.shared;
         let mut state = lock(state);
-        let verdict = if *state == State::Expired {
-            Verdict::Cancelled
-        } else {
-            Verdict::Ended
+        let verdict = match *state {
+            State::Expired => Verdict::Cancelled,
+            State::Replaced => Verdict::Replaced,
+            State::Counting | State::Done => Verdict::Ended,
         };
         *state = State::Done;
         changed.notify_all();
         verdict
+    }
+
+    /// Retire the clock of a turn that is over or will never report its end
+    ///
+    /// Stops the timer, and leaves a turn already stopped or replaced as it is, so
+    /// its end is still read as that.
+    pub(super) fn retire(&self) {
+        self.leave(State::Done);
+    }
+
+    /// Mark the turn stopped, `false` when it already ended
+    ///
+    /// Its end then leaves the record as the caller set it, as a ceiling's does.
+    /// Call it with the records locked, so no end of the turn settles them between.
+    pub(super) fn stop(&self) -> bool {
+        self.leave(State::Expired)
+    }
+
+    /// Mark the turn replaced by the next one, `false` when it already ended
+    ///
+    /// Its end then settles nothing: the worker is still Running and holds its slot.
+    pub(super) fn replace(&self) -> bool {
+        self.leave(State::Replaced)
+    }
+
+    /// Whether the turn was replaced by the next one
+    pub(super) fn replaced(&self) -> bool {
+        *lock(&self.shared.0) == State::Replaced
+    }
+
+    fn leave(&self, to: State) -> bool {
+        let (state, changed) = &*self.shared;
+        let mut state = lock(state);
+        if *state != State::Counting {
+            return false;
+        }
+        *state = to;
+        changed.notify_all();
+        true
     }
 
     /// Hold the turn to `ceiling` from a thread of its own
