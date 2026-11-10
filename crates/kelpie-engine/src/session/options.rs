@@ -93,6 +93,12 @@ pub(crate) fn asked_within(
     meta: Option<&serde_json::Value>,
     deadline: Duration,
 ) -> Result<Options, SessionError> {
+    // Whatever launcher is handed in, nothing starts outside a sandbox (ADR 0005)
+    if !launcher.sandboxed() {
+        return Err(SessionError::Start(io::Error::other(
+            "the ask starts no harness outside a sandbox",
+        )));
+    }
     asking(launcher, deadline, async |cx| {
         talk(cx, project.to_path_buf(), meta).await
     })

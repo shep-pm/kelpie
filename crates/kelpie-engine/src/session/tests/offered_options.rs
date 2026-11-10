@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// A fake agent that runs in a sandbox, as the ask's launcher does
+fn confined() -> FakeAgent {
+    FakeAgent::new().sandboxed("bypassPermissions")
+}
+
 /// One value the fake agent lists, which names it the same way it values it
 fn listed(value: &str) -> kelpie_protocol::Choice {
     kelpie_protocol::Choice {
@@ -13,7 +18,7 @@ fn listed(value: &str) -> kelpie_protocol::Choice {
 
 #[test]
 fn asking_options_sends_no_prompt_and_stops_the_harness() {
-    let mut agent = FakeAgent::new()
+    let mut agent = confined()
         .can_close()
         .offers_models("small", &["small", "large"])
         .offers_efforts("low", &["low", "high"]);
@@ -53,7 +58,7 @@ fn asking_options_sends_no_prompt_and_stops_the_harness() {
 
 #[test]
 fn options_are_read_from_the_cache_until_a_refresh() {
-    let mut agent = FakeAgent::new().offers_models("small", &["small", "large"]);
+    let mut agent = confined().offers_models("small", &["small", "large"]);
     let data = data_folder();
     let project = PathBuf::from("/project");
 
@@ -84,7 +89,7 @@ fn options_are_read_from_the_cache_until_a_refresh() {
 
 #[test]
 fn a_harness_with_no_model_option_lists_none() {
-    let mut agent = FakeAgent::new();
+    let mut agent = confined();
 
     let options = options::asked(&mut agent, &PathBuf::from("/project"), None).unwrap();
 
@@ -95,7 +100,7 @@ fn a_harness_with_no_model_option_lists_none() {
 
 #[test]
 fn a_harness_that_never_answers_is_stopped_when_the_deadline_passes() {
-    let mut agent = FakeAgent::new().never_answers_session_new();
+    let mut agent = confined().never_answers_session_new();
 
     let error = options::asked_within(
         &mut agent,
@@ -125,7 +130,11 @@ fn a_harness_that_exits_before_answering_is_explained_from_its_stderr() {
     harness.args = vec!["-c".into(), "echo token rejected >&2; exit 3".into()];
 
     // The sandbox is no part of what is tested here: how a harness that exits is explained
-    let error = options::asked(&mut *launcher(tree, harness, dir.clone()), &dir, None).unwrap_err();
+    let error = options::initialized_within(
+        &mut *launcher(tree, harness, dir.clone()),
+        Duration::from_secs(10),
+    )
+    .unwrap_err();
 
     let SessionError::Ended { message } = &error else {
         panic!("a harness that exited did not end the ask: {error}");
@@ -137,7 +146,7 @@ fn a_harness_that_exits_before_answering_is_explained_from_its_stderr() {
 
 #[test]
 fn a_harness_id_that_names_no_file_starts_nothing() {
-    let mut agent = FakeAgent::new();
+    let mut agent = confined();
     let data = data_folder();
 
     let error = options::offerings_at(
@@ -160,31 +169,44 @@ fn a_harness_id_that_names_no_file_starts_nothing() {
 
 #[test]
 fn the_ask_runs_the_harness_in_the_sandbox_it_is_given() {
-    use crate::run::RunId;
-    use crate::sandbox::{Project, Sandbox};
-    use crate::tree::ProcessTree;
+    let mut agent = confined().offers_models("small", &["small"]);
+    let data = data_folder();
 
-    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
-    let project = dir.join("asked");
-    std::fs::create_dir_all(&project).unwrap();
-    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), dir.join("run.json")).unwrap());
-    let harness = Harness::new("sh");
-    let sandbox = Sandbox::start(
-        &harness,
-        &Project {
-            folder: &project,
-            network_allowlist: &[],
-            read_anywhere: false,
-        },
-        &project,
+    let options = options::offerings_at(
+        &mut agent,
+        "fake",
+        &data,
+        &PathBuf::from("/project"),
+        None,
+        true,
     )
     .unwrap();
 
-    let launcher = options::launcher(&tree, &harness, sandbox, &project);
+    assert_eq!(options.models, [listed("small")]);
+    assert_eq!(agent.launches(), 1, "the sandboxed harness was asked");
+    std::fs::remove_dir_all(data).unwrap();
+}
 
+#[test]
+fn an_ask_on_a_launcher_with_no_sandbox_starts_nothing() {
+    let mut agent = FakeAgent::new().offers_models("small", &["small"]);
+    let data = data_folder();
+
+    let error = options::offerings_at(
+        &mut agent,
+        "fake",
+        &data,
+        &PathBuf::from("/project"),
+        None,
+        true,
+    )
+    .expect_err("the harness would have run outside a sandbox");
+
+    assert!(matches!(error, SessionError::Start(_)), "{error}");
+    assert_eq!(agent.launches(), 0, "the harness was started unsandboxed");
     assert!(
-        launcher.sandboxed(),
-        "the ask would start the harness outside the sandbox it was given"
+        options::kept(&data, "fake").is_none(),
+        "an answer was kept from a harness that never ran"
     );
-    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
 }
