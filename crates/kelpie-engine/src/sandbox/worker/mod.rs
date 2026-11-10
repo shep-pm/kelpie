@@ -5,7 +5,9 @@
 //!
 //! - **Writes:** the worktree, its clone's git dir less `CLONE_DENY`, and the
 //!   state folder, which holds the harness's config folder. The harnesses' own
-//!   files in the worktree are denied inside those writes ([`fence::deny_write`]).
+//!   files in the worktree are denied inside those writes ([`fence::deny_write`]),
+//!   and so is each entry the harness linked into that config folder from the
+//!   person's own global folder, by its own name, as [`super::policy`] denies them.
 //! - **Reads:** the PM's, plus the worktree and its git dirs, kelpie's own binary
 //!   and the toolchain homes a build runs from, with cargo's credentials denied.
 //! - **Network:** the PM's, plus GitHub, which a push reaches.
@@ -144,8 +146,9 @@ fn compose(
     let mut seen = HashSet::new();
     allow_read.retain(|folder| seen.insert(folder.clone()));
 
-    // Inside the writes: the clone's own git dir less what runs code, and each
-    // harness's files in the worktree
+    // Inside the writes: the clone's own git dir less what runs code, each
+    // harness's files in the worktree, and each entry linked in from the person's
+    // global folder
     let no_write: Vec<String> = CLONE_DENY
         .iter()
         .map(|part| text(&worker.git_dir.join(part)))
@@ -156,6 +159,9 @@ fn compose(
         )
         // crabpot makes two tools' log folders writable under a home it does not close
         .chain(TOOL_LOGS.iter().map(|path| (*path).to_owned()))
+        // A link is a name in the worker's config folder for a file of the person's
+        // own, so it is denied by that name as well as by what it points at
+        .chain(harness.global_reads.iter().map(|entry| text(entry)))
         .collect();
 
     let mut hosts = hosts(harness, project);

@@ -120,6 +120,101 @@ fn a_harnesss_own_files_in_the_worktree_are_not_writable() {
     }
 }
 
+/// Three entries of the person's own global folder a harness links into the
+/// worker's config folder, and the folder they sit in
+const THEIR_HOME: &str = "/home/person";
+const THEIR_CLAUDE_MD: &str = "/home/person/.claude/CLAUDE.md";
+const THEIR_SKILLS: &str = "/home/person/.claude/skills";
+const THEIR_GOOSE_CONFIG: &str = "/home/person/.config/goose/config.yaml";
+
+/// A harness with `entries` of the person's own global folder linked into its session
+fn linked(mut harness: Harness, entries: &[impl AsRef<Path>]) -> Harness {
+    harness.global_reads = entries
+        .iter()
+        .map(|entry| entry.as_ref().to_path_buf())
+        .collect();
+    harness
+}
+
+#[test]
+fn a_linked_entry_of_the_persons_global_folder_is_read_and_never_written() {
+    let harness = linked(
+        on(&[]),
+        &[THEIR_CLAUDE_MD, THEIR_SKILLS, THEIR_GOOSE_CONFIG],
+    );
+
+    for read_anywhere in [false, true] {
+        let config = built(&harness, &[], read_anywhere);
+        let (allowed, denied) = (
+            config.filesystem.allow_read.unwrap(),
+            entries(&[THEIR_CLAUDE_MD, THEIR_SKILLS, THEIR_GOOSE_CONFIG])
+                .filesystem
+                .deny_write,
+        );
+
+        for (entry, path) in denied
+            .iter()
+            .zip([THEIR_CLAUDE_MD, THEIR_SKILLS, THEIR_GOOSE_CONFIG])
+        {
+            assert!(
+                allowed.contains(entry),
+                "the worker cannot read the file its harness linked in at {path:?} with read_anywhere {read_anywhere}"
+            );
+            assert!(
+                config.filesystem.deny_write.contains(entry),
+                "the worker could write through the link at {path:?} with read_anywhere {read_anywhere}"
+            );
+        }
+        for folder in [THEIR_HOME, "/home/person/.claude"] {
+            let named = entries(&[folder]).filesystem.allow_read.unwrap()[0].clone();
+            assert!(
+                !allowed.contains(&named),
+                "the person's global folder was opened whole, and not just what was linked into the worker's config folder: {named:?}"
+            );
+        }
+        assert_eq!(
+            config.filesystem.allow_write,
+            entries(&[WORKTREE, GIT_DIR, STATE]).filesystem.allow_write,
+            "a worker could write outside its worktree, git dir and state folder"
+        );
+    }
+}
+
+#[test]
+fn a_workers_gooses_config_is_read_and_the_secrets_beside_it_stay_denied() {
+    // Under the real home folder, where the policy's login denial really applies
+    let folder = home()
+        .expect("the OS names a home folder")
+        .join(".config/goose");
+    let config_yaml = text(&folder.join("config.yaml"));
+    let harness = linked(on(&[]), &[folder.join("config.yaml")]);
+
+    for read_anywhere in [false, true] {
+        let config = built(&harness, &[], read_anywhere);
+        let allowed = config.filesystem.allow_read.unwrap();
+
+        let opened =
+            |path: &str| allowed.contains(&entries(&[path]).filesystem.allow_read.unwrap()[0]);
+        assert!(
+            opened(&config_yaml),
+            "goose's config.yaml is not read with read_anywhere {read_anywhere}"
+        );
+        for closed in [text(&folder.join("secrets.yaml")), text(&folder)] {
+            assert!(
+                !opened(&closed),
+                "{closed:?} was opened with read_anywhere {read_anywhere}"
+            );
+        }
+        assert!(
+            config
+                .filesystem
+                .deny_read
+                .contains(&entries(&["~/.config/goose/**"]).filesystem.deny_read[0]),
+            "goose's config folder is no longer denied with read_anywhere {read_anywhere}"
+        );
+    }
+}
+
 /// The policy for a person whose home folder is `home`, with `vars` as the
 /// environment their tools read
 fn at(home: &Path, vars: &[(&'static str, String)], read_anywhere: bool) -> Config {

@@ -8,13 +8,17 @@
 //!   sets its reads by its deny list. [`Reads::Project`], the default, closes the
 //!   home folder whole and the folder holding every session's state, and opens
 //!   back inside them the project, the folders beside it, the session's own state
-//!   folder and the harness's own install. At either setting an allow is kept
-//!   off every folder at or inside a login or a secret, which would open it.
-//!   Every other folder on the machine is read at either setting.
+//!   folder, the harness's own install, and each entry of the person's global
+//!   folder their harness linked into the session. At either setting an allow is
+//!   kept off every folder at or inside a login or a secret, which would open it,
+//!   and a linked entry is kept off one only when it is itself that login or
+//!   secret. Every other folder on the machine is read at either setting.
 //!   [`Reads::Anywhere`], which the project's *Read anywhere by default* setting
 //!   asks for, leaves the home folder open.
 //! - **Writes:** the state folder alone, with the log folders crabpot would
-//!   otherwise make writable under the home folder denied back.
+//!   otherwise make writable under the home folder denied back, and each entry
+//!   linked in from the person's global folder denied by its own name besides, so
+//!   a harness cannot change their own file through a link.
 //! - **Network:** the harness's model hosts plus the project's allowlist, and
 //!   nothing else gets through: a host off the list is refused, not asked about.
 //! - **The door:** kelpie's tools door, when a session has one, and that one
@@ -226,8 +230,10 @@ pub fn policy_with_door(
     // A session's state folder holds its harness's config folder, which can hold
     // a login. Each session reads its own, and no one else's.
     deny_read.push(glob(project.sessions_root));
-    // The session's own state folder is carved back out of that denial whatever
-    // the session reads, so the allows are named at either setting.
+    // The session's own state folder, and each entry linked in from the person's
+    // global folder, are carved back out of what the reads close, so they are
+    // named as allows at either setting: goose keeps its own config inside a
+    // folder the policy denies as a login folder whatever the project reads.
     let mut allow_read = reads(harness, project, state_dir);
     if project.reads == Reads::Project {
         deny_read.push("~".to_owned());
@@ -264,7 +270,16 @@ pub fn policy_with_door(
             "denyRead": deny_read,
             "allowRead": allow_read,
             "allowWrite": [text(state_dir)],
-            "denyWrite": TOOL_LOGS,
+            // The log folders crabpot would otherwise make writable under the home
+            // folder, plus each entry linked in from the person's global folder: a
+            // link is a name in the session's folder for a file of the person's own,
+            // so it is denied by its own name too, and a harness writing through it
+            // is refused whether the OS checks the link or what it points at
+            "denyWrite": TOOL_LOGS
+                .iter()
+                .map(|folder| (*folder).to_owned())
+                .chain(harness.global_reads.iter().map(|entry| text(entry)))
+                .collect::<Vec<String>>(),
         },
     });
     Config::from_json(&settings.to_string())
@@ -315,6 +330,12 @@ pub fn in_denied(project: &Project<'_>) -> Option<(PathBuf, PathBuf)> {
 ///
 /// An allow is kept off a closed folder by the folder it really names, since
 /// crabpot matches real paths, and is named as the session was given it.
+///
+/// The one allow meant to sit inside a closed folder is an entry of the person's
+/// global folder their harness linked into the session: it is named as the single
+/// file or folder, never as the global folder whole, which holds their login and
+/// every secret. crabpot lands every allow after every deny, so the name carves
+/// only itself out of the deny around it.
 pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let closed = closed(project);
     let denied = denied_folders();
@@ -331,7 +352,7 @@ pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) 
     folders.push(state_dir);
     folders.extend(harness.installs.iter().map(PathBuf::as_path));
     let mut seen = HashSet::new();
-    folders
+    let mut allowed: Vec<String> = folders
         .into_iter()
         .filter(|folder| {
             let reached = real(folder);
@@ -340,7 +361,26 @@ pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) 
                 && seen.insert(reached)
         })
         .map(text)
-        .collect()
+        .collect();
+    // One entry per entry of the person's global folder their harness linked into
+    // the session, never the folder whole: that folder holds their login and every
+    // secret, which stay denied. Each sits inside a folder the policy denies (goose
+    // keeps its config beside its keys), so the #108 filter above would refuse it
+    // and it is checked on its own: refused when it is itself a login or a secret,
+    // or at or above a closed folder, which it would open.
+    allowed.extend(
+        harness
+            .global_reads
+            .iter()
+            .filter(|entry| {
+                let reached = real(entry);
+                !closed.iter().any(|held| held.starts_with(&reached))
+                    && !denied.contains(&reached)
+                    && seen.insert(reached)
+            })
+            .map(|entry| text(entry)),
+    );
+    allowed
 }
 
 /// The folders an allow may not sit at or above, each of which holds something

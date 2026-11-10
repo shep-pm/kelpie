@@ -463,7 +463,7 @@ pub struct Settings {
     /// Whether an agent reads anywhere, instead of only the project it works in and the folders beside it. Every harness's login, every secret and every other session's state folder stay denied. The change lands when the session next starts, on a relaunch or a harness switch.
     pub read_anywhere: Option<bool>,
 
-    /// Whether a harness may read the global config folder it keeps for itself
+    /// Whether a harness may read the global config folder it keeps for itself: Claude Code's `~/.claude`, or `CLAUDE_CONFIG_DIR` when the person set it, and goose's `~/.config/goose`, or the `config` folder under `GOOSE_PATH_ROOT` when the person set it. Each applies when the session next starts.
     pub harness_global_folder: Option<bool>,
 
     /// Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.
