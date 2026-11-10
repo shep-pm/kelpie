@@ -14,6 +14,7 @@
 //! between the one-hour and the five-minute prompt cache, which ACP's own usage
 //! counts do not (`docs/acp.md`, Checked by hand).
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,9 @@ static PLATFORMS: LazyLock<Vec<(Platform, Download)>> = LazyLock::new(|| {
                 url: format!("{RELEASES}/v{VERSION}/{archive}"),
                 sha256: sha256.to_owned(),
                 cmd: CMD.to_owned(),
+                // The claude-acp entry names a bare command, with no args or env
+                args: Vec::new(),
+                env: BTreeMap::new(),
             },
         )
     })

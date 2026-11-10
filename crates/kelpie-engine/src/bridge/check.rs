@@ -6,7 +6,8 @@
 //! written to `versions.json` ([`Versions`]). Nothing swaps here: a session
 //! takes a `ready` version at its next idle point.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use semver::Version;
@@ -65,9 +66,11 @@ pub enum CheckOutcome {
 /// Under [`BridgeUpdates::KelpiesPin`] it fetches nothing. Otherwise it reads
 /// [`registry::URL`], and a stable version newer than the one in use and not
 /// marked bad is installed and probed against `requires`, then recorded as
-/// `ready` or `held_back`. [`BridgeUpdates::RegistryAskFirst`] checks the same
-/// way: asking is what a session does before it swaps. A failed fetch or install
-/// changes nothing and is [`CheckOutcome::Failed`], for the caller to log.
+/// `ready` or `held_back`. The probe starts the installed command with the args
+/// and env the index's entry names for it. [`BridgeUpdates::RegistryAskFirst`]
+/// checks the same way: asking is what a session does before it swaps. A failed
+/// fetch or install changes nothing and is [`CheckOutcome::Failed`], for the
+/// caller to log.
 ///
 /// This blocks on the network and on the probe, so call it off the main thread.
 #[must_use]
@@ -127,7 +130,7 @@ fn run(
         ..stable
     };
     let command = ensure(data_dir, &stable).map_err(|error| error.to_string())?;
-    let outcome = match probe(&Harness::new(command)) {
+    let outcome = match probe(&probe_harness(&stable, command)?) {
         Ok(()) => {
             versions.ready = Some(candidate.clone());
             versions.held_back.clear();
@@ -149,4 +152,24 @@ fn run(
         .save(data_dir, pin.id)
         .map_err(|error| error.to_string())?;
     Ok(outcome)
+}
+
+/// The [`Harness`] that runs `pin`'s installed bridge at `command`
+///
+/// The args and env are the index's own, so a bridge that is run with a
+/// subcommand is probed the way it is run, and not as a bare command.
+fn probe_harness(pin: &Pin<'_>, command: PathBuf) -> Result<Harness, String> {
+    let download = pin.download().map_err(|error| error.to_string())?;
+    Ok(Harness {
+        program: command,
+        args: download.args.iter().map(OsString::from).collect(),
+        env: download
+            .env
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect(),
+        // The probe sends `initialize` alone, which asks the bridge for nothing
+        new_session_meta: None,
+        extensions: Vec::new(),
+    })
 }
