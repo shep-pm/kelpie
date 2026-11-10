@@ -1,12 +1,14 @@
 //! The process tree: the one way the engine starts a process
 //!
 //! [`ProcessTree::spawn`] puts a child in a group of its own, marks it with the
-//! run's id and notes its leader in the run file. [`ProcessTree::stop_all`]
-//! ends every child and then whatever else still carries the mark, which
-//! catches a grandchild that left its group. [`sweep_leftovers`] does the same
-//! for a run that died without stopping, and belongs before the first spawn
-//! of the next one. [`sweep_record`] is that sweep on a record already read,
-//! which is what a reaper holds.
+//! run's id and notes its leader in the run file. [`ProcessTree::output`] runs
+//! a command to its end on that same spawn and hands back what it printed,
+//! which is how a short-lived `git`, `openssl` or `curl` call reaches the tree.
+//! [`ProcessTree::stop_all`] ends every child and then whatever else still
+//! carries the mark, which catches a grandchild that left its group.
+//! [`sweep_leftovers`] does the same for a run that died without stopping, and
+//! belongs before the first spawn of the next one. [`sweep_record`] is that
+//! sweep on a record already read, which is what a reaper holds.
 //!
 //! [`ProcessTree::with_reaper`] starts a reaper first, so a run that dies
 //! without quitting still has something that stops what it started.
@@ -36,9 +38,9 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::io;
+use std::io::{self, Read, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
+use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -271,6 +273,72 @@ impl ProcessTree {
         })
     }
 
+    /// Run `command` to its end, and return what it printed and how it exited
+    ///
+    /// stdout and stderr are piped, each read on a thread of its own, so a
+    /// command that fills one pipe is never left blocked while the other one
+    /// waits to be read. stdin is closed at once, so a command that reads it
+    /// sees end of file instead of waiting on the app's own input. The child is
+    /// in the tree while it runs, so [`ProcessTree::stop_all`] can end it
+    /// mid-run.
+    ///
+    /// # Errors
+    ///
+    /// As [`ProcessTree::spawn`], or a pipe cannot be read.
+    pub fn output(&self, command: &mut Command) -> io::Result<Output> {
+        self.run(command, None)
+    }
+
+    /// As [`ProcessTree::output`], with `input` on the command's stdin
+    ///
+    /// stdin is piped, `input` is written to it, and it is then closed, so a
+    /// command that reads its input to the end sees end of file and exits. A
+    /// command that exits before reading any of it is not an error here: the
+    /// broken pipe is dropped, and the exit status is what the caller is given.
+    ///
+    /// # Errors
+    ///
+    /// As [`ProcessTree::output`], or `input` cannot be written.
+    pub fn output_with_input(&self, command: &mut Command, input: &[u8]) -> io::Result<Output> {
+        self.run(command, Some(input))
+    }
+
+    /// Run `command` to its end, with `input` on stdin when it is `Some`
+    fn run(&self, command: &mut Command, input: Option<&[u8]>) -> io::Result<Output> {
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(match input {
+                Some(_) => Stdio::piped(),
+                None => Stdio::null(),
+            });
+        let mut child = self.spawn(command)?;
+        let (mut stdin, mut out, mut err) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take());
+        std::thread::scope(|scope| {
+            let reading_out = scope.spawn(move || read_pipe(&mut out));
+            let reading_err = scope.spawn(move || read_pipe(&mut err));
+            let writing = input.map(|input| scope.spawn(move || feed(&mut stdin, input)));
+            let status = child.wait()?;
+            let stdout = reading_out
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+            let stderr = reading_err
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+            if let Some(writing) = writing {
+                writing
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+            }
+            Ok(Output {
+                status,
+                stdout,
+                stderr,
+            })
+        })
+    }
+
     /// Stop every child and everything marked with this run
     ///
     /// Each live child's tree is signalled with `SIGTERM` at once and killed
@@ -316,6 +384,30 @@ impl ProcessTree {
         results.into_iter().collect::<io::Result<()>>()?;
         written?;
         Ok(report)
+    }
+}
+
+/// Read a pipe to the end; one the command never opened reads as empty
+fn read_pipe<T: Read>(pipe: &mut Option<T>) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if let Some(pipe) = pipe {
+        pipe.read_to_end(&mut bytes)?;
+    }
+    Ok(bytes)
+}
+
+/// Write `input` to stdin and close it, so a reader sees end of file
+///
+/// A command that exits before reading its input fails the write with a broken
+/// pipe. Its exit status is the failure worth reporting, so that one is not an
+/// error here.
+fn feed(stdin: &mut Option<ChildStdin>, input: &[u8]) -> io::Result<()> {
+    let Some(mut stdin) = stdin.take() else {
+        return Ok(());
+    };
+    match stdin.write_all(input) {
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
     }
 }
 
