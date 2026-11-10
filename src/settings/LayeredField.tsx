@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Offered } from "./store";
 
-export type Tab = "global" | "project";
+/** The settings tabs, and an agent file, whose layers are its `extends` chain. */
+export type Tab = "global" | "project" | "agent";
 
 /** What the fields of one tab share, handed to rjsf as its `formContext`. */
 export type SettingsContext = {
@@ -25,24 +26,34 @@ export type SettingsContext = {
   refresh: () => void;
   /** Clear one field of this tab's layer. */
   onReset: (key: string) => void;
+  /**
+   * An agent's layers, lowest first: `kelpie`, the parents it builds on, then
+   * the file itself. Only the agent tab has them; the settings tabs' are fixed.
+   */
+  layers?: string[];
 };
 
 const LAYERS: Record<Tab, string[]> = {
   global: ["kelpie", "global"],
   project: ["kelpie", "global", "project"],
+  agent: [],
 };
 
-const BELOW: Record<Tab, string> = { global: "kelpie", project: "global" };
-
-/** How far up the layers a `from` is: an agent such as `kelpie:pm` is built in. */
-function depth(from: string): number {
-  if (from === "project") return 2;
-  if (from === "global") return 1;
-  return 0;
+/** The layer a tab's reset falls back to; an agent falls back to its nearest parent. */
+function below(tab: Tab, layers: string[]): string {
+  if (tab === "agent") return layers[layers.length - 2] ?? "kelpie";
+  return tab === "project" ? "global" : "kelpie";
 }
 
-function chip(from: string): string {
-  return from === "project" ? "set in this project" : `from ${from}`;
+/** How far up `layers` a `from` is. A layer not in them is the bottom one. */
+function depth(from: string, layers: string[]): number {
+  return Math.max(0, layers.indexOf(from));
+}
+
+function chip(from: string, tab: Tab, own: boolean): string {
+  if (own && tab === "project") return "set in this project";
+  if (own && tab === "agent") return "set in this file";
+  return `from ${from}`;
 }
 
 /** A value short enough to sit in a button, `null` where it would not be. */
@@ -57,7 +68,10 @@ const Plain = generateTemplates()
   .FieldTemplate as ComponentType<FieldTemplateProps>;
 
 /** The Global tab's own layer is `global`, and a Project's is `project`. */
-const OWN: Record<Tab, string> = { global: "global", project: "project" };
+const OWN: Record<Exclude<Tab, "agent">, string> = {
+  global: "global",
+  project: "project",
+};
 
 /**
  * A setting's row: its label and help, the control, and under it the layer the
@@ -73,9 +87,13 @@ export function LayeredField(props: FieldTemplateProps) {
   const view = key === null ? undefined : context.fields[key];
   if (key === null || view === undefined) return <Plain {...props} />;
 
-  const layers = LAYERS[context.tab];
-  const reached = depth(view.from);
-  const own = view.from === OWN[context.tab];
+  const layers = context.layers ?? LAYERS[context.tab];
+  const reached = depth(view.from, layers);
+  // An agent file's own layer is the last one: its name
+  const own =
+    context.tab === "agent"
+      ? view.from === layers[layers.length - 1]
+      : view.from === OWN[context.tab];
   const inherited =
     context.tab === "project" ? inline(context.below[key]?.value) : null;
 
@@ -116,7 +134,7 @@ export function LayeredField(props: FieldTemplateProps) {
             ))}
           </span>
           <Badge variant={own ? "secondary" : "outline"}>
-            {chip(view.from)}
+            {chip(view.from, context.tab, own)}
           </Badge>
           {own && (
             <Button
@@ -126,7 +144,7 @@ export function LayeredField(props: FieldTemplateProps) {
               onClick={() => context.onReset(key)}
             >
               <RotateCcw />
-              Reset to {BELOW[context.tab]}
+              Reset to {below(context.tab, layers)}
               {inherited !== null && (
                 <span className="font-mono text-xs">({inherited})</span>
               )}
