@@ -146,6 +146,31 @@ export const commands = {
 	 */
 	settingsSchema: () => __TAURI_INVOKE<Value>("settings_schema"),
 	/**
+	 *  What `id`'s bridge runs on, and what waits behind it
+	 * 
+	 *  With no `versions.json` the version in use is kelpie's pin, which is what the
+	 *  row says came from kelpie's pin. A version past it is one the registry gave.
+	 *  Nothing here installs or starts anything: the row reads what the bridge checks
+	 *  already wrote (`docs/design/bridge-updates.md`, The setting).
+	 * 
+	 *  # Errors
+	 * 
+	 *  `id` names no bridge kelpie installs, or its versions cannot be read.
+	 */
+	bridgeStatus: (id: string) => typedError<BridgeStatus, string>(__TAURI_INVOKE("bridge_status", { id })),
+	/**
+	 *  Say the version ready now may be used, for *Registry, ask first*
+	 * 
+	 *  Only the version ready when this is called is approved: a newer one a later
+	 *  check finds asks again. The swap itself happens at each session's next idle
+	 *  point, which is what the row says after the yes.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `id` names no bridge kelpie installs, or its versions cannot be read or written.
+	 */
+	bridgeApprove: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("bridge_approve", { id })),
+	/**
 	 *  The agents the config folder holds, and the global `pm`, which is always there to edit
 	 * 
 	 *  # Errors
@@ -224,6 +249,27 @@ export type AgentView = {
 	problem: string | null,
 	/**  The agent as a session gets it, `None` when the file cannot be used */
 	resolved: ResolvedAgent | null,
+};
+
+/**  Where the version a bridge runs on came from */
+export type BridgeSource = 
+/**  A newer version kelpie took from the ACP registry */
+"registry" | 
+/**  The version written in kelpie's code, which changes with kelpie's releases */
+"kelpies-pin";
+
+/**  What the settings page says about one bridge */
+export type BridgeStatus = {
+	/**  The version sessions start on */
+	in_use: string,
+	/**  Where that version came from */
+	source: BridgeSource,
+	/**  A newer version that is installed and passed the probe, `None` when none waits */
+	ready: string | null,
+	/**  Versions that failed the probe, each with its reason */
+	held_back: RejectedView[],
+	/**  Versions that failed a session, each with its reason */
+	bad: RejectedView[],
 };
 
 /**  How long a prompt cache entry lives */
@@ -316,6 +362,14 @@ export type ProjectView = {
 	path: string,
 	/**  Every field, in the order the form shows them */
 	fields: FieldView[],
+};
+
+/**  One version of a bridge kelpie did not use, and why */
+export type RejectedView = {
+	/**  The version, as a person reads it */
+	version: string,
+	/**  What went wrong with it, as the person reads it */
+	reason: string,
 };
 
 /**  An agent with its `extends` chain resolved */
