@@ -898,3 +898,50 @@ fn reading_history_starts_no_process() {
     assert_eq!(agent.launches(), launched);
     drop(relaunched);
 }
+
+#[test]
+fn a_closed_log_keeps_what_comes_after_out_of_it() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let (sink, heard) = events();
+    session.send("Go", sink);
+    while !matches!(next(&heard), SessionEvent::Text { .. }) {}
+
+    // The app is quitting: what the stop does to the session is not the maintainer's turn
+    session.close_log();
+    session.cancel();
+    until_turn_ends(&heard);
+
+    let history = log::read(&path).unwrap();
+    assert!(
+        history
+            .iter()
+            .all(|entry| !matches!(entry, LogEntry::Event(SessionEvent::TurnEnded { .. }))),
+        "{history:?}"
+    );
+    assert!(history.contains(&LogEntry::User {
+        text: "Go".to_owned()
+    }));
+}
+
+#[test]
+fn a_log_with_a_bad_line_in_the_middle_still_opens_and_appends() {
+    let path = log_path();
+    let hi = r#"{"entry":"user","text":"Hi"}"#;
+    std::fs::write(&path, format!("nonsense\n{hi}\n")).unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    let held = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        held,
+        format!(
+            "nonsense\n{hi}\n{}\n",
+            serde_json::to_string(&more).unwrap()
+        )
+    );
+}

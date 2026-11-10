@@ -342,12 +342,17 @@ impl AppState {
         lock(&self.session).as_ref().map(Arc::clone)
     }
 
-    /// Stop every process of this run
+    /// Stop every process of this run, and stop logging the PM
     ///
     /// # Errors
     ///
     /// The first process that could not be stopped, after the others were tried.
     pub fn stop_all(&self) -> io::Result<()> {
+        // First, so the `Failed` that stopping the harness gives the turn in
+        // flight stays out of the log, and the turn relaunches as interrupted
+        if let Some(session) = self.held_session() {
+            session.close_log();
+        }
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }
 }

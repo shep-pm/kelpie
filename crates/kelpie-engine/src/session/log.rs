@@ -5,6 +5,10 @@
 //! The harness's own transcript is only used to resume (`docs/design/pm-chat.md`,
 //! History). [`read`] gives the entries back.
 //!
+//! [`Log::close`] ends the writing for good: a quit stops the harness, and what
+//! that does to the session is not the maintainer's turn, so a turn a quit cut
+//! off stays without its end and relaunches as interrupted.
+//!
 //! A line is written whole and flushed before the next, so a crash can leave a
 //! torn last line and nothing else. [`read`] drops it, and so does [`Log::open`]
 //! before it appends after it.
@@ -21,14 +25,16 @@ use super::Sink;
 /// A log file open for appending, shared by every clone
 #[derive(Debug, Clone)]
 pub struct Log {
-    file: Arc<Mutex<File>>,
+    /// `None` once closed
+    file: Arc<Mutex<Option<File>>>,
 }
 
 impl Log {
     /// Open the log at `path` for appending, making it and its folder when they are not there
     ///
     /// A torn last line left by a crash is cut off first, so the next entry
-    /// starts a line of its own.
+    /// starts a line of its own. Lines before it are not read, so a log with a
+    /// bad one in the middle still opens: [`read`] is what names it.
     ///
     /// # Errors
     ///
@@ -44,7 +50,7 @@ impl Log {
             .create(true)
             .open(path)?;
         let bytes = fs::read(path)?;
-        let (_, whole) = parse(&bytes)?;
+        let whole = whole_len(&bytes);
         if whole < bytes.len() {
             file.set_len(u64::try_from(whole).map_err(io::Error::other)?)?;
         }
@@ -52,7 +58,7 @@ impl Log {
             file.write_all(b"\n")?;
         }
         Ok(Self {
-            file: Arc::new(Mutex::new(file)),
+            file: Arc::new(Mutex::new(Some(file))),
         })
     }
 
@@ -65,8 +71,19 @@ impl Log {
         let mut line = serde_json::to_vec(entry).map_err(io::Error::other)?;
         line.push(b'\n');
         let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(file) = file.as_mut() else {
+            return Ok(());
+        };
         file.write_all(&line)?;
         file.flush()
+    }
+
+    /// Stop writing, for every clone: later entries are dropped without an error
+    pub fn close(&self) {
+        self.file
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 }
 
@@ -83,6 +100,28 @@ pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<LogEntry>> {
         Ok(bytes) => parse(&bytes).map(|(entries, _)| entries),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
+    }
+}
+
+/// How many bytes of `bytes` end with a whole last line
+///
+/// Only the last line is looked at: it is whole when it is an entry, and
+/// otherwise the crash tore it, so it ends where the line before did.
+fn whole_len(bytes: &[u8]) -> usize {
+    let content = bytes.trim_ascii_end().len();
+    if content == 0 {
+        return 0;
+    }
+    let start = bytes[..content]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    if serde_json::from_slice::<LogEntry>(&bytes[start..content]).is_err() {
+        return start;
+    }
+    match bytes[content..].iter().position(|byte| *byte == b'\n') {
+        Some(at) => content + at + 1,
+        None => content,
     }
 }
 

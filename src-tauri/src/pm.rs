@@ -669,4 +669,44 @@ mod tests {
         };
         assert!(message.contains("no message"), "{message}");
     }
+
+    #[test]
+    fn quitting_mid_turn_leaves_the_turn_without_an_end_in_the_log() {
+        let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
+        let chat = Chat::on(&agent);
+        let events = chat.send("Do a long thing");
+        while !matches!(events.next(), SessionEvent::Text { .. }) {}
+
+        // What the app does on a quit, then the harness's end reaches the session
+        chat.state().stop_all().unwrap();
+        pm_cancel(chat.state());
+        events.until_turn_ends();
+
+        let history = pm_history(chat.state()).unwrap();
+        assert!(
+            history
+                .iter()
+                .all(|entry| !matches!(entry, LogEntry::Event(SessionEvent::TurnEnded { .. }))),
+            "{history:?}"
+        );
+        assert_eq!(history.first(), Some(&user("Do a long thing")));
+    }
+
+    #[test]
+    fn a_log_with_a_bad_line_in_the_middle_does_not_stop_a_send() {
+        let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+        let chat = Chat::on(&agent);
+        let log = chat.state().pm_log_path().unwrap();
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, "nonsense\n{\"entry\":\"user\",\"text\":\"Hi\"}\n").unwrap();
+
+        let events = chat.send("Again").until_turn_ends();
+
+        assert!(
+            matches!(events.last(), Some(SessionEvent::TurnEnded { .. })),
+            "{events:?}"
+        );
+        // The history cannot be read as a whole, and says why
+        assert!(pm_history(chat.state()).unwrap_err().contains("line 1"));
+    }
 }

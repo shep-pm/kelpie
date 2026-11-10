@@ -381,6 +381,18 @@ impl Session {
         self
     }
 
+    /// Stop writing to the session's log, for good
+    ///
+    /// For a quit: stopping the harness ends the turn in flight with a
+    /// `Failed`, which is not something the maintainer saw. Left out of the log,
+    /// the turn has no end there and shows as interrupted on the next launch.
+    /// Does nothing without a log.
+    pub fn close_log(&self) {
+        if let Some(log) = &self.log {
+            log.close();
+        }
+    }
+
     /// The session's id: the one to resume, then the one the harness gave
     #[must_use]
     pub fn session_id(&self) -> Option<SessionId> {
