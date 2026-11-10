@@ -22,7 +22,7 @@ use kelpie_engine::agents::{Agents, Binding, Origin, PM, PmKey, WORKER};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
-use kelpie_engine::sandbox::{self, Sandbox};
+use kelpie_engine::sandbox::{self, Reads, Sandbox};
 use kelpie_engine::session::options;
 use kelpie_engine::settings::{ConfigDir, Field, Layer, LayerFile, Resolved, Settings};
 use kelpie_protocol::Options;
@@ -111,12 +111,17 @@ pub fn harness_options(
     // (ADR 0005): it reads and writes its own `asked` folder, reaches no host,
     // and the sandbox drops when the ask returns. One that cannot start fails
     // the ask, and nothing runs in its place.
+    //
+    // The ask belongs to no project, so it reads as narrowly as a session can:
+    // `Reads::Project`, with every session's state folder closed to it.
+    let sessions_root = state.sessions_root();
     let sandbox = Sandbox::start(
         &harness,
         &sandbox::Project {
             folder: &asked,
             network_allowlist: &[],
-            read_anywhere: false,
+            reads: Reads::Project,
+            sessions_root: &sessions_root,
         },
         &asked,
     )

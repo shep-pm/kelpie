@@ -152,7 +152,7 @@
     },
     "read-anywhere": {
       "default": null,
-      "description": "Whether an agent may read anywhere by default, instead of only what its work touches",
+      "description": "Whether an agent reads anywhere, instead of only the project it works in and the folders beside it. Every harness's login, every secret and every other session's state folder stay denied. The change lands when the session next starts, on a relaunch or a harness switch.",
       "type": [
         "boolean",
         "null"

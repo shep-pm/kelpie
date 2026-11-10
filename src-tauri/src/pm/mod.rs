@@ -16,9 +16,11 @@
 //! The PM runs inside a crabpot sandbox: it reads the project and the folders
 //! beside it, writes its state folder alone, and reaches its model's host
 //! (ADR 0005), plus the domains the project's `network-allowlist` names. The
-//! `read-anywhere` setting opens its reads to the whole disk but its logins and
-//! secrets, and `harness-global-folder` links the person's own Claude Code config
-//! into the session's config folder.
+//! `read-anywhere` setting opens its reads to the whole disk, keeping every
+//! harness's login, every secret and every other session's state closed, and it
+//! lands at the session's next start, since a running sandbox is never widened.
+//! `harness-global-folder` links the entries the session's harness reads from
+//! the person's own global config folder into the session's config folder.
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -33,7 +35,7 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
-use kelpie_engine::sandbox::{self, Sandbox};
+use kelpie_engine::sandbox::{self, Reads, Sandbox};
 use kelpie_engine::session::{
     Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, log, sandboxed_launcher,
 };
@@ -92,8 +94,8 @@ pub struct PmPlan {
     /// (`network-allowlist`)
     pub network_allowlist: Vec<String>,
 
-    /// Whether the PM reads anywhere but its logins and secrets (`read-anywhere`)
-    pub read_anywhere: bool,
+    /// How far the PM reads (`read-anywhere`)
+    pub reads: Reads,
 
     /// Whether the harness reads the person's own global folder (`harness-global-folder`)
     pub harness_global_folder: bool,
@@ -181,7 +183,7 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         provider: settings.provider.value,
         host: settings.host.value,
         network_allowlist: settings.network_allowlist.value,
-        read_anywhere: settings.read_anywhere.value,
+        reads: Reads::from_setting(settings.read_anywhere.value),
         harness_global_folder: settings.harness_global_folder.value,
     })
 }
@@ -268,6 +270,7 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         data_dir,
         project,
         state_dir,
+        sessions_root,
         logins,
         pm,
         config,
@@ -280,9 +283,10 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         state_dir.to_path_buf(),
         project.path.clone(),
     );
-    let (network_allowlist, read_anywhere, harness_global_folder) = (
+    let sessions_root = sessions_root.to_path_buf();
+    let (network_allowlist, reads, harness_global_folder) = (
         pm.network_allowlist.clone(),
-        pm.read_anywhere,
+        pm.reads,
         pm.harness_global_folder,
     );
     let (logins, tree) = (logins.clone(), Arc::clone(tree));
@@ -318,7 +322,8 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
                 &sandbox::Project {
                     folder: &folder,
                     network_allowlist: &network_allowlist,
-                    read_anywhere,
+                    reads,
+                    sessions_root: &sessions_root,
                 },
                 &state_dir,
                 tools.as_ref().map(SessionTools::door),

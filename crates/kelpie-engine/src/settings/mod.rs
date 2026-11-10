@@ -260,7 +260,7 @@ pub enum Field {
     /// Domains a sandbox request saved with *Allow for this project*
     NetworkAllowlist,
 
-    /// Whether an agent may read anywhere in the folder it works in
+    /// Whether an agent reads anywhere, not only what its work touches
     ReadAnywhere,
 
     /// Whether a harness may read its own global config folder
@@ -460,7 +460,7 @@ pub struct Settings {
     /// Domains a sandbox request may reach, one saved with *Allow for this project*
     pub network_allowlist: Option<Vec<String>>,
 
-    /// Whether an agent may read anywhere by default, instead of only what its work touches
+    /// Whether an agent reads anywhere, instead of only the project it works in and the folders beside it. Every harness's login, every secret and every other session's state folder stay denied. The change lands when the session next starts, on a relaunch or a harness switch.
     pub read_anywhere: Option<bool>,
 
     /// Whether a harness may read the global config folder it keeps for itself: Claude Code's `~/.claude`, or `CLAUDE_CONFIG_DIR` when the person set it, and goose's `~/.config/goose`. Each applies when the session next starts.
