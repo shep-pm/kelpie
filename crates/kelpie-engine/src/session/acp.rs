@@ -365,6 +365,7 @@ async fn serve(
     *lock(id) = Some(session_id.clone());
     shared.emit(SessionEvent::Started { session_id });
     apply_choice(cx, &session, &options, &setup.choice, shared).await;
+    let mut applied = setup.choice.clone();
 
     // Instructions a harness cannot take as a system prompt lead the first
     // message of a session that has no history to hold them yet
@@ -387,6 +388,22 @@ async fn serve(
         if let Some(sink) = sink {
             shared.start_turn(sink);
         }
+        // A choice made since the last turn applies from this message on
+        let now = lock(&setup.wanted).clone();
+        let changed = Choice {
+            model: now
+                .model
+                .clone()
+                .filter(|model| applied.model.as_ref() != Some(model)),
+            effort: now
+                .effort
+                .clone()
+                .filter(|effort| applied.effort.as_ref() != Some(effort)),
+        };
+        if changed != Choice::default() {
+            apply_choice(cx, &session, &options, &changed, shared).await;
+        }
+        applied = now;
         let prompt = PromptRequest::new(
             session.clone(),
             vec![ContentBlock::Text(TextContent::new(text))],
