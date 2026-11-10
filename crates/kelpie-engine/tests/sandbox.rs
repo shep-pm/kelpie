@@ -23,7 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kelpie_engine::run::RunId;
-use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
+use kelpie_engine::sandbox::{Project, Reads, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
 use kelpie_engine::tools::{self, DOOR_VAR, Door, SessionKey, SessionTools, TOKEN_VAR, Tools};
 use kelpie_engine::tree::{ProcessTree, sweep_marked};
@@ -166,6 +166,10 @@ const TESTS: &[(&str, fn())] = &[
         a_sandboxed_command_reads_the_project_and_writes_the_state_dir,
     ),
     (
+        "a_real_read_outside_the_project_follows_the_setting",
+        a_real_read_outside_the_project_follows_the_setting,
+    ),
+    (
         "the_sweep_finds_a_sandboxed_process",
         the_sweep_finds_a_sandboxed_process,
     ),
@@ -222,8 +226,9 @@ fn sleep_in_the_sandbox(ready: Option<PathBuf>) {
     thread::sleep(Duration::from_secs(60));
 }
 
-/// A folder of its own under the target's temp folder, with a project, a state
-/// folder and a folder outside both, removed when it drops
+/// A folder of its own under the target's temp folder, with a project, the state
+/// folders of two sessions, and a folder outside all of them, removed when it
+/// drops
 struct Scratch {
     root: PathBuf,
 }
@@ -233,7 +238,14 @@ impl Scratch {
         let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("sandbox-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        for folder in ["project", "state", "outside"] {
+        // The project sits one below the folder it may read beside, so the
+        // `outside` folder is beside neither it nor the session's state
+        for folder in [
+            "work/project",
+            "outside",
+            "data/projects/pm",
+            "data/projects/other",
+        ] {
             fs::create_dir_all(root.join(folder)).expect("the scratch folders are made");
         }
         // The path as the OS names it, since a sandbox compares real paths
@@ -242,20 +254,30 @@ impl Scratch {
     }
 
     fn project(&self) -> PathBuf {
-        self.root.join("project")
+        self.root.join("work/project")
     }
 
     fn state(&self) -> PathBuf {
-        self.root.join("state")
+        self.sessions_root().join("pm")
+    }
+
+    /// The folder holding this session's state and another's, as kelpie's data
+    /// folder holds one per session
+    fn sessions_root(&self) -> PathBuf {
+        self.root.join("data/projects")
+    }
+
+    fn other(&self) -> PathBuf {
+        self.sessions_root().join("other")
     }
 
     fn outside(&self) -> PathBuf {
         self.root.join("outside")
     }
 
-    /// A sandbox for a session in the project, whose harness is `program`, with
-    /// kelpie's tools `door` named in its policy when it has one
-    fn sandbox(&self, program: &Path, door: Option<&Door>) -> Sandbox {
+    /// A sandbox for a session in the project that reads as `reads`, on `program`,
+    /// with kelpie's tools `door` named in its policy when it has one
+    fn sandbox(&self, program: &Path, reads: Reads, door: Option<&Door>) -> Sandbox {
         let mut harness = Harness::new(program);
         // The harness's own install is read, as a real one's is
         harness.installs = program
@@ -263,12 +285,15 @@ impl Scratch {
             .map(Path::to_path_buf)
             .into_iter()
             .collect();
+        let (folder, state, sessions_root) = (self.project(), self.state(), self.sessions_root());
+        let allowlist: Vec<String> = Vec::new();
         let project = Project {
-            folder: &self.project(),
-            network_allowlist: &[],
-            read_anywhere: false,
+            folder: &folder,
+            network_allowlist: &allowlist,
+            reads,
+            sessions_root: &sessions_root,
         };
-        Sandbox::start_with_door(&harness, &project, &self.state(), door)
+        Sandbox::start_with_door(&harness, &project, &state, door)
             .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
     }
 }
@@ -276,6 +301,39 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A folder under the home folder, removed when it drops
+///
+/// The home folder is the area `Reads::Project` closes whole and `Reads::Anywhere`
+/// opens, so a file outside the project only follows the setting when it sits
+/// inside it. kelpie's own name and this process's id keep the folder from
+/// meeting another run's.
+struct HomeFolder {
+    folder: PathBuf,
+}
+
+impl HomeFolder {
+    fn new(test: &str) -> Self {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .expect("the OS names a home folder");
+        let folder =
+            PathBuf::from(home).join(format!(".kelpie-sandbox-{test}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).expect("the home folder takes a scratch folder for the test");
+        Self { folder }
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        self.folder.join(name)
+    }
+}
+
+impl Drop for HomeFolder {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.folder);
     }
 }
 
@@ -323,8 +381,8 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
 /// asks for a sandbox that has run a command first, and a host that cannot
 /// fails the test. `KELPIE_SKIP_SANDBOX_TESTS` skips it instead, shown as
 /// `SKIPPED`, for a host known not to run one.
-fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
-    working_sandbox_with_door(scratch, test, program, None)
+fn working_sandbox(scratch: &Scratch, test: &str, program: &Path, reads: Reads) -> Option<Sandbox> {
+    working_sandbox_with_door(scratch, test, program, reads, None)
 }
 
 /// [`working_sandbox`], with kelpie's tools `door` named in the policy
@@ -332,9 +390,10 @@ fn working_sandbox_with_door(
     scratch: &Scratch,
     test: &str,
     program: &Path,
+    reads: Reads,
     door: Option<&Door>,
 ) -> Option<Sandbox> {
-    let sandbox = scratch.sandbox(program, door);
+    let sandbox = scratch.sandbox(program, reads, door);
     host_can_run(test, &sh(&sandbox, "true")).then_some(sandbox)
 }
 
@@ -369,6 +428,7 @@ fn a_write_outside_the_state_dir_is_refused() {
         &scratch,
         "a_write_outside_the_state_dir_is_refused",
         Path::new("/bin/sh"),
+        Reads::Project,
     ) else {
         return;
     };
@@ -403,6 +463,7 @@ fn a_sandboxed_command_reads_the_project_and_writes_the_state_dir() {
         &scratch,
         "a_sandboxed_command_reads_the_project_and_writes_the_state_dir",
         Path::new("/bin/sh"),
+        Reads::Project,
     ) else {
         return;
     };
@@ -422,11 +483,83 @@ fn a_sandboxed_command_reads_the_project_and_writes_the_state_dir() {
     assert_eq!(fs::read_to_string(&written).unwrap(), "from the project");
 }
 
+/// `path` read by `sh` inside `sandbox`, `None` when the sandbox refused it
+fn cat(sandbox: &Sandbox, path: &Path) -> Option<String> {
+    let run = sh(sandbox, &format!("cat {}", path.display()));
+    run.status
+        .success()
+        .then(|| String::from_utf8_lossy(&run.stdout).into_owned())
+}
+
+/// A real read outside the project follows the setting
+///
+/// The area `Reads::Project` closes is the home folder and the folder holding
+/// every session's state. crabpot allows every read the policy does not deny
+/// (ADR 0005's reads wide), so a file in some other folder is read at either
+/// setting and proves nothing: the file outside the project has to be one the
+/// policy closes.
+fn a_real_read_outside_the_project_follows_the_setting() {
+    let name = "a_real_read_outside_the_project_follows_the_setting";
+    let (scratch, home) = (
+        Scratch::new("read-anywhere"),
+        HomeFolder::new("read-anywhere"),
+    );
+    let (project, outside) = (scratch.project().join("notes.md"), home.file("notes.md"));
+    let (other, own) = (scratch.other().join("log"), scratch.state().join("log"));
+    for (file, text) in [
+        (&project, "in the project"),
+        (&outside, "outside the project"),
+        (&other, "another session's state"),
+        (&own, "this session's own state"),
+    ] {
+        fs::write(file, text).expect("the scratch files are written");
+    }
+
+    let Some(closed) = working_sandbox(&scratch, name, Path::new("/bin/sh"), Reads::Project) else {
+        return;
+    };
+    assert_eq!(cat(&closed, &project).as_deref(), Some("in the project"));
+    assert_eq!(
+        cat(&closed, &own).as_deref(),
+        Some("this session's own state"),
+        "the session cannot read its own state folder with Read anywhere off"
+    );
+    let refused = cat(&closed, &outside);
+    assert!(
+        refused.is_none(),
+        "a file in the home folder was read with Read anywhere off: {refused:?}"
+    );
+    drop(closed);
+
+    let Some(wide) = working_sandbox(&scratch, name, Path::new("/bin/sh"), Reads::Anywhere) else {
+        return;
+    };
+    assert_eq!(
+        cat(&wide, &outside).as_deref(),
+        Some("outside the project"),
+        "Read anywhere did not reach outside the project"
+    );
+    assert_eq!(
+        cat(&wide, &own).as_deref(),
+        Some("this session's own state"),
+        "the session cannot read its own state folder"
+    );
+    let other_read = cat(&wide, &other);
+    assert!(
+        other_read.is_none(),
+        "another session's state was read: {other_read:?}"
+    );
+}
+
 fn the_sweep_finds_a_sandboxed_process() {
     let scratch = Scratch::new("sweep");
     let exe = std::env::current_exe().unwrap();
-    let Some(sandbox) = working_sandbox(&scratch, "the_sweep_finds_a_sandboxed_process", &exe)
-    else {
+    let Some(sandbox) = working_sandbox(
+        &scratch,
+        "the_sweep_finds_a_sandboxed_process",
+        &exe,
+        Reads::Project,
+    ) else {
         return;
     };
     let ready = scratch.state().join("ready");
@@ -563,6 +696,7 @@ fn the_relay_reaches_kelpie_from_inside_the_sandbox() {
         &scratch,
         "the_relay_reaches_kelpie_from_inside_the_sandbox",
         &exe,
+        Reads::Project,
         Some(session.door()),
     ) else {
         return;
@@ -590,6 +724,7 @@ fn the_door_opens_nothing_else() {
         &scratch,
         "the_door_opens_nothing_else",
         &exe,
+        Reads::Project,
         Some(session.door()),
     ) else {
         return;

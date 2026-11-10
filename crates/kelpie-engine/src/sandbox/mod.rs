@@ -5,7 +5,10 @@
 //! [`policy`] and starts crabpot's sandbox from it, and [`Sandbox::command`]
 //! wraps the harness's command into one that runs inside it. The process tree
 //! spawns the wrapped command as it spawns anything else, so the run's mark
-//! reaches it and the sweep finds it (ADR 0001).
+//! reaches it and the sweep finds it (ADR 0001). A project whose folder is the
+//! home folder or a folder above it, by name or through a link, is refused at
+//! [`Sandbox::start`], since such a folder holds the logins and secrets the
+//! policy denies.
 //!
 //! crabpot's proxy lives in kelpie until the [`Sandbox`] drops, so it stops with
 //! the session, and with kelpie. On Linux and Windows crabpot runs the host's
@@ -20,7 +23,7 @@
 //! ```no_run
 //! use std::path::Path;
 //!
-//! use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
+//! use kelpie_engine::sandbox::{Project, Reads, Sandbox, run_from_args};
 //! use kelpie_engine::session::Harness;
 //!
 //! // The first thing the host's `main` does
@@ -30,7 +33,8 @@
 //! let project = Project {
 //!     folder: Path::new("/work/kelpie"),
 //!     network_allowlist: &[],
-//!     read_anywhere: false,
+//!     reads: Reads::Project,
+//!     sessions_root: Path::new("/state/projects"),
 //! };
 //! let sandbox = Sandbox::start(&harness, &project, Path::new("/state/pm"))?;
 //! let _wrapped = sandbox.command(&std::process::Command::new("claude-agent-acp"))?;
@@ -40,7 +44,7 @@
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crabpot::{ConfigError, StartError, WrapError};
@@ -51,7 +55,7 @@ use crate::tools::Door;
 pub mod fence;
 mod policy;
 
-pub use policy::{Project, denied, policy, policy_with_door};
+pub use policy::{Project, Reads, denied, policy, policy_with_door};
 
 /// Takes over the process when crabpot ran it again as its helper
 ///
@@ -68,6 +72,14 @@ pub fn run_from_args() {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SandboxError {
+    /// The project folder is the home folder or a folder above it, by name or
+    /// through a link, which holds every harness's login and every secret the
+    /// sandbox denies
+    ProjectAtHome {
+        /// The project's folder, which holds the home folder, as it was given
+        folder: PathBuf,
+    },
+
     /// The settings crabpot was asked for were refused
     Policy(ConfigError),
 
@@ -85,6 +97,13 @@ pub enum SandboxError {
 impl fmt::Display for SandboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProjectAtHome { folder } => {
+                let folder = folder.display();
+                write!(
+                    f,
+                    "the project folder {folder} is the home folder or a folder above it, so a sandbox there would read the logins and secrets under it along with the project: move the project into a folder of its own"
+                )
+            }
             Self::Policy(error) => write!(f, "the sandbox's settings were refused: {error}"),
             Self::StateDir(error) => {
                 write!(f, "the session's state folder could not be made: {error}")
@@ -98,6 +117,7 @@ impl fmt::Display for SandboxError {
 impl core::error::Error for SandboxError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
+            Self::ProjectAtHome { .. } => None,
             Self::Policy(error) => Some(error),
             Self::StateDir(error) => Some(error),
             Self::Start(error) => Some(error),
@@ -126,12 +146,18 @@ impl Sandbox {
     /// files in `state_dir`
     ///
     /// Makes `state_dir` when it is missing, since the sandbox may write there
-    /// and nowhere else. See [`policy`] for what the session may reach.
+    /// and nowhere else. See [`policy`] for what the session may reach, and
+    /// [`Reads`] for how far it reads.
+    ///
+    /// A project whose folder is the home folder or a folder above it is refused
+    /// before anything is made or started, whether it reaches the home folder by
+    /// name or through a link: such a folder holds the logins and secrets the
+    /// sandbox denies, so a sandbox over it would read them with the project.
     ///
     /// # Errors
     ///
-    /// [`SandboxError`]: the settings are refused, `state_dir` cannot be made,
-    /// or crabpot cannot start.
+    /// [`SandboxError`]: the project folder holds the home folder, the settings
+    /// are refused, `state_dir` cannot be made, or crabpot cannot start.
     pub fn start(
         harness: &Harness,
         project: &Project<'_>,
@@ -152,6 +178,9 @@ impl Sandbox {
         state_dir: &Path,
         door: Option<&Door>,
     ) -> Result<Self, SandboxError> {
+        if let Some(folder) = policy::holds_home(project) {
+            return Err(SandboxError::ProjectAtHome { folder });
+        }
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
