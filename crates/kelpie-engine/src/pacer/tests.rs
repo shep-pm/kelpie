@@ -103,9 +103,14 @@ fn a_spent_week_holds_every_turn_until_the_week_resets_and_outlasts_the_window()
 
 #[test]
 fn a_spent_window_holds_every_turn_until_it_resets() {
-    assert_eq!(spent(&limit(), &usage(0, 99)), None, "99% holds nothing");
+    let now = at(0, 1);
+    assert_eq!(
+        spent(&limit(), now, &usage(0, 99)),
+        None,
+        "99% holds nothing"
+    );
 
-    let hold = spent(&limit(), &usage(0, 100)).expect("the window is spent");
+    let hold = spent(&limit(), now, &usage(0, 100)).expect("the window is spent");
     assert_eq!(hold.until, at(0, 3));
     assert_eq!(
         hold.reason,
@@ -115,7 +120,8 @@ fn a_spent_window_holds_every_turn_until_it_resets() {
 
 #[test]
 fn a_spent_week_and_a_spent_window_report_the_longer_hold() {
-    let both = spent(&limit(), &usage(100, 100)).expect("both are spent");
+    let now = at(0, 1);
+    let both = spent(&limit(), now, &usage(100, 100)).expect("both are spent");
     assert_eq!(
         both.until,
         Timestamp::from_secs(RESETS),
@@ -128,7 +134,7 @@ fn a_spent_week_and_a_spent_window_report_the_longer_hold() {
 
     let mut later = usage(100, 100);
     later.session.resets_at = Timestamp::from_secs(RESETS + 3600);
-    let later = spent(&limit(), &later).expect("both are spent");
+    let later = spent(&limit(), now, &later).expect("both are spent");
     assert_eq!(
         later.until,
         Timestamp::from_secs(RESETS + 3600),
@@ -147,6 +153,31 @@ fn a_window_that_has_not_started_holds_nothing() {
     let mut fresh = usage(0, 0);
     fresh.session.resets_at = after(now, 5 * 3600);
     assert_eq!(assess(&limit(), now, &fresh).hold, None);
+}
+
+#[test]
+fn a_spent_window_whose_reset_has_already_come_holds_nothing() {
+    // The reading is stale around a reset: it still says 100% an hour after the window reset.
+    let now = at(0, 4);
+    let stale = usage(0, 100);
+
+    assert_eq!(
+        assess(&limit(), now, &stale).hold,
+        None,
+        "a window that has reset holds nothing, even where the reading still says 100%"
+    );
+
+    let mut pacing = Pacing::default();
+    let meter = Asked::new(stale);
+    assert_eq!(
+        pacing.pace(&limit(), Some(&meter), now),
+        Pace::Clear,
+        "no turn is held until a moment that has already gone by"
+    );
+    assert!(
+        pacing.still_held(&limit(), now).is_none(),
+        "a past-dated hold is not one a caller can wait out"
+    );
 }
 
 #[test]

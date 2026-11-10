@@ -16,6 +16,7 @@
 //! use kelpie_engine::pacer::{LimitId, Timestamp, Utilization, Window, spent};
 //!
 //! let limit = LimitId::new("claude-code");
+//! let now = Timestamp::from_secs(1_000);
 //! let usage = Utilization {
 //!     session: Window {
 //!         used_pct: 60,
@@ -26,7 +27,7 @@
 //!         resets_at: Timestamp::from_secs(90_000),
 //!     },
 //! };
-//! let hold = spent(&limit, &usage).expect("the week is spent");
+//! let hold = spent(&limit, now, &usage).expect("the week is spent");
 //! assert_eq!(hold.until, Timestamp::from_secs(90_000));
 //! assert_eq!(
 //!     hold.reason,
@@ -190,22 +191,26 @@ pub enum Pace {
 pub fn assess(limit: &LimitId, now: Timestamp, usage: &Utilization) -> Assessment {
     Assessment {
         read_at: now,
-        hold: spent(limit, usage),
+        hold: spent(limit, now, usage),
     }
 }
 
 /// The hold on every new turn while `limit`'s 5-hour window or week is at [`SPENT_PCT`],
 /// until it resets: the longer of the two holds when both apply
 ///
-/// A spent window fails each turn at once, as a spent week does.
+/// A spent window fails each turn at once, as a spent week does. A window whose
+/// reset has already come holds nothing, even where `usage` still says it is
+/// spent: a harness prints a reset to the minute, and a window can reset while
+/// its usage is read. The next ask reads again.
 #[must_use]
-pub fn spent(limit: &LimitId, usage: &Utilization) -> Option<Hold> {
+pub fn spent(limit: &LimitId, now: Timestamp, usage: &Utilization) -> Option<Hold> {
     [
         spent_window(limit, "5-hour window", &usage.session),
         spent_window(limit, "week", &usage.week),
     ]
     .into_iter()
     .flatten()
+    .filter(|hold| now < hold.until)
     .max_by_key(|hold| hold.until)
 }
 
