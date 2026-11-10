@@ -16,8 +16,9 @@
 //! The PM runs inside a crabpot sandbox: it reads the project and the folders
 //! beside it, writes its state folder alone, and reaches its model's host
 //! (ADR 0005), plus the domains the project's `network-allowlist` names. The
-//! `read-anywhere` setting opens its reads to the whole disk but its logins and
-//! secrets.
+//! `read-anywhere` setting opens its reads to the whole disk, keeping every
+//! harness's login, every secret and every other session's state closed. It
+//! lands at the session's next start, since a running sandbox is never widened.
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -32,7 +33,7 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
-use kelpie_engine::sandbox::{self, Sandbox};
+use kelpie_engine::sandbox::{self, Reads, Sandbox};
 use kelpie_engine::session::{
     Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, log, sandboxed_launcher,
 };
@@ -90,8 +91,8 @@ pub struct PmPlan {
     /// (`network-allowlist`)
     pub network_allowlist: Vec<String>,
 
-    /// Whether the PM reads anywhere but its logins and secrets (`read-anywhere`)
-    pub read_anywhere: bool,
+    /// How far the PM reads (`read-anywhere`)
+    pub reads: Reads,
 }
 
 /// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
@@ -176,7 +177,7 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         provider: settings.provider.value,
         host: settings.host.value,
         network_allowlist: settings.network_allowlist.value,
-        read_anywhere: settings.read_anywhere.value,
+        reads: Reads::from_setting(settings.read_anywhere.value),
     })
 }
 
@@ -256,6 +257,7 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
         data_dir,
         project,
         state_dir,
+        sessions_root,
         logins,
         pm,
         config,
@@ -267,7 +269,8 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
         state_dir.to_path_buf(),
         project.path.clone(),
     );
-    let (network_allowlist, read_anywhere) = (pm.network_allowlist.clone(), pm.read_anywhere);
+    let sessions_root = sessions_root.to_path_buf();
+    let (network_allowlist, reads) = (pm.network_allowlist.clone(), pm.reads);
     let (logins, tree) = (logins.clone(), Arc::clone(tree));
     // Each closure holds its own copy of the folder, since a closure owns what it captures
     let (current_dir, start_dir, failed_dir) = (
@@ -301,7 +304,8 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
                 &sandbox::Project {
                     folder: &folder,
                     network_allowlist: &network_allowlist,
-                    read_anywhere,
+                    reads,
+                    sessions_root: &sessions_root,
                 },
                 &state_dir,
             )

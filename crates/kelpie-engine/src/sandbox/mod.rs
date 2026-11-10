@@ -20,7 +20,7 @@
 //! ```no_run
 //! use std::path::Path;
 //!
-//! use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
+//! use kelpie_engine::sandbox::{Project, Reads, Sandbox, run_from_args};
 //! use kelpie_engine::session::Harness;
 //!
 //! // The first thing the host's `main` does
@@ -30,7 +30,8 @@
 //! let project = Project {
 //!     folder: Path::new("/work/kelpie"),
 //!     network_allowlist: &[],
-//!     read_anywhere: false,
+//!     reads: Reads::Project,
+//!     sessions_root: Path::new("/state/projects"),
 //! };
 //! let sandbox = Sandbox::start(&harness, &project, Path::new("/state/pm"))?;
 //! let _wrapped = sandbox.command(&std::process::Command::new("claude-agent-acp"))?;
@@ -49,7 +50,7 @@ use crate::session::Harness;
 
 mod policy;
 
-pub use policy::{Project, denied, policy};
+pub use policy::{Project, Reads, denied, policy};
 
 /// Takes over the process when crabpot ran it again as its helper
 ///
@@ -124,7 +125,8 @@ impl Sandbox {
     /// files in `state_dir`
     ///
     /// Makes `state_dir` when it is missing, since the sandbox may write there
-    /// and nowhere else. See [`policy`] for what the session may reach.
+    /// and nowhere else. See [`policy`] for what the session may reach, and
+    /// [`Reads`] for how far it reads.
     ///
     /// # Errors
     ///

@@ -237,6 +237,10 @@ pub struct Opening<'a> {
     /// The folder for the harness's state: `<data_dir>/projects/<id>/pm/`
     pub state_dir: &'a Path,
 
+    /// The folder holding every session's state folder: `<data_dir>/projects/`.
+    /// A session reads its own state and no other session's.
+    pub sessions_root: &'a Path,
+
     /// Where the person's harness logins are kept
     pub logins: &'a Store,
 
@@ -531,7 +535,7 @@ impl AppState {
             None => project.pm_ran.clone(),
         }
         .filter(|was| was.harness != plan.harness);
-        let state_dir = self.pm_dir(&project.id);
+        let (state_dir, sessions_root) = (self.pm_dir(&project.id), self.sessions_root());
         let log = Log::open(state_dir.join(PM_LOG_FILE))
             .map_err(|error| format!("could not open the PM's log: {error}"))?;
         let decisions = state_dir.join(DECISIONS_FILE);
@@ -547,6 +551,7 @@ impl AppState {
             data_dir: &self.data_dir,
             project: &on,
             state_dir: &state_dir,
+            sessions_root: &sessions_root,
             logins: &self.logins,
             config: &self.config,
             pm: &plan,
@@ -587,7 +592,13 @@ impl AppState {
 
     /// The folder of the PM's harness state and log for the project `id`
     fn pm_dir(&self, id: &str) -> PathBuf {
-        self.data_dir.join(PROJECTS_FOLDER).join(id).join(PM_FOLDER)
+        self.sessions_root().join(id).join(PM_FOLDER)
+    }
+
+    /// The folder holding every session's state folder, which no session reads
+    /// but its own
+    fn sessions_root(&self) -> PathBuf {
+        self.data_dir.join(PROJECTS_FOLDER)
     }
 
     /// Where the first project's PM log is, `None` before a project is picked
