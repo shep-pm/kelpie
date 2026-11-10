@@ -82,15 +82,45 @@ struct State {
     children: BTreeMap<u64, Entry>,
 }
 
+/// The process itself, behind a lock of its own so stopping it holds nothing else
+///
+/// A stop waits out its grace, and the state's lock is every caller's.
 #[derive(Debug)]
-struct Entry {
+struct Proc {
     tree: Tree,
     child: std::process::Child,
+}
+
+#[derive(Debug)]
+struct Entry {
+    proc: Arc<Mutex<Proc>>,
+    /// The leader's pid, which is also its group's id
+    pid: u32,
     /// The leader's start, `None` when it exited before it could be read
     started: Option<u64>,
     exited: Option<ExitStatus>,
     /// The [`Child`] handle is gone, so nobody will ask for the status
     released: bool,
+}
+
+/// Lock `mutex`, whether or not a thread panicked holding it
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Entry {
+    /// How the child has exited, `None` while it runs or while a stop holds it
+    ///
+    /// A stop in progress records the status itself when it ends.
+    fn try_wait(&self) -> io::Result<Option<ExitStatus>> {
+        match self.proc.try_lock() {
+            Ok(mut proc) => proc.child.try_wait(),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                poisoned.into_inner().child.try_wait()
+            }
+            Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+        }
+    }
 }
 
 impl Shared {
@@ -106,7 +136,7 @@ impl Shared {
             .filter(|entry| entry.exited.is_none())
             .filter_map(|entry| {
                 Some(Group {
-                    pid: entry.child.id(),
+                    pid: entry.pid,
                     started: entry.started?,
                 })
             })
@@ -126,7 +156,7 @@ impl State {
         let mut found = false;
         for entry in self.children.values_mut() {
             if entry.exited.is_none() {
-                entry.exited = entry.child.try_wait().ok().flatten();
+                entry.exited = entry.try_wait().ok().flatten();
                 found |= entry.exited.is_some();
             }
         }
@@ -215,18 +245,18 @@ impl ProcessTree {
         state.children.insert(
             slot,
             Entry {
-                tree,
-                child,
+                proc: Arc::new(Mutex::new(Proc { tree, child })),
+                pid,
                 started,
                 exited: None,
                 released: false,
             },
         );
         if let Err(error) = self.shared.write(&state) {
-            if let Some(mut entry) = state.children.remove(&slot) {
-                let _ = entry
-                    .tree
-                    .stop(&mut entry.child, Signal::Kill, Duration::ZERO);
+            if let Some(entry) = state.children.remove(&slot) {
+                let mut proc = locked(&entry.proc);
+                let Proc { tree, child } = &mut *proc;
+                let _ = tree.stop(child, Signal::Kill, Duration::ZERO);
             }
             return Err(error);
         }
@@ -264,8 +294,10 @@ impl ProcessTree {
                 .filter(|entry| entry.exited.is_none())
                 .map(|entry| {
                     scope.spawn(move || {
-                        entry.exited =
-                            Some(entry.tree.stop(&mut entry.child, Signal::Term, grace)?);
+                        let proc = Arc::clone(&entry.proc);
+                        let mut proc = locked(&proc);
+                        let Proc { tree, child } = &mut *proc;
+                        entry.exited = Some(tree.stop(child, Signal::Term, grace)?);
                         Ok(())
                     })
                 })
@@ -323,7 +355,7 @@ impl Child {
             return Ok(None);
         };
         if entry.exited.is_none() {
-            entry.exited = entry.child.try_wait()?;
+            entry.exited = entry.try_wait()?;
             if entry.exited.is_some() {
                 // A listed group that is gone is found gone at the next launch
                 let _ = self.shared.write(&state);
@@ -355,22 +387,35 @@ impl Child {
     /// the group, then the kill when `grace` runs out. The child stays in the
     /// tree, so [`ProcessTree::stop_all`] still counts it, and the run file is
     /// rewritten without it. A child already known to have exited is not
-    /// signalled again.
+    /// signalled again. The tree is free to every other caller while this waits
+    /// out `grace`.
     ///
     /// # Errors
     ///
     /// The child is no longer in the tree, or the OS could not stop its group.
     pub fn stop(&mut self, grace: Duration) -> io::Result<ExitStatus> {
-        let mut state = self.shared.lock();
-        let Some(entry) = state.children.get_mut(&self.slot) else {
-            return Err(io::Error::other("the child is no longer in the tree"));
+        let proc = {
+            let state = self.shared.lock();
+            let Some(entry) = state.children.get(&self.slot) else {
+                return Err(io::Error::other("the child is no longer in the tree"));
+            };
+            if let Some(status) = entry.exited {
+                return Ok(status);
+            }
+            Arc::clone(&entry.proc)
         };
-        if let Some(status) = entry.exited {
-            return Ok(status);
+        // The tree's lock is not held while the ladder waits out `grace`, so
+        // every other child keeps starting, asking and stopping meanwhile
+        let status = {
+            let mut proc = locked(&proc);
+            let Proc { tree, child } = &mut *proc;
+            tree.stop(child, Signal::Term, grace)?
+        };
+        let mut state = self.shared.lock();
+        if let Some(entry) = state.children.get_mut(&self.slot) {
+            entry.exited = Some(status);
+            let _ = self.shared.write(&state);
         }
-        let status = entry.tree.stop(&mut entry.child, Signal::Term, grace)?;
-        entry.exited = Some(status);
-        let _ = self.shared.write(&state);
         Ok(status)
     }
 }

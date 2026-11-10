@@ -287,6 +287,7 @@ struct Script {
     can_load: bool,
     can_close: bool,
     can_take_system_prompt: bool,
+    silent_on_new: bool,
     known: Vec<String>,
     history: Vec<String>,
     offers: Vec<Offer>,
@@ -347,6 +348,13 @@ impl FakeAgent {
     #[must_use]
     pub fn accepts_system_prompt(mut self) -> Self {
         self.script.can_take_system_prompt = true;
+        self
+    }
+
+    /// Take `session/new` and never answer it
+    #[must_use]
+    pub fn never_answers_session_new(mut self) -> Self {
+        self.script.silent_on_new = true;
         self
     }
 
@@ -592,8 +600,15 @@ impl FakeAgent {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |request: NewSessionRequest, responder, _cx| {
+                async move |request: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
                     new.record("session/new", &request);
+                    if new.script.silent_on_new {
+                        // Held, not dropped, so the client waits for an answer that never comes
+                        return cx.spawn(async move {
+                            let _held = responder;
+                            futures::future::pending::<Result<(), Error>>().await
+                        });
+                    }
                     let number = new.shared.sessions.fetch_add(1, Ordering::SeqCst) + 1;
                     responder.respond(
                         NewSessionResponse::new(format!("fake-{number}"))

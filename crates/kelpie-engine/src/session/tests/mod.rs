@@ -495,6 +495,47 @@ fn a_harness_with_no_model_option_lists_none() {
 }
 
 #[test]
+fn a_harness_that_never_answers_is_stopped_when_the_deadline_passes() {
+    let mut agent = FakeAgent::new().never_answers_session_new();
+
+    let error = options::asked_within(
+        &mut agent,
+        &PathBuf::from("/project"),
+        None,
+        Duration::from_millis(200),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, SessionError::TimedOut { .. }),
+        "a silent harness was not called silent: {error}"
+    );
+    assert_eq!(agent.stopped(), 1, "the silent harness was left running");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_harness_that_exits_before_answering_is_explained_from_its_stderr() {
+    use crate::run::RunId;
+    use crate::tree::ProcessTree;
+
+    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), dir.join("run.json")).unwrap());
+    let mut harness = Harness::new("sh");
+    harness.args = vec!["-c".into(), "echo token rejected >&2; exit 3".into()];
+
+    let error = options::ask(&tree, &harness, &dir).unwrap_err();
+
+    let SessionError::Ended { message } = &error else {
+        panic!("a harness that exited did not end the ask: {error}");
+    };
+    assert!(message.contains("exit status: 3"), "{message}");
+    assert!(message.contains("token rejected"), "{message}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_harness_id_that_names_no_file_starts_nothing() {
     let mut agent = FakeAgent::new();
     let data = data_folder();

@@ -10,9 +10,12 @@
 //! a refresh, so opening the settings page starts no harness.
 
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::pin;
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -22,6 +25,7 @@ use agent_client_protocol::v1::schema::{
     SessionConfigOptionCategory, SessionConfigSelectOption, SessionConfigSelectOptions,
 };
 use agent_client_protocol::{Agent, Client, DynConnectTo, Error};
+use futures::future::{Either, select};
 use serde::{Deserialize, Serialize};
 
 use kelpie_protocol::{Choice, Options};
@@ -40,6 +44,13 @@ const OPTIONS_FOLDER: &str = "options";
 /// One that has had its session closed and its input closed exits at once; 5 s
 /// covers a bridge still waiting on the harness behind it.
 const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long a harness is given to answer `initialize` and `session/new`
+///
+/// A bridge that has to reach the network or wait on a login can be slow, so
+/// this is generous, and a harness that is still silent is stopped instead of
+/// waited on for good.
+const ANSWER_WITHIN: Duration = Duration::from_secs(60);
 
 /// Ask `harness` what it offers, and stop it
 ///
@@ -68,23 +79,69 @@ pub(crate) fn asked(
     project: &Path,
     meta: Option<&serde_json::Value>,
 ) -> Result<Options, SessionError> {
+    asked_within(launcher, project, meta, ANSWER_WITHIN)
+}
+
+/// [`asked`], giving the harness `deadline` to answer before it is stopped
+pub(crate) fn asked_within(
+    launcher: &mut dyn Launch,
+    project: &Path,
+    meta: Option<&serde_json::Value>,
+    deadline: Duration,
+) -> Result<Options, SessionError> {
     let Link {
         transport, stop, ..
     } = launcher.launch().map_err(SessionError::Start)?;
-    let answer = futures::executor::block_on(exchange(transport, project.to_path_buf(), meta));
+    let answer = futures::executor::block_on(until(
+        deadline,
+        exchange(transport, project.to_path_buf(), meta),
+    ));
     // The harness is kelpie's to stop, whether it closed its own session or not
     let said = stop(STOP_GRACE);
-    answer.map_err(|error| match (is_gone(&error), said) {
-        (true, Some(said)) => SessionError::Ended {
-            message: format!("{}: {said}", describe(&error)),
-        },
-        (true, None) => SessionError::Ended {
-            message: describe(&error),
-        },
-        (false, _) => SessionError::Refused {
-            message: describe(&error),
-        },
-    })
+    match answer {
+        None => Err(SessionError::TimedOut {
+            after: deadline,
+            message: said.unwrap_or_default(),
+        }),
+        Some(answer) => answer.map_err(|Failure { error, gone }| match (gone, said) {
+            (true, Some(said)) => SessionError::Ended {
+                message: format!("{}: {said}", describe(&error)),
+            },
+            (true, None) => SessionError::Ended {
+                message: describe(&error),
+            },
+            (false, _) => SessionError::Refused {
+                message: describe(&error),
+            },
+        }),
+    }
+}
+
+/// What `work` gives, or `None` when `deadline` passes first, and then `work` is dropped
+///
+/// The clock is a thread that wakes when the work is over, so a finished ask
+/// leaves nothing sleeping.
+async fn until<T>(deadline: Duration, work: impl Future<Output = T>) -> Option<T> {
+    let (over, passed) = futures::channel::oneshot::channel();
+    let (finished, finish) = mpsc::channel::<()>();
+    let clock = thread::Builder::new()
+        .name("kelpie-ask-deadline".to_owned())
+        .spawn(move || {
+            if finish.recv_timeout(deadline) == Err(mpsc::RecvTimeoutError::Timeout) {
+                let _ = over.send(());
+            }
+        });
+    // A clock that cannot start leaves the ask as it was: it waits for the harness
+    let outcome = if clock.is_ok() {
+        match select(pin!(work), passed).await {
+            Either::Left((done, _)) => Some(done),
+            Either::Right(_) => None,
+        }
+    } else {
+        Some(work.await)
+    };
+    drop(finished);
+    outcome
 }
 
 /// What harness `id` offers: what kelpie was last told, or a fresh ask
@@ -148,36 +205,71 @@ fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Path) -> Proce
     }
 }
 
+/// Why an ask failed, and whether the harness itself ended
+struct Failure {
+    error: Error,
+    /// The harness ended the connection, as opposed to answering with an error
+    gone: bool,
+}
+
+/// How long to wait for a failed write to be followed by the harness's output closing
+///
+/// A harness that exited fails the write that reaches it, and its closed output
+/// follows a moment after. A harness that is alive and answered with an error
+/// never closes, so this is the most that failure costs.
+const CLOSE_FOLLOWS: Duration = Duration::from_millis(200);
+
 /// `initialize`, `session/new` and `session/close` over `transport`, and what the harness listed
 async fn exchange(
     transport: DynConnectTo<Client>,
     project: PathBuf,
     meta: Option<&serde_json::Value>,
-) -> Result<Options, Error> {
+) -> Result<Options, Failure> {
     Client
         .v1()
         .name("kelpie")
         .connect_with(transport, async move |cx: ConnectionTo<Agent>| {
-            // A harness answers nothing before `initialize`
-            let init = cx
-                .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                .block_task()
-                .await?;
-            let session = cx
-                .send_request(new_session(project, meta)?)
-                .block_task()
-                .await?;
-            let listed = listed(&session.config_options.unwrap_or_default());
-            if init.agent_capabilities.session_capabilities.close.is_some() {
-                // A harness that answers the close with an error is stopped all the same
-                let _ = cx
-                    .send_request(CloseSessionRequest::new(session.session_id))
-                    .block_task()
-                    .await;
-            }
-            Ok(listed)
+            Ok(match talk(&cx, project, meta).await {
+                Ok(listed) => Ok(listed),
+                Err(error) => {
+                    let gone = is_gone(&error)
+                        || cx.is_incoming_closed()
+                        || until(CLOSE_FOLLOWS, cx.incoming_closed()).await.is_some();
+                    Err(Failure { error, gone })
+                }
+            })
         })
         .await
+        // The connection failing outside the ask, such as a write to a pipe
+        // nobody reads, is the harness going; its own errors arrive inside
+        .map_err(|error| Failure { gone: true, error })
+        .and_then(|asked| asked)
+}
+
+/// What the harness lists, from `initialize`, `session/new` and `session/close` on `cx`
+async fn talk(
+    cx: &ConnectionTo<Agent>,
+    project: PathBuf,
+    meta: Option<&serde_json::Value>,
+) -> Result<Options, Error> {
+    // A harness answers nothing before `initialize`
+    let init = cx
+        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .block_task()
+        .await?;
+    let session = cx
+        .send_request(new_session(project, meta)?)
+        .block_task()
+        .await?;
+    let listed = listed(&session.config_options.unwrap_or_default());
+    if init.agent_capabilities.session_capabilities.close.is_some() {
+        // A harness that answers the close with an error is stopped all the same
+        let _ = cx
+            .send_request(CloseSessionRequest::new(session.session_id))
+            .block_task()
+            .await;
+    }
+    Ok(listed)
 }
 
 /// The models and efforts among the options a harness answered with

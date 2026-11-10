@@ -404,3 +404,34 @@ fn an_exit_noticed_while_another_handle_drops_leaves_the_run_file() {
     assert_eq!(file.groups.len(), 1, "only the sleep is listed: {file:?}");
     tree.stop_all(GRACE).unwrap();
 }
+
+#[test]
+fn stopping_one_child_does_not_hold_the_tree_for_its_grace() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut stubborn = tree
+        .spawn(&mut sh(
+            "trap '' TERM; echo ready; while :; do sleep 1; done",
+        ))
+        .unwrap();
+    let (reader, _) = ready(stubborn.stdout.take().unwrap());
+    let grace = Duration::from_secs(3);
+    let stopping = std::thread::spawn(move || {
+        let _reader = reader;
+        stubborn.stop(grace).unwrap()
+    });
+    // The term is out and ignored, so the stop is now waiting out its grace
+    std::thread::sleep(Duration::from_millis(300));
+
+    let began = Instant::now();
+    let mut other = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+    assert!(other.try_wait().unwrap().is_none());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < Duration::from_secs(1),
+        "a spawn and a try_wait waited {waited:?} behind another child's stop"
+    );
+    assert!(!stopping.join().unwrap().success());
+    tree.stop_all(GRACE).unwrap();
+}

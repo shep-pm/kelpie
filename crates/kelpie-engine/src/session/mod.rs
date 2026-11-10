@@ -58,6 +58,9 @@ mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
 const EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a stopped harness's stderr is given to be read to its end
+const TAIL_SETTLE: Duration = Duration::from_millis(200);
 const EXIT_POLL: Duration = Duration::from_millis(10);
 
 /// What starts a harness's ACP agent
@@ -155,6 +158,13 @@ pub enum SessionError {
         /// The harness's own end, as the tree and its stderr can say it
         message: String,
     },
+    /// The harness did not answer within the time kelpie waits, and was stopped
+    TimedOut {
+        /// How long kelpie waited
+        after: Duration,
+        /// How the harness ended once it was stopped, with what it last wrote
+        message: String,
+    },
     /// The harness answered with an error instead of its options
     Refused {
         /// The error the harness answered with
@@ -184,6 +194,18 @@ impl fmt::Display for SessionError {
                     "the harness ended the connection before it answered: {message}"
                 )
             }
+            Self::TimedOut { after, message } => {
+                write!(
+                    f,
+                    "the harness did not answer within {} s and was stopped",
+                    after.as_secs_f32().ceil()
+                )?;
+                if message.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, ": {message}")
+                }
+            }
             Self::Refused { message } => {
                 write!(f, "the harness would not list its options: {message}")
             }
@@ -204,7 +226,10 @@ impl core::error::Error for SessionError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Start(error) | Self::Cache { source: error, .. } => Some(error),
-            Self::Ended { .. } | Self::Refused { .. } | Self::Name { .. } => None,
+            Self::Ended { .. }
+            | Self::TimedOut { .. }
+            | Self::Refused { .. }
+            | Self::Name { .. } => None,
         }
     }
 }
@@ -463,10 +488,16 @@ impl Ended {
         explain_exit(&mut self.child, &self.tail)
     }
 
-    /// Stop the harness's group, and say how it ended
+    /// Stop the harness's group, and say how it ended and what it last wrote
     fn stop(&mut self, grace: Duration) -> Option<String> {
         match self.child.stop(grace) {
-            Ok(status) => Some(format!("the harness exited with {status}")),
+            Ok(status) => {
+                self.tail.settle(TAIL_SETTLE);
+                Some(with_stderr(
+                    format!("the harness exited with {status}"),
+                    &self.tail,
+                ))
+            }
             Err(error) => Some(format!("kelpie could not stop the harness: {error}")),
         }
     }
@@ -486,16 +517,21 @@ fn explain_exit(child: &mut Child, tail: &stderr::Tail) -> Option<String> {
             Ok(None) | Err(_) => break None,
         }
     };
-    let lines = tail.lines();
-    let mut text = match status {
+    let text = match status {
         Some(status) => format!("the harness exited with {status}"),
         None => "the harness closed its output but is still running".to_owned(),
     };
+    Some(with_stderr(text, tail))
+}
+
+/// `text`, followed by the last of what the harness wrote to stderr, if it wrote any
+fn with_stderr(mut text: String, tail: &stderr::Tail) -> String {
+    let lines = tail.lines();
     if !lines.is_empty() {
         text.push_str("; it last wrote: ");
         text.push_str(&lines);
     }
-    Some(text)
+    text
 }
 
 #[cfg(test)]
