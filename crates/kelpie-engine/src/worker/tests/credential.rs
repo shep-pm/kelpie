@@ -30,6 +30,16 @@ fn prompt(agent: &FakeAgent) -> String {
         .to_owned()
 }
 
+/// The prompt of the turn that ran last, for a test that starts a ticket twice
+fn last_prompt(agent: &FakeAgent) -> String {
+    agent
+        .params("session/prompt")
+        .last()
+        .and_then(|turn| turn["prompt"][0]["text"].as_str())
+        .expect("no turn prompted the agent")
+        .to_owned()
+}
+
 // The worker's credential on GitHub: one repo, minted for this turn alone, in a
 // folder of its own that git's credential helper answers from. No variable
 // carries it, so a harness that strips token-shaped names, and every process
@@ -167,6 +177,67 @@ fn a_worker_with_no_app_on_its_repo_is_told_it_cannot_push() {
         in_env(env, "GIT_CONFIG_PARAMETERS").as_deref(),
         Some(login::NO_HELPER),
         "the maintainer's helpers are emptied, and github.com is answered by nothing: {env:?}"
+    );
+}
+
+// A turn with no credential does not run on the token the turn before it left.
+// The state folder outlives its turn, `GH_CONFIG_DIR` names it whatever the next
+// turn can push with, and a minted token is live until its hour is up, so an App
+// taken off the repo leaves a working one sitting where the worker can read it.
+#[test]
+fn a_turn_with_no_credential_loses_the_token_the_last_turn_left() {
+    let mut rig = Rig::new("stale token");
+    rig.on_github("shep-pm/koji");
+    let home = tempfile::tempdir().unwrap();
+    let github = FakeGithub::new(FakeClock::at(1_000_000), "shep-pm");
+    github.registered(home.path(), "shep-pm/koji");
+    rig.tokens = Some(github.tokens(home.path()));
+
+    let binding = binding();
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("first turn"))
+        .turn(Turn::new().text("second turn"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+
+    let (sink, heard) = events();
+    let started = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running { state_dir, .. } = started else {
+        panic!("{started:?}");
+    };
+    until_turn_ends(&heard);
+    let first = hosts(&state_dir);
+    assert!(first.contains("oauth_token: ghs_test1"), "{first}");
+
+    // The App comes off the repo, and the same state folder comes back
+    github.uninstall("shep-pm/koji");
+    let (sink, heard) = events();
+    let again = start(
+        &rig.project(&binding, &open, 2),
+        &ticket("74", "Build the thing"),
+        sink,
+    )
+    .unwrap();
+    let Started::Running { .. } = again else {
+        panic!("{again:?}");
+    };
+    until_turn_ends(&heard);
+
+    let dir = login::config_dir(&state_dir);
+    for name in ["hosts.yml", "config.yml"] {
+        assert!(
+            !dir.join(name).exists(),
+            "{name} still holds the last turn's login"
+        );
+    }
+    let prompt = last_prompt(&agent);
+    assert!(
+        prompt.contains("no credential for this repo"),
+        "the second turn is told it cannot push: {prompt:?}"
     );
 }
 

@@ -90,6 +90,12 @@ impl FakeGithub {
         self.install(repo, 7);
     }
 
+    /// Takes the App off `repo`, as uninstalling it there does
+    pub fn uninstall(&self, repo: &str) {
+        let repo = repo.to_ascii_lowercase();
+        self.hub.lock().unwrap().installed.remove(&repo);
+    }
+
     /// Gives the App the `workflows` permission, accepted on every installation
     pub fn hold_workflows(&self) {
         self.hub.lock().unwrap().workflows = true;

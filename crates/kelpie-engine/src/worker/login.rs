@@ -9,6 +9,7 @@
 //! the maintainer set up is asked. That helper is a program on the machine, and
 //! [`helper_on_path`] is how kelpie finds out before a turn that it is not there.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::github::InstallationToken;
@@ -21,6 +22,10 @@ const USER: &str = "x-access-token";
 
 // Its name in the state folder
 const CONFIG_DIR: &str = "gh";
+
+// The two files `gh` reads there
+const CONFIG_FILE: &str = "config.yml";
+const HOSTS_FILE: &str = "hosts.yml";
 
 /// The program git runs to answer github.com, which [`GIT_CONFIG`] names
 pub(crate) const HELPER: &str = "gh";
@@ -67,8 +72,45 @@ pub fn write(state_dir: &Path, token: &InstallationToken) -> Result<(), worker_f
     // into place so a `gh` reading it never finds half of it: with no token in
     // the file it would look in the keychain.
     let dir = Path::new(CONFIG_DIR);
-    worker_folder::write_private(state_dir, &dir.join("config.yml"), "version: \"1\"\n")?;
-    worker_folder::write_private(state_dir, &dir.join("hosts.yml"), &text)?;
+    worker_folder::write_private(state_dir, &dir.join(CONFIG_FILE), "version: \"1\"\n")?;
+    worker_folder::write_private(state_dir, &dir.join(HOSTS_FILE), &text)?;
+    Ok(())
+}
+
+/// Take the token a previous turn left in `state_dir`, so a turn with no
+/// credential does not run on one that still works
+///
+/// A worker's state folder outlives its turn, and `GH_CONFIG_DIR` names this
+/// folder whatever the turn can push with, so a `hosts.yml` left here is one its
+/// `gh` still answers from, and a token minted for a repo kelpie no longer covers
+/// stays live until its hour is up. Only the two files kelpie wrote are taken,
+/// and only where `gh` is a plain folder of the worker's own: a link standing
+/// where the folder is refused, with whatever it names left alone, and a link
+/// where a file is goes with the link and not with what it names.
+///
+/// # Errors
+///
+/// [`worker_folder::Error::NotFolder`] for a link or a file where the folder
+/// should be, [`worker_folder::Error::NotRegular`] for a folder where a file
+/// should be, and [`worker_folder::Error::Io`] for the rest.
+pub(crate) fn clear(state_dir: &Path) -> Result<(), worker_folder::Error> {
+    let dir = config_dir(state_dir);
+    match std::fs::symlink_metadata(&dir) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(worker_folder::Error::Io(error.kind())),
+        Ok(meta) if !meta.is_dir() => return Err(worker_folder::Error::NotFolder),
+        Ok(_) => {}
+    }
+    for name in [CONFIG_FILE, HOSTS_FILE] {
+        match std::fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::IsADirectory => {
+                return Err(worker_folder::Error::NotRegular);
+            }
+            Err(error) => return Err(worker_folder::Error::Io(error.kind())),
+        }
+    }
     Ok(())
 }
 
@@ -228,6 +270,70 @@ mod tests {
         assert_eq!(theirs, ["hosts.yml"]);
         let kept = fs::read_to_string(config_dir(state.path()).join("hosts.yml")).unwrap();
         assert_eq!(kept, "their login\n");
+    }
+
+    // A worker's state folder outlives its turn, and `GH_CONFIG_DIR` names it
+    // whatever the next turn can push with, so a token left here is one its own
+    // `gh` still answers from until its hour is up.
+    #[test]
+    fn taking_the_login_out_leaves_no_token_in_the_workers_folder() {
+        let state = tempfile::tempdir().unwrap();
+        write(state.path(), &token("ghs_live")).unwrap();
+        let dir = config_dir(state.path());
+        assert!(dir.join("hosts.yml").exists(), "the turn wrote one");
+
+        clear(state.path()).unwrap();
+
+        for name in ["hosts.yml", "config.yml"] {
+            assert!(!dir.join(name).exists(), "{name} still holds a login");
+        }
+        assert!(dir.is_dir(), "the folder is the worker's to keep");
+    }
+
+    // The usual case for a worker with no credential from its first turn
+    #[test]
+    fn taking_the_login_out_of_a_folder_that_holds_none_is_nothing_to_do() {
+        let state = tempfile::tempdir().unwrap();
+        assert_eq!(clear(state.path()), Ok(()));
+    }
+
+    // The worker may plant a link where its `gh` folder is. Clearing it means
+    // refusing, and not deleting what the link names, which is the maintainer's
+    // own login.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_where_the_folder_is_is_refused_to_clear_and_its_target_is_left_alone() {
+        let (state, theirs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(theirs.path().join("hosts.yml"), "their login\n").unwrap();
+        symlink(theirs.path(), config_dir(state.path())).unwrap();
+
+        let refused = clear(state.path());
+
+        assert_eq!(refused, Err(worker_folder::Error::NotFolder));
+        assert_eq!(
+            fs::read_to_string(theirs.path().join("hosts.yml")).unwrap(),
+            "their login\n"
+        );
+    }
+
+    // A link where a file is goes with the link, and what it names stays.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_where_a_file_is_goes_with_the_link_and_not_with_what_it_names() {
+        let (state, theirs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(theirs.path().join("hosts.yml"), "their login\n").unwrap();
+        write(state.path(), &token("ghs_live")).unwrap();
+        let hosts = config_dir(state.path()).join("hosts.yml");
+        fs::remove_file(&hosts).unwrap();
+        symlink(theirs.path().join("hosts.yml"), &hosts).unwrap();
+
+        clear(state.path()).unwrap();
+
+        assert!(!hosts.exists(), "the link went");
+        assert_eq!(
+            fs::read_to_string(theirs.path().join("hosts.yml")).unwrap(),
+            "their login\n"
+        );
     }
 
     /// The `gh` of the test's own, standing in for the one CI's container installs

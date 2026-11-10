@@ -583,13 +583,15 @@ struct Credential {
 /// the worker with no credential. It is told so in its instructions, and git is
 /// pointed at no helper at all, so nothing the maintainer logged into is asked.
 /// Nothing is minted, and no `gh` folder is written, where the worker could not
-/// have pushed with it. A token kelpie would not hand a worker, or a GitHub that
-/// cannot be reached, fails the start instead: the maintainer sees why, and the
-/// worker never runs as them.
+/// have pushed with it; whatever an earlier turn left in that folder is taken out,
+/// since it is still a live token until its hour is up. A token kelpie would not
+/// hand a worker, or a GitHub that cannot be reached, fails the start instead: the
+/// maintainer sees why, and the worker never runs as them.
 ///
 /// # Errors
 ///
-/// [`StartError::Login`]: the login folder could not be written.
+/// [`StartError::Login`]: the login folder could not be written, or the last
+/// turn's could not be taken out.
 /// [`StartError::Token`]: no token could be minted for the worker.
 fn credential(
     project: &Project<'_>,
@@ -628,16 +630,17 @@ fn credential(
     };
     env.extend(login::env(state_dir));
     let pushes = worker.is_some();
-    env.push((
-        "GIT_CONFIG_PARAMETERS".to_owned(),
-        match worker {
-            Some(worker) => {
-                login::write(state_dir, &worker.token).map_err(StartError::Login)?;
-                login::GIT_CONFIG.to_owned()
-            }
-            None => login::NO_HELPER.to_owned(),
-        },
-    ));
+    let helper = match worker {
+        Some(worker) => {
+            login::write(state_dir, &worker.token).map_err(StartError::Login)?;
+            login::GIT_CONFIG
+        }
+        None => {
+            login::clear(state_dir).map_err(StartError::Login)?;
+            login::NO_HELPER
+        }
+    };
+    env.push(("GIT_CONFIG_PARAMETERS".to_owned(), helper.to_owned()));
     Ok(Credential { pushes, env })
 }
 
