@@ -2,7 +2,9 @@
 //!
 //! [`AppState`] is what Tauri manages. It opens the run file in the app's data
 //! folder, sweeping what the previous run left behind before anything starts
-//! (ADR 0001), and reads `projects.json` from the same folder.
+//! (ADR 0001), reads `projects.json` from the same folder, and hands the tree
+//! the reaper beside the app's executable, which the engine starts as the run's
+//! first process so a crash or a `SIGKILL` still stops what the run started.
 //!
 //! `projects.json` is a list from the start, each entry
 //! `{ "id", "path", "pm_session" }`, so the rail can add projects later without
@@ -35,6 +37,37 @@ const PM_FOLDER: &str = "pm";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// The reaper's name, as `bundle.externalBin` in `tauri.conf.json` names it
+///
+/// Tauri reads that as `src-tauri/binaries/kelpie-reaper-sidecar-<target triple>`,
+/// which `scripts/build-reaper.sh` writes, and copies it beside the app binary
+/// under this name, the triple dropped. It is not `kelpie-reaper`, the name of
+/// the cargo bin: `tauri-build` deletes whatever holds the name it copies to, so
+/// the sidecar would replace the file cargo built.
+const REAPER: &str = "kelpie-reaper-sidecar";
+
+/// The reaper beside this executable, where Tauri puts a sidecar
+///
+/// `tauri-build` copies each `bundle.externalBin` next to the app binary with the
+/// target triple it requires dropped from the file's name, and every OS bundle
+/// puts a sidecar beside the binary it bundles. So the name `tauri.conf.json`
+/// gives, beside this executable, is where a run finds its reaper.
+///
+/// The bare name when the OS cannot say where this executable is, which
+/// [`AppState::open`] then refuses while naming the path it looked at.
+#[must_use]
+pub fn reaper_path() -> PathBuf {
+    let name = if cfg!(windows) {
+        format!("{REAPER}.exe")
+    } else {
+        REAPER.to_owned()
+    };
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|folder| folder.join(&name)))
+        .unwrap_or_else(|| PathBuf::from(&name))
+}
 
 /// One project kelpie holds a PM for
 // wire format: `projects.json` holds these entries
@@ -191,26 +224,39 @@ impl std::fmt::Debug for AppState {
 
 impl AppState {
     /// Open the state in `data_dir`, with `opener` to build each PM session from
-    /// `logins`, and `picker` to ask for a folder
+    /// `logins`, `picker` to ask for a folder, and the reaper at `reaper`
     ///
     /// Sweeps what the previous run's file lists before the new tree starts
-    /// anything, then writes a run file of its own. Starts no process and no
-    /// reaper.
+    /// anything, then writes a run file of its own. The engine starts `reaper`
+    /// as the run's first process, so no session can be built before it runs.
+    /// `None` starts no reaper, which leaves a crash or a `SIGKILL` unguarded
+    /// and is what a test asks for.
     ///
     /// # Errors
     ///
-    /// The data folder or a file in it cannot be read or written, or the
-    /// previous run's file is not a run file.
+    /// The data folder or a file in it cannot be read or written, the previous
+    /// run's file is not a run file, or the reaper cannot be started.
     pub fn open(
         data_dir: PathBuf,
         logins: Store,
         opener: Opener,
         picker: Picker,
+        reaper: Option<&Path>,
     ) -> io::Result<Self> {
         fs::create_dir_all(&data_dir)?;
         let run_file = data_dir.join(RUN_FILE);
         sweep_leftovers(&run_file)?;
-        let tree = Arc::new(ProcessTree::new(RunId::new()?, run_file)?);
+        let run = RunId::new()?;
+        let tree = match reaper {
+            Some(path) => ProcessTree::with_reaper(path, run, run_file).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not start the reaper at {}: {error}", path.display()),
+                )
+            })?,
+            None => ProcessTree::new(run, run_file)?,
+        };
+        let tree = Arc::new(tree);
         let projects = Projects::load(data_dir.join(PROJECTS_FILE))?;
         Ok(Self {
             data_dir,
@@ -458,6 +504,7 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
         state.set_project(PathBuf::from("/work/old")).unwrap();
@@ -486,6 +533,7 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
         assert_eq!(state.project_path(), None);
@@ -494,6 +542,113 @@ mod tests {
         assert!(
             dir.0.join("run.json").exists(),
             "the tree wrote its run file"
+        );
+    }
+
+    #[test]
+    fn the_reaper_is_looked_for_beside_the_executable() {
+        assert_eq!(reaper_path().file_name().unwrap(), REAPER);
+        assert_eq!(
+            reaper_path().parent(),
+            std::env::current_exe().unwrap().parent(),
+            "the app looks for its reaper beside its own executable"
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_reaper_to_start_never_opens() {
+        let dir = Dir::new();
+        let missing = dir.0.join("not-a-reaper");
+        let error = AppState::open(
+            dir.0.clone(),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+            Some(&missing),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("not-a-reaper"), "{error}");
+    }
+
+    /// A stand-in reaper: it blocks on its standard input and exits when it ends
+    ///
+    /// The reaper binary is `kelpie-reaper`'s, and `scripts/build-reaper.sh`
+    /// builds it into the sidecar folder. What these tests hold is the app's
+    /// half: the tree it opens has a reaper running before a session can be built.
+    #[cfg(unix)]
+    fn stand_in_reaper(dir: &Dir) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = dir.0.join("reaper");
+        fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// Whether the process table still lists `pid` as running
+    #[cfg(unix)]
+    fn running(pid: u32) -> bool {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        system.process(pid).is_some_and(|process| {
+            !matches!(
+                process.status(),
+                ProcessStatus::Zombie | ProcessStatus::Dead
+            )
+        })
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_reaper_starts_before_the_pm() {
+        let dir = Dir::new();
+        let reaper = stand_in_reaper(&dir);
+        let state = AppState::open(
+            dir.0.clone(),
+            Store::memory(),
+            Box::new(|opening| {
+                let reaper = opening
+                    .tree
+                    .reaper_id()
+                    .expect("the tree should hold a reaper by the time a PM is built");
+                assert!(running(reaper), "the reaper runs while the PM is built");
+                Err("no session here".to_owned())
+            }),
+            Box::new(|| Ok(None)),
+            Some(&reaper),
+        )
+        .unwrap();
+
+        let reaper = state
+            .tree()
+            .reaper_id()
+            .expect("the run has a reaper of its own");
+        assert!(running(reaper), "the reaper runs before any session exists");
+        assert!(state.held_session().is_none(), "no session before a send");
+
+        state.set_project(PathBuf::from("/work/one")).unwrap();
+        // The opener runs on this thread, and asserts from inside the build
+        state.pm_session().map(|_| ()).unwrap_err();
+
+        // Dropping the state closes the reaper's pipe, and the stand-in exits on
+        // the end of it. Waiting for that keeps the folder it lives in until the
+        // shell has read it.
+        drop(state);
+        let deadline = std::time::Instant::now() + STOP_GRACE;
+        while running(reaper) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !running(reaper),
+            "the reaper exits when the tree is dropped"
         );
     }
 }
