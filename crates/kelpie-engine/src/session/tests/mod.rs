@@ -496,7 +496,8 @@ fn a_harness_shows_the_names_of_its_environment_and_no_values() {
         format!("{harness:?}"),
         concat!(
             r#"Harness { program: "agent", args: [], env: ["TOKEN"], "#,
-            r#"new_session_meta: true, extensions: [], outdated: None }"#
+            r#"new_session_meta: true, extensions: [], hosts: [], installs: [], "#,
+            r#"unprompted: None, outdated: None }"#
         )
     );
 }
@@ -865,3 +866,4 @@ mod choose;
 mod instructions;
 mod kept_log;
 mod offered_options;
+mod sandboxed;

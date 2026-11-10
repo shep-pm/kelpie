@@ -20,6 +20,7 @@ testing = []
 [dependencies]
 agent-client-protocol.workspace = true
 blocking.workspace = true
+crabpot.workspace = true
 futures.workspace = true
 getrandom.workspace = true
 keyring.workspace = true
@@ -43,6 +44,14 @@ zip.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+
+# These run a real command inside crabpot. On Linux crabpot runs the test's own
+# binary again as its helper, which libtest's `main` would refuse, so the test
+# is its own `main`: it calls `sandbox::run_from_args` first, as the app does.
+[[test]]
+name = "sandbox"
+path = "tests/sandbox.rs"
+harness = false
 
 [dev-dependencies]
 # The parity check reads `docs/parity.toml`

@@ -12,7 +12,7 @@ use agent_client_protocol::Error;
 use semver::Version;
 
 use crate::harness::HarnessError;
-use crate::session::{Harness, Link, LogEntry, Setup, Source, Started, Swap, lock};
+use crate::session::{Harness, Launch, Link, LogEntry, Setup, Source, Started, Swap, lock};
 
 use super::describe;
 
@@ -44,6 +44,12 @@ pub(super) struct Attempt {
     /// The version this try swapped from, which the divider names and whose
     /// failure a failed start or open is
     pub(super) from: Option<Version>,
+    /// The value of the harness's `mode` option to set, `None` to leave it
+    ///
+    /// The session's own, or the one the started harness names when what
+    /// launched it runs in a sandbox, so each bridge version is judged by its
+    /// own launcher.
+    pub(super) mode: Option<String>,
 }
 
 /// Start the agent for one try, and say what its harness offers
@@ -70,6 +76,10 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
                     harness: (**harness).clone(),
                     version: None,
                     from: None,
+                    mode: setup
+                        .mode
+                        .clone()
+                        .or_else(|| unprompted(&**launcher, harness)),
                 },
                 link,
             ))
@@ -83,19 +93,48 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
             };
             let Started { harness, launch } = (bridge.start)(&version).map_err(not_started)?;
             let mut launch = launch;
-            let link = launch
+            let mode = setup
+                .mode
+                .clone()
+                .or_else(|| unprompted(&*launch, &harness));
+            let Link {
+                transport,
+                explain,
+                stop,
+            } = launch
                 .launch()
                 .map_err(|error| not_started(format!("could not start the harness: {error}")))?;
+            // What launched the agent owns what confines it, such as a sandbox
+            // whose proxy stops with it, so it stays until the agent has been
+            // stopped, not until this function returns (ADR 0005)
+            let link = Link {
+                transport,
+                explain,
+                stop: Box::new(move |grace| {
+                    let how = stop(grace);
+                    drop(launch);
+                    how
+                }),
+            };
             Ok((
                 Attempt {
                     harness,
                     from,
                     version: Some(version),
+                    mode,
                 },
                 link,
             ))
         }
     }
+}
+
+/// The mode that stops `harness`'s own prompts, when `launch` runs it in a sandbox
+fn unprompted(launch: &dyn Launch, harness: &Harness) -> Option<String> {
+    launch
+        .sandboxed()
+        .then(|| harness.unprompted.clone())
+        .flatten()
 }
 
 /// A try whose harness could not be started at all

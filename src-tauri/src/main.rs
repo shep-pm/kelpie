@@ -8,6 +8,10 @@
 mod sys;
 
 fn main() {
+    // First, before Tauri: crabpot runs this binary again as its helper on
+    // Linux and Windows (ADR 0005), and a `main` that skipped this would run
+    // there in place of the command.
+    kelpie_engine::sandbox::run_from_args();
     if let Err(error) = kelpie_app::run() {
         sys::failure(&error.to_string());
         std::process::exit(1);

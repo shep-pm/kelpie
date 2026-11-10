@@ -171,6 +171,10 @@ fn probe_harness(pin: &Pin<'_>, command: PathBuf) -> Result<Harness, String> {
         // The probe sends `initialize` alone, which asks the bridge for nothing
         new_session_meta: None,
         extensions: Vec::new(),
+        // The probe runs no sandbox and no model, so it names no host, folder or mode
+        hosts: Vec::new(),
+        installs: Vec::new(),
+        unprompted: None,
         // A probe that fails is recorded with the bridge's own words, so nothing
         // here has to name the harness the person installed
         outdated: None,

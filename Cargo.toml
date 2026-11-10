@@ -54,6 +54,11 @@ shep-tree = { version = "0.25.0", default-features = false, features = ["sysinfo
 # The process table the engine reads each process's environment from; the
 # version shep-tree uses, so the build holds one copy.
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+# Each session's sandbox (ADR 0005). crabpot runs the host binary again as its
+# helper on Linux and Windows, so the app calls `run_from_args` first. `cli` is
+# the `crabpot` command, which kelpie does not install.
+crabpot = { version = "0.10.8", default-features = false }
+
 # Reads `docs/parity.toml` in the engine's tests (the harness parity matrix)
 toml = { version = "1.2", default-features = false, features = ["std", "parse", "serde"] }
 # Linux: the child-subreaper flag

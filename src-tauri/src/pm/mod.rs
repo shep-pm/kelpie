@@ -13,6 +13,12 @@
 //! [`pm_history`] reads kelpie's own log of the PM and starts nothing, and
 //! [`pm_retry`] sends the last message again after a quit cut a turn off.
 //!
+//! The PM runs inside a crabpot sandbox: it reads the project and the folders
+//! beside it, writes its state folder alone, and reaches its model's host
+//! (ADR 0005), plus the domains the project's `network-allowlist` names. The
+//! `read-anywhere` setting opens its reads to the whole disk but its logins and
+//! secrets.
+//!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
 //! built-in layer (ADR 0006). Its bridge is installed on the first send, and
@@ -26,12 +32,11 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge::{self, Pin, Versions};
 use kelpie_engine::harness::claude;
-use kelpie_engine::login::Store;
+use kelpie_engine::sandbox::{self, Sandbox};
 use kelpie_engine::session::{
-    Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, launcher, log,
+    Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, log, sandboxed_launcher,
 };
 use kelpie_engine::settings::{BridgeUpdates, ConfigDir, Harness, Settings};
-use kelpie_engine::tree::ProcessTree;
 use semver::Version;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -80,6 +85,13 @@ pub struct PmPlan {
 
     /// The host the provider runs on
     pub host: Option<String>,
+
+    /// Domains the sandbox lets the PM reach besides its model's host
+    /// (`network-allowlist`)
+    pub network_allowlist: Vec<String>,
+
+    /// Whether the PM reads anywhere but its logins and secrets (`read-anywhere`)
+    pub read_anywhere: bool,
 }
 
 /// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
@@ -163,6 +175,8 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         instructions: (!instructions.trim().is_empty()).then_some(instructions),
         provider: settings.provider.value,
         host: settings.host.value,
+        network_allowlist: settings.network_allowlist.value,
+        read_anywhere: settings.read_anywhere.value,
     })
 }
 
@@ -186,21 +200,23 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 ///
 /// Installs the bridge if it is not yet, and builds the session on it, so the
 /// harness is built from the version [`Versions::current`] names at each send
-/// rather than from kelpie's pinned path.
+/// rather than from kelpie's pinned path. Every version is confined in a
+/// sandbox of its own, started with the version, so a bridge swapped in at an
+/// idle point runs inside crabpot as the first one did. Each sandbox lives as
+/// long as the launcher that holds it.
 ///
 /// # Errors
 ///
-/// The state folder cannot be made, the bridge cannot be installed, or the
-/// harness is not installed or has no login. The text says which.
+/// The state folder cannot be made, the bridge cannot be installed, the
+/// harness is not installed or has no login, or the sandbox cannot start. The
+/// text says which.
 pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
     let Opening {
-        tree,
         data_dir,
         project,
         state_dir,
-        logins,
         pm,
-        config,
+        ..
     } = *opening;
     // parity: harness.pm
     let session = match pm.harness {
@@ -210,15 +226,7 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
             // kelpie's own pin is always there to fall back to
             bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
             Session::on_bridge(
-                claude_bridge(
-                    tree,
-                    data_dir,
-                    config,
-                    &project.id,
-                    state_dir,
-                    logins,
-                    &project.path,
-                ),
+                claude_bridge(opening),
                 project.path.clone(),
                 project.pm_session.clone(),
                 pm.choice.clone(),
@@ -240,23 +248,26 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
 /// a newer version a bridge check installed and probed takes over at the
 /// session's next idle point, and a version that fails a session is marked bad
 /// there and the one before it is used again (`docs/design/bridge-updates.md`,
-/// Swapping).
-fn claude_bridge(
-    tree: &Arc<ProcessTree>,
-    data_dir: &Path,
-    config: &ConfigDir,
-    project_id: &str,
-    state_dir: &Path,
-    logins: &Store,
-    project: &Path,
-) -> Bridge {
+/// Swapping). Each version's harness starts inside a sandbox of its own, as the
+/// first one's does (ADR 0005), so no version runs outside crabpot.
+fn claude_bridge(opening: &Opening<'_>) -> Bridge {
+    let Opening {
+        tree,
+        data_dir,
+        project,
+        state_dir,
+        logins,
+        pm,
+        config,
+    } = *opening;
     let pin = claude::pin();
-    let (config, project_id, state_dir, project) = (
+    let (config, project_id, state_dir, folder) = (
         config.clone(),
-        project_id.to_owned(),
+        project.id.clone(),
         state_dir.to_path_buf(),
-        project.to_path_buf(),
+        project.path.clone(),
     );
+    let (network_allowlist, read_anywhere) = (pm.network_allowlist.clone(), pm.read_anywhere);
     let (logins, tree) = (logins.clone(), Arc::clone(tree));
     // Each closure holds its own copy of the folder, since a closure owns what it captures
     let (current_dir, start_dir, failed_dir) = (
@@ -285,8 +296,23 @@ fn claude_bridge(
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
             let harness =
                 claude::harness(cmd, &state_dir, &logins).map_err(|error| error.to_string())?;
+            let sandbox = Sandbox::start(
+                &harness,
+                &sandbox::Project {
+                    folder: &folder,
+                    network_allowlist: &network_allowlist,
+                    read_anywhere,
+                },
+                &state_dir,
+            )
+            .map_err(|error| format!("could not start the PM's sandbox: {error}"))?;
             Ok(Started {
-                launch: launcher(Arc::clone(&tree), harness.clone(), project.clone()),
+                launch: sandboxed_launcher(
+                    Arc::clone(&tree),
+                    harness.clone(),
+                    sandbox,
+                    folder.clone(),
+                ),
                 harness,
             })
         }),

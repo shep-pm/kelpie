@@ -15,6 +15,11 @@
 //! goose puts each shell command it runs in a process group of its own, so
 //! stopping a session stops those through the sweep for the run's mark, not
 //! through the harness's group (ADR 0001, ADR 0007).
+//!
+//! A sandboxed session (ADR 0005) lets through the host of the provider's
+//! address, or goose's default host for the provider when it has none,
+//! `localhost` included, and sets goose's `auto` mode, which approves every
+//! call.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -22,7 +27,7 @@ use std::path::Path;
 
 use crate::session::Harness;
 
-use super::{HarnessError, on_path};
+use super::{HarnessError, install_folders, on_path};
 
 /// The command kelpie looks for on `PATH`, and runs
 const CMD: &str = "goose";
@@ -38,6 +43,10 @@ const PATH_ROOT_ENV: &str = "GOOSE_PATH_ROOT";
 
 /// The variable that names the provider the session runs on
 const PROVIDER_ENV: &str = "GOOSE_PROVIDER";
+
+/// The goose `mode` that approves every tool call, which a sandboxed session
+/// sets: the sandbox is what confines it
+const UNPROMPTED: &str = "auto";
 
 /// The folder inside a session's state dir that goose keeps its files in
 const CONFIG_FOLDER: &str = "goose";
@@ -91,6 +100,7 @@ pub(super) fn harness_on_path(
     if let Some(host) = &provider.host {
         env.push((host_env(&provider.name), host.clone().into()));
     }
+    let installs = install_folders(&goose, path);
     Ok(Harness {
         program: goose,
         args: vec![ACP.into()],
@@ -99,9 +109,78 @@ pub(super) fn harness_on_path(
         new_session_meta: None,
         // kelpie reads no goose notification beyond ACP's own
         extensions: Vec::new(),
+        hosts: hosts_of(provider),
+        installs,
+        unprompted: Some(UNPROMPTED.to_owned()),
         // goose speaks ACP itself, so no bridge says anything about its version
         outdated: None,
     })
+}
+
+/// The hosts a sandboxed session on `provider` may reach
+///
+/// The host of the address the person gave, or else the host goose's own
+/// default for the provider answers on, so a session on `anthropic` or `openai`
+/// with no address still reaches its model. A provider that is in neither place
+/// has no host here, and a sandboxed session on it reaches only what the
+/// project's allowlist names.
+fn hosts_of(provider: &Provider) -> Vec<String> {
+    match &provider.host {
+        Some(address) => host_of(address).into_iter().collect(),
+        None => default_host(&provider.name)
+            .map(str::to_owned)
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// The host goose's own default for a provider answers on, for the providers
+/// whose default is one host
+///
+/// Kelpie names no provider of its own (ADR 0006): this is only where goose
+/// sends a session that gave no address, so the sandbox lets that through.
+fn default_host(provider: &str) -> Option<&'static str> {
+    Some(match provider {
+        "anthropic" => "api.anthropic.com",
+        "openai" => "api.openai.com",
+        "google" => "generativelanguage.googleapis.com",
+        "openrouter" => "openrouter.ai",
+        "groq" => "api.groq.com",
+        "xai" => "api.x.ai",
+        "ollama" => "localhost",
+        _ => return None,
+    })
+}
+
+/// The host in a provider's address, such as `127.0.0.1` in
+/// `http://127.0.0.1:11434`
+///
+/// The sandbox lets this host through, so the session reaches the model the
+/// person chose and nothing else (ADR 0005). `None` for an address with no host
+/// in it, and for a host the sandbox cannot name: crabpot takes a dotted name, an
+/// IP literal or `localhost`, and refuses the whole policy over any other, so a
+/// bare name such as `ollama` in `http://ollama:11434` is left out and the
+/// session starts, reaching only what the project's allowlist names.
+fn host_of(address: &str) -> Option<String> {
+    let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    // An IPv6 literal keeps its brackets, as the sandbox's allowlist spells it
+    let host = match host.strip_prefix('[') {
+        Some(v6) => &host[..=v6.find(']')? + 1],
+        None => host.split(':').next()?,
+    };
+    sandbox_can_name(host).then(|| host.to_owned())
+}
+
+/// Whether crabpot's allowlist takes `host`: an IPv6 literal in brackets,
+/// `localhost`, or a name with a dot inside it
+fn sandbox_can_name(host: &str) -> bool {
+    host.starts_with('[')
+        || host == "localhost"
+        || (host.contains('.') && !host.starts_with('.') && !host.ends_with('.'))
 }
 
 /// The variable provider `name` reads its host from

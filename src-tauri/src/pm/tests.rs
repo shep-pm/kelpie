@@ -347,6 +347,44 @@ fn another_harness_gets_no_model_kelpie_named_for_the_default_one() {
 }
 
 #[test]
+fn with_nothing_set_the_sandbox_has_no_extra_domain_and_reads_the_project_alone() {
+    let chat = Chat::on(&FakeAgent::new());
+    let project = chat.state().project_id(None).unwrap();
+
+    let plan = plan(chat.state().config(), &project).unwrap();
+
+    assert!(plan.network_allowlist.is_empty());
+    assert!(!plan.read_anywhere);
+}
+
+#[test]
+fn the_projects_allowlist_and_read_anywhere_settings_reach_the_plan() {
+    let chat = Chat::on(&FakeAgent::new());
+    let project = chat.state().project_id(None).unwrap();
+    let set = |key: &str, value: serde_json::Value| {
+        settings_set(
+            chat.state(),
+            Target::Project {
+                id: project.clone(),
+            },
+            key.to_owned(),
+            value,
+        )
+        .unwrap();
+    };
+    set(
+        "network-allowlist",
+        serde_json::json!(["docs.rs", "crates.io"]),
+    );
+    set("read-anywhere", serde_json::json!(true));
+
+    let plan = plan(chat.state().config(), &project).unwrap();
+
+    assert_eq!(plan.network_allowlist, ["docs.rs", "crates.io"]);
+    assert!(plan.read_anywhere);
+}
+
+#[test]
 fn the_reply_style_is_part_of_the_instructions_unless_the_harness_default_is_chosen() {
     let chat = Chat::on(&FakeAgent::new());
     let project = chat.state().project_id(None).unwrap();

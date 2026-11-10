@@ -254,6 +254,11 @@ pub(crate) fn launcher(tree: &Arc<ProcessTree>, harness: &Harness, project: &Pat
     ProcessLauncher {
         tree: Arc::clone(tree),
         harness: harness.clone(),
+        // The ask sends no prompt, so no model runs and the harness runs no tools
+        // before it ends. It is not sandboxed: a sandbox is per session, built
+        // from a project and a state folder, and an ask has neither. It is the
+        // one harness start outside a sandbox, and the one that sends nothing.
+        sandbox: None,
         project: project.to_path_buf(),
     }
 }
