@@ -88,14 +88,15 @@ const SECRETS: [&str; 11] = [
 ];
 
 /// The macOS services that answer for the keychain, which a session never asks
-const KEYCHAIN_SERVICES: [&str; 2] = ["com.apple.securityd.xpc", "com.apple.SecurityServer"];
+pub(super) const KEYCHAIN_SERVICES: [&str; 2] =
+    ["com.apple.securityd.xpc", "com.apple.SecurityServer"];
 
 /// The folders crabpot makes writable for a tool's own logs wherever nothing
 /// closes the home folder over them
 ///
 /// kelpie's writes are the state folder alone, so they are denied whatever the
 /// session reads.
-const TOOL_LOGS: [&str; 2] = ["~/.npm/_logs", "~/.claude/debug"];
+pub(super) const TOOL_LOGS: [&str; 2] = ["~/.npm/_logs", "~/.claude/debug"];
 
 /// How far a session reads, from the project's `read-anywhere` setting
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,7 +280,7 @@ pub fn holds_home(project: &Project<'_>) -> Option<PathBuf> {
 /// file or folder, never as the global folder whole, which holds their login and
 /// every secret. crabpot lands every allow after every deny, so the name carves
 /// only itself out of the deny around it.
-fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
+pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let closed = closed(project);
     let mut folders = vec![project.folder];
     // The folders beside the project: its sibling repos and worktrees. Named
@@ -318,7 +319,7 @@ fn closed(project: &Project<'_>) -> Vec<PathBuf> {
 }
 
 /// The harness's model hosts, then the project's allowlist, each once
-fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
+pub(super) fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
     let mut seen = HashSet::new();
     harness
         .hosts
@@ -344,17 +345,17 @@ fn real(path: &Path) -> PathBuf {
 }
 
 /// The person's home folder
-fn home() -> Option<std::path::PathBuf> {
+pub(super) fn home() -> Option<std::path::PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(Into::into)
 }
 
 /// A deny over `path` whole, as SK's `profile::home_denials` spells one
-fn glob(path: &Path) -> String {
+pub(super) fn glob(path: &Path) -> String {
     format!("{}/**", text(path))
 }
 
-fn text(path: &Path) -> String {
+pub(super) fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
