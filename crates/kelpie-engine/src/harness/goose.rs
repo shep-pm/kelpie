@@ -155,7 +155,10 @@ fn default_host(provider: &str) -> Option<&'static str> {
 ///
 /// The sandbox lets this host through, so the session reaches the model the
 /// person chose and nothing else (ADR 0005). `None` for an address with no host
-/// in it.
+/// in it, and for a host the sandbox cannot name: crabpot takes a dotted name, an
+/// IP literal or `localhost`, and refuses the whole policy over any other, so a
+/// bare name such as `ollama` in `http://ollama:11434` is left out and the
+/// session starts, reaching only what the project's allowlist names.
 fn host_of(address: &str) -> Option<String> {
     let rest = address.split_once("://").map_or(address, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -167,7 +170,15 @@ fn host_of(address: &str) -> Option<String> {
         Some(v6) => &host[..=v6.find(']')? + 1],
         None => host.split(':').next()?,
     };
-    (!host.is_empty()).then(|| host.to_owned())
+    sandbox_can_name(host).then(|| host.to_owned())
+}
+
+/// Whether crabpot's allowlist takes `host`: an IPv6 literal in brackets,
+/// `localhost`, or a name with a dot inside it
+fn sandbox_can_name(host: &str) -> bool {
+    host.starts_with('[')
+        || host == "localhost"
+        || (host.contains('.') && !host.starts_with('.') && !host.ends_with('.'))
 }
 
 /// The variable provider `name` reads its host from

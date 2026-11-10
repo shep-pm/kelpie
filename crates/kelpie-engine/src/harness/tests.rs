@@ -547,3 +547,19 @@ fn an_address_with_no_host_names_none() {
 
     assert!(harness.hosts.is_empty());
 }
+
+#[test]
+fn an_address_with_a_bare_host_name_names_none_for_the_sandbox_refuses_one() {
+    let dir = goose_installed();
+
+    for address in [
+        "http://ollama:11434",
+        "http://gateway/v1",
+        "http://host.:80",
+    ] {
+        let harness =
+            build_on(&path_of([dir.clone()]), &provider("ollama", Some(address))).unwrap();
+
+        assert!(harness.hosts.is_empty(), "{address}: {:?}", harness.hosts);
+    }
+}
