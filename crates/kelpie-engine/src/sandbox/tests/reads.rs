@@ -194,7 +194,7 @@ fn a_project_above_a_denied_folder_still_starts() {
         sessions_root: Path::new(SESSIONS),
     };
 
-    refused_project(&project)
+    check_project(&project)
         .unwrap_or_else(|error| panic!("a project beside a denied folder is refused: {error}"));
 
     let allowed = policy::reads(&on(&[]), &project, Path::new(STATE));
