@@ -33,22 +33,24 @@
 //! whatever goes wrong before the session can start reaches the chat as a
 //! [`SessionEvent::Failed`], like a failure mid-turn.
 
+use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge::{self, Pin, Versions};
-use kelpie_engine::harness::claude;
-use kelpie_engine::sandbox::{self, Reads, Sandbox};
+use kelpie_engine::harness::{HarnessError, claude};
+use kelpie_engine::login::Store;
+use kelpie_engine::sandbox::{self, Reads, Sandbox, SandboxError};
 use kelpie_engine::session::{
-    Bridge, Choice, LogEntry, SandboxAnswer, SandboxOutcome, Session, SessionEvent, Started, Swap,
-    log, sandboxed_launcher,
+    Bridge, Choice, Harness as SessionHarness, LogEntry, SandboxAnswer, SandboxOutcome, Session,
+    SessionEvent, Started, Swap, log, sandboxed_launcher,
 };
 use kelpie_engine::settings::{
     BridgeUpdates, ConfigDir, Field, Harness, LayerFile, Settings, SettingsError,
 };
-use kelpie_engine::tools::{SessionTools, Tools};
+use kelpie_engine::tools::{Door, SessionTools, Tools};
 use semver::Version;
 use serde_json::Value;
 use tauri::State;
@@ -222,6 +224,10 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 /// idle point runs inside crabpot as the first one did. Each sandbox lives as
 /// long as the launcher that holds it.
 ///
+/// Before it builds the session it starts the PM's sandbox once and runs a
+/// command in it ([`probe`]), and records in `opening.sandbox_setup` whether
+/// bwrap refused, so the chat can say why.
+///
 /// # Errors
 ///
 /// The state folder cannot be made, the bridge cannot be installed, the
@@ -243,7 +249,9 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
             fs::create_dir_all(state_dir)
                 .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
             // kelpie's own pin is always there to fall back to
-            bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
+            let pinned =
+                bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
+            probe(opening, tools.as_ref(), pinned)?;
             Session::on_bridge(
                 claude_bridge(opening, tools.clone()),
                 project.path.clone(),
@@ -278,27 +286,13 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         tree,
         data_dir,
         project,
-        state_dir,
-        sessions_root,
-        logins,
-        pm,
         config,
         ..
     } = *opening;
     let pin = claude::pin();
-    let (config, project_id, state_dir, folder) = (
-        config.clone(),
-        project.id.clone(),
-        state_dir.to_path_buf(),
-        project.path.clone(),
-    );
-    let sessions_root = sessions_root.to_path_buf();
-    let (network_allowlist, reads, harness_global_folder) = (
-        pm.network_allowlist.clone(),
-        pm.reads,
-        pm.harness_global_folder,
-    );
-    let (logins, tree) = (logins.clone(), Arc::clone(tree));
+    let (config, project_id) = (config.clone(), project.id.clone());
+    let (pm_sandbox, folder) = (PmSandbox::of(opening), project.path.clone());
+    let tree = Arc::clone(tree);
     // Each closure holds its own copy of the folder, since a closure owns what it captures
     let (current_dir, start_dir, failed_dir) = (
         data_dir.to_path_buf(),
@@ -324,20 +318,9 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         start: Box::new(move |version| {
             let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
-            let harness = claude::harness(cmd, &state_dir, &logins, harness_global_folder)
+            let (harness, sandbox) = pm_sandbox
+                .start(cmd, tools.as_ref().map(SessionTools::door))
                 .map_err(|error| error.to_string())?;
-            let sandbox = Sandbox::start_with_door(
-                &harness,
-                &sandbox::Project {
-                    folder: &folder,
-                    network_allowlist: &network_allowlist,
-                    reads,
-                    sessions_root: &sessions_root,
-                },
-                &state_dir,
-                tools.as_ref().map(SessionTools::door),
-            )
-            .map_err(|error| format!("could not start the PM's sandbox: {error}"))?;
             Ok(Started {
                 launch: sandboxed_launcher(
                     Arc::clone(&tree),
@@ -355,6 +338,120 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
             back
         }),
     }
+}
+
+/// What the PM's harness and sandbox are built from
+///
+/// One value builds both the probe ([`probe`]) and every start of the session,
+/// so the sandbox the probe tries is the one the session runs in.
+struct PmSandbox {
+    state_dir: PathBuf,
+    folder: PathBuf,
+    sessions_root: PathBuf,
+    logins: Store,
+    network_allowlist: Vec<String>,
+    reads: Reads,
+    harness_global_folder: bool,
+}
+
+/// Why the PM's harness or its sandbox could not be made
+enum Unstarted {
+    Harness(HarnessError),
+    Sandbox(SandboxError),
+}
+
+impl fmt::Display for Unstarted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Harness(error) => error.fmt(f),
+            Self::Sandbox(error) => write!(f, "could not start the PM's sandbox: {error}"),
+        }
+    }
+}
+
+impl PmSandbox {
+    fn of(opening: &Opening<'_>) -> Self {
+        let Opening {
+            project,
+            state_dir,
+            sessions_root,
+            logins,
+            pm,
+            ..
+        } = *opening;
+        Self {
+            state_dir: state_dir.to_path_buf(),
+            folder: project.path.clone(),
+            sessions_root: sessions_root.to_path_buf(),
+            logins: logins.clone(),
+            network_allowlist: pm.network_allowlist.clone(),
+            reads: pm.reads,
+            harness_global_folder: pm.harness_global_folder,
+        }
+    }
+
+    /// The PM's harness on the bridge `cmd`, and the sandbox it runs in
+    fn start(
+        &self,
+        cmd: PathBuf,
+        door: Option<&Door>,
+    ) -> Result<(SessionHarness, Sandbox), Unstarted> {
+        let harness = claude::harness(
+            cmd,
+            &self.state_dir,
+            &self.logins,
+            self.harness_global_folder,
+        )
+        .map_err(Unstarted::Harness)?;
+        let sandbox = Sandbox::start_with_door(
+            &harness,
+            &sandbox::Project {
+                folder: &self.folder,
+                network_allowlist: &self.network_allowlist,
+                reads: self.reads,
+                sessions_root: &self.sessions_root,
+            },
+            &self.state_dir,
+            door,
+        )
+        .map_err(Unstarted::Sandbox)?;
+        Ok((harness, sandbox))
+    }
+}
+
+/// Start the PM's sandbox, run a command in it, and drop it, so the session
+/// is not built on a sandbox that cannot start
+///
+/// What it finds goes to `opening.sandbox_setup`: a bwrap [`Refusal`] is kept
+/// for the chat, and any other outcome clears what an earlier start kept. The
+/// probe sits here and not in the bridge's `start` closure, since a failure
+/// there on a freshly swapped version reads as that version's fault and marks
+/// it bad (`Bridge::start`, `fell_back`).
+///
+/// # Errors
+///
+/// The harness or the sandbox cannot start, or the command cannot run in it.
+/// The text names the refusal when bwrap gave one.
+///
+/// [`Refusal`]: kelpie_engine::sandbox::Refusal
+fn probe(
+    opening: &Opening<'_>,
+    tools: Option<&SessionTools>,
+    pinned: PathBuf,
+) -> Result<(), String> {
+    let Opening { data_dir, tree, .. } = *opening;
+    // The version a session starts on now, else kelpie's own pin, which is always there
+    let pin = claude::pin();
+    let in_use = versions(data_dir, pin).in_use;
+    let cmd = bridge::installed(data_dir, pin.id, &in_use, claude::CMD).unwrap_or(pinned);
+    let found = PmSandbox::of(opening)
+        .start(cmd, tools.map(SessionTools::door))
+        .and_then(|(_, sandbox)| sandbox.ready(tree).map_err(Unstarted::Sandbox));
+    opening.sandbox_setup.record(match &found {
+        Err(Unstarted::Sandbox(SandboxError::Refused(refusal))) => Some(*refusal),
+        _ => None,
+    });
+    found.map_err(|error| error.to_string())
 }
 
 /// The bridge-updates policy for `bridge`, from the project's own settings
