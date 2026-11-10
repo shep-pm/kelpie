@@ -22,6 +22,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::agents::Binding;
 use crate::permission::Judge;
@@ -32,6 +33,7 @@ use crate::tools::{SessionTools, Tools};
 use crate::tree::ProcessTree;
 use crate::worktree::{self, Remote, clone};
 
+use super::ceiling::{Ceiling, Verdict, Watch};
 use super::{Record, Records, Seat, Status};
 
 /// The folder under the data folder that holds each project's state
@@ -179,6 +181,10 @@ pub struct Project<'a> {
     /// How many of the project's workers run at once (`worker-slots`)
     pub slots: usize,
 
+    /// How long a worker's turn may run, counted from its slot's grant
+    /// (`worker-turn-timeout`)
+    pub turn_timeout: Duration,
+
     /// The project's workers, oldest first, as their records keep them
     pub records: &'a Arc<Mutex<Records>>,
 
@@ -211,6 +217,7 @@ impl std::fmt::Debug for Project<'_> {
             .field("folder", &self.folder)
             .field("base", &self.base)
             .field("slots", &self.slots)
+            .field("turn_timeout", &self.turn_timeout)
             .field("reads", &self.reads)
             .finish_non_exhaustive()
     }
@@ -359,6 +366,10 @@ impl core::error::Error for StartError {
 /// for the record: the session id is kept as soon as the harness gives it, and
 /// the worker is done and holds no slot once its turn ends.
 ///
+/// A turn that runs past `project.turn_timeout` is cancelled and its worker
+/// Paused ([`super::ceiling`]). The time counts from the grant of the slot, which
+/// is before the worktree is prepared and the harness started.
+///
 /// A slot held here is given back when the worker never began. The design's
 /// order puts the slot first (`docs/design/workers.md`, Starting one), and the
 /// worktree, the log and the opener can each still fail after it.
@@ -379,12 +390,13 @@ pub fn start(
         });
     }
     let held = hold_slot(project, &ticket.id, &branch_of(&ticket.id))?;
+    let ceiling = Ceiling::from_grant(Instant::now(), project.turn_timeout);
     if held.record.seat == Seat::Waiting {
         return Ok(Started::Waiting {
             record: held.record,
         });
     }
-    match begin(project, ticket, held.record, events) {
+    match begin(project, ticket, held.record, ceiling, events) {
         Ok(started) => Ok(started),
         Err(error) => {
             // The slot was held for a worker that never began
@@ -410,6 +422,7 @@ fn begin(
     project: &Project<'_>,
     ticket: &Ticket,
     record: Record,
+    ceiling: Ceiling,
     events: impl FnMut(SessionEvent) + Send + 'static,
 ) -> Result<Started, StartError> {
     let branch = branch_of(&ticket.id);
@@ -474,7 +487,18 @@ fn begin(
             .with_instructions(instructions(project, &ticket.id))
             .with_log(log),
     );
-    session.send(ticket.text.clone(), kept(project, &ticket.id, events));
+    let watch = Watch::new();
+    session.send(
+        ticket.text.clone(),
+        kept(project, &ticket.id, watch.clone(), events),
+    );
+    watch.hold_to(
+        ceiling,
+        Arc::clone(&session),
+        Arc::clone(project.records),
+        ticket.id.clone(),
+        project.slots,
+    );
     Ok(Started::Running {
         record,
         session,
@@ -553,10 +577,12 @@ fn give_slot_back(project: &Project<'_>, ticket: &str, before: Option<&Record>) 
 /// Each change is kept before the event goes on, so a caller that hears a turn
 /// end finds the worker done and holding no slot. A `Failed` that the session
 /// goes on after is followed by that turn's `TurnEnded`, which settles the
-/// record as done.
+/// record as done, unless the turn was cancelled at its ceiling: the worker is
+/// Paused then, and stays so.
 fn kept(
     project: &Project<'_>,
     ticket: &str,
+    watch: Watch,
     mut events: impl FnMut(SessionEvent) + Send + 'static,
 ) -> impl FnMut(SessionEvent) + Send + 'static {
     let kept = Arc::clone(project.records);
@@ -572,11 +598,13 @@ fn kept(
                 );
             }
             SessionEvent::TurnEnded { .. } => {
-                lost(
-                    &ticket,
-                    records.set_status(&ticket, Status::Ended),
-                    "its end",
-                );
+                if watch.turn_ended() == Verdict::Ended {
+                    lost(
+                        &ticket,
+                        records.set_status(&ticket, Status::Ended),
+                        "its end",
+                    );
+                }
             }
             SessionEvent::Failed { .. } => {
                 lost(

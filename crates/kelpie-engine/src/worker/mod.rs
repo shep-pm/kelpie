@@ -5,8 +5,9 @@
 //! here: a project runs at most its `worker-slots` of them at once, and one
 //! that is Paused or waiting on the maintainer gives its slot back (SK ADR
 //! 0007). [`start()`] is the one function that begins a worker, for the Start
-//! button, the PM's `start_worker` and the board's dispatch alike, and
-//! [`record`] keeps what each one is doing, outside every folder it writes.
+//! button, the PM's `start_worker` and the board's dispatch alike. [`ceiling`]
+//! stops a turn that runs past its `worker-turn-timeout`, and [`record`] keeps
+//! what each one is doing, outside every folder it writes.
 //!
 //! # Quick start
 //!
@@ -28,6 +29,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod ceiling;
 pub mod record;
 pub mod slots;
 pub mod start;

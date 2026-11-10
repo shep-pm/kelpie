@@ -217,7 +217,12 @@ fn worker_turn_timeout_defaults_to_sixty_minutes() {
         "the ceiling is one project's own"
     );
 
-    for value in [json!(0), json!("60"), json!(-1), json!(MAX_TURN_MINUTES + 1)] {
+    for value in [
+        json!(0),
+        json!("60"),
+        json!(-1),
+        json!(MAX_TURN_MINUTES + 1),
+    ] {
         let error = Settings::set(
             &dir.config(),
             LayerFile::Project("web"),
