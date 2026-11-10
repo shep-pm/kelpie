@@ -10,7 +10,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 const pmSend =
-  vi.fn<(text: string, on: Channel<SessionEvent>) => Promise<void>>();
+  vi.fn<
+    (
+      text: string,
+      on: Channel<SessionEvent>,
+    ) => Promise<string | null | undefined>
+  >();
 const pmCancel = vi.fn(async () => {});
 const pmRetry = vi.fn<(on: Channel<SessionEvent>) => Promise<void>>();
 const pmHistory =
@@ -196,6 +201,55 @@ describe("the chat store", () => {
     expect(useChat.getState().turns).toMatchObject([
       { user: "old question", reply: "old answer", state: "done", usage },
       { user: "new question", state: "running" },
+    ]);
+  });
+
+  it("a divider entry shows in the history", async () => {
+    const switched = "Switched from Claude Code (opus) to goose (qwen)";
+    const ended = {
+      entry: "event",
+      kind: "turn_ended",
+      stop_reason: "end_turn",
+      usage: null,
+    } as const;
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "first" },
+        ended,
+        // A switch is logged before the message that starts the new session
+        { entry: "divider", text: switched },
+        { entry: "user", text: "second" },
+        ended,
+        // A refused resume is logged while its message's turn is running
+        { entry: "user", text: "third" },
+        { entry: "event", kind: "failed", message: "could not resume" },
+        { entry: "divider", text: "Couldn't resume, started a new session" },
+        { entry: "event", kind: "started", session_id: "s2" },
+        ended,
+      ],
+    });
+
+    await useChat.getState().load();
+
+    expect(useChat.getState().turns).toMatchObject([
+      { user: "first", dividers: [] },
+      { user: "second", dividers: [switched] },
+      {
+        user: "third",
+        dividers: ["Couldn't resume, started a new session"],
+        state: "done",
+      },
+    ]);
+  });
+
+  it("a send that switched the harness shows the divider it was given", async () => {
+    pmSend.mockResolvedValue("Switched from Claude Code to goose");
+
+    await useChat.getState().send("hello");
+
+    expect(useChat.getState().turns).toMatchObject([
+      { user: "hello", dividers: ["Switched from Claude Code to goose"] },
     ]);
   });
 

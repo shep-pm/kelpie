@@ -126,7 +126,7 @@ pub enum SessionEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "entry", rename_all = "snake_case")]
-#[non_exhaustive] // dividers and notes arrive with their own slices
+#[non_exhaustive] // notes arrive with their own slice
 pub enum LogEntry {
     /// A message the maintainer sent, which starts a turn
     User {
@@ -135,6 +135,14 @@ pub enum LogEntry {
     },
     /// An event the session streamed
     Event(SessionEvent),
+    /// A line kelpie wrote between two sessions, such as a switch of harness
+    ///
+    /// The history above it stays, and the session below it starts from a
+    /// seed instead of from what is above.
+    Divider {
+        /// What the line says
+        text: String,
+    },
 }
 
 /// How far a tool call got
@@ -297,6 +305,12 @@ mod tests {
                     delta: "Hello".to_owned(),
                 }),
                 r#"{"entry":"event","kind":"text","delta":"Hello"}"#,
+            ),
+            (
+                LogEntry::Divider {
+                    text: "Switched".to_owned(),
+                },
+                r#"{"entry":"divider","text":"Switched"}"#,
             ),
         ];
         for (entry, json) in entries {
