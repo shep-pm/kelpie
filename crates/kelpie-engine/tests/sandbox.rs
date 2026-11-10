@@ -23,6 +23,11 @@ use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
 use kelpie_engine::tree::{ProcessTree, sweep_marked};
 
+// SK's sandbox escapes, tried against the PM's policy. Their own file, and run
+// here, since a sandboxed test needs this binary's `main` on Linux
+#[path = "sandbox/escapes.rs"]
+mod escapes;
+
 /// The argument that makes this binary the sandboxed process the sweep looks for
 const SLEEP: &str = "--sleep-in-the-sandbox";
 
@@ -126,7 +131,7 @@ impl Selection {
     }
 }
 
-const TESTS: [(&str, fn()); 5] = [
+const TESTS: &[(&str, fn())] = &[
     (
         "the_value_of_a_libtest_option_is_not_a_filter",
         the_value_of_a_libtest_option_is_not_a_filter,
@@ -146,6 +151,32 @@ const TESTS: [(&str, fn()); 5] = [
     (
         "the_sweep_finds_a_sandboxed_process",
         the_sweep_finds_a_sandboxed_process,
+    ),
+    (
+        "escapes::harness_files_are_refused_in_any_case_and_spelling",
+        escapes::harness_files_are_refused_in_any_case_and_spelling,
+    ),
+    (
+        "escapes::a_nested_claude_folder_is_refused",
+        escapes::a_nested_claude_folder_is_refused,
+    ),
+    (
+        "escapes::the_pm_reads_the_project_and_no_other_repo_of_the_home",
+        escapes::the_pm_reads_the_project_and_no_other_repo_of_the_home,
+    ),
+    (
+        "escapes::a_403_to_the_connect_is_the_proxys_refusal_and_a_failed_connect_is_not",
+        escapes::a_403_to_the_connect_is_the_proxys_refusal_and_a_failed_connect_is_not,
+    ),
+    (
+        "escapes::a_host_not_allowed_and_a_socket_not_listed_are_refused",
+        escapes::a_host_not_allowed_and_a_socket_not_listed_are_refused,
+    ),
+    // Only Linux turns a listed socket off; macOS reaches it
+    #[cfg(target_os = "linux")]
+    (
+        "escapes::a_socket_the_policy_lists_is_still_refused_on_linux",
+        escapes::a_socket_the_policy_lists_is_still_refused_on_linux,
     ),
 ];
 
@@ -259,9 +290,15 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
 /// `SKIPPED`, for a host known not to run one.
 fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
     let sandbox = scratch.sandbox(program);
-    let probe = sh(&sandbox, "true");
+    host_can_run(test, &sh(&sandbox, "true")).then_some(sandbox)
+}
+
+/// Whether `probe`, `true` run in a sandbox, shows this host runs one
+///
+/// A host that cannot fails the test, or skips it when [`SKIP`] is set.
+fn host_can_run(test: &str, probe: &Output) -> bool {
     if probe.status.success() {
-        return Some(sandbox);
+        return true;
     }
     let stderr = String::from_utf8_lossy(&probe.stderr);
     assert!(
@@ -278,7 +315,7 @@ fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sand
         "SKIPPED {test}: this host cannot run a sandbox ({})",
         stderr.trim()
     );
-    None
+    false
 }
 
 fn a_write_outside_the_state_dir_is_refused() {

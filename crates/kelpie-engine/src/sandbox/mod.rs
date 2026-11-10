@@ -155,5 +155,9 @@ impl Sandbox {
     }
 }
 
+// The escapes SK tried against a sandbox, tried here against the PM's policy,
+// are `tests/sandbox/escapes.rs`, not a module of this one: on Linux crabpot
+// runs the test binary again as its helper, which this library's `libtest`
+// `main` would refuse.
 #[cfg(test)]
 mod tests;
