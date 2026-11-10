@@ -13,13 +13,13 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    CancelNotification, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    EnvVariable, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelectOptions, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, StopReason as AcpStopReason, SystemPrompt, TextContent,
-    ToolCallStatus,
+    CancelNotification, ContentBlock, ContentChunk, EnvVariable, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest,
+    PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOptions, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    StopReason as AcpStopReason, SystemPrompt, TextContent, ToolCallStatus,
 };
 use agent_client_protocol::{
     Agent, Client, Error, UntypedMessage, is_connection_terminated, is_incoming_transport_closed,

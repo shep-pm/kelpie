@@ -11,6 +11,10 @@
 //! - **Writes:** the state folder alone.
 //! - **Network:** the harness's model hosts plus the project's allowlist, and
 //!   nothing else gets through: a host off the list is refused, not asked about.
+//! - **The door:** kelpie's tools door, when a session has one, and that one
+//!   address alone: a Unix socket's path on macOS (`allowUnixSockets`), a
+//!   `127.0.0.1` address and port on Linux (`allowTcp`). `allowLocalBinding`
+//!   stays off.
 //!
 //! The logins and secrets are closed whatever else is read, and every
 //! harness's login is closed to every other harness's session (ADR 0006).
@@ -23,6 +27,7 @@ use crabpot::{Config, ConfigError};
 use serde_json::json;
 
 use crate::session::Harness;
+use crate::tools::Door;
 
 /// The files in the home folder that hold each harness's login, and whose
 /// session may not read any of them: a harness gets its own login through its
@@ -111,11 +116,36 @@ pub fn policy(
     project: &Project<'_>,
     state_dir: &Path,
 ) -> Result<Config, ConfigError> {
+    policy_with_door(harness, project, state_dir, None)
+}
+
+/// [`policy`] with kelpie's tools `door` named, for a session that reaches them
+///
+/// The door is the one extra route out: its socket (macOS) or its address
+/// (Linux) and nothing beside it, and the harness starts the relay inside the
+/// sandbox, so the relay's own binary is read too when the home folder is
+/// closed.
+///
+/// # Errors
+///
+/// As [`policy`], and the door is one this platform's crabpot cannot grant: a
+/// TCP address on macOS, where Seatbelt cannot narrow `allowTcp` to one host.
+pub fn policy_with_door(
+    harness: &Harness,
+    project: &Project<'_>,
+    state_dir: &Path,
+    door: Option<&Door>,
+) -> Result<Config, ConfigError> {
     let mut deny_read: Vec<String> = denied().into_iter().map(str::to_owned).collect();
     let mut allow_read = Vec::new();
     if !project.read_anywhere {
         deny_read.push("~".to_owned());
         allow_read = reads(harness, project, state_dir);
+        if door.is_some()
+            && let Ok(relay) = env::current_exe()
+        {
+            allow_read.push(text(&relay));
+        }
     }
     let mut network = json!({
         "allowedDomains": hosts(harness, project),
@@ -124,6 +154,14 @@ pub fn policy(
         // the sandbox request prompt's, not the proxy's
         "strictAllowlist": true,
     });
+    if let Some(door) = door {
+        if let Some(socket) = door.socket() {
+            network["allowUnixSockets"] = json!([text(socket)]);
+        }
+        if let Some(address) = door.tcp() {
+            network["allowTcp"] = json!([address.to_string()]);
+        }
+    }
     // Only macOS has a keychain to ask
     if cfg!(target_os = "macos") {
         network["denyMachLookup"] = json!(KEYCHAIN_SERVICES);

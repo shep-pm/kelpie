@@ -97,10 +97,12 @@ fn hex128() -> io::Result<String> {
 
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(io::Error::other)?;
-    Ok(bytes.iter().fold(String::with_capacity(32), |mut text, byte| {
-        let _ = write!(text, "{byte:02x}");
-        text
-    }))
+    Ok(bytes
+        .iter()
+        .fold(String::with_capacity(32), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        }))
 }
 
 /// kelpie's tools server, with its door open
@@ -138,10 +140,12 @@ impl Tools {
             let _entered = runtime.enter();
             door::Listener::from_std(listener)?
         };
-        let thread = std::thread::Builder::new().name("kelpie-tools".to_owned()).spawn({
-            let (shared, stop) = (Arc::clone(&shared), stop.clone());
-            move || runtime.block_on(serve::accept(listener, shared, stop))
-        })?;
+        let thread = std::thread::Builder::new()
+            .name("kelpie-tools".to_owned())
+            .spawn({
+                let (shared, stop) = (Arc::clone(&shared), stop.clone());
+                move || runtime.block_on(serve::accept(listener, shared, stop))
+            })?;
         Ok(Self {
             shared,
             door: open.door.clone(),
@@ -271,7 +275,7 @@ mod serve {
     use tokio_util::sync::CancellationToken;
 
     use super::door::{Accepted, Listener};
-    use super::{Shared, SessionKey, locked};
+    use super::{SessionKey, Shared, locked};
 
     /// How long a connection has to send its token
     const TOKEN_WITHIN: Duration = Duration::from_secs(5);
@@ -311,8 +315,7 @@ mod serve {
     async fn connection(stream: Accepted, shared: Arc<Shared>) {
         let (read, write) = tokio::io::split(stream);
         let mut read = BufReader::new(read);
-        let Ok(Ok(Some(token))) = tokio::time::timeout(TOKEN_WITHIN, token(&mut read)).await
-        else {
+        let Ok(Ok(Some(token))) = tokio::time::timeout(TOKEN_WITHIN, token(&mut read)).await else {
             return;
         };
         let Some(live) = locked(&shared.live).get(&token).cloned() else {

@@ -139,7 +139,9 @@ fn the_relay_carries_mcp_to_kelpie_and_back() {
     );
     assert_eq!(listed["id"], 2);
     assert_eq!(listed["result"]["tools"], json!([]), "{listed}");
-    relayed.finish().expect("the relay ends once its input does");
+    relayed
+        .finish()
+        .expect("the relay ends once its input does");
 }
 
 #[test]
@@ -157,7 +159,9 @@ fn a_relay_without_a_live_token_is_refused() {
     ] {
         let mut relayed = relayed(&door, &token);
         // Whatever it asks, nothing answers
-        let _ = relayed.to_relay.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        let _ = relayed
+            .to_relay
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
         let error = relayed
             .ended
             .join()
@@ -190,7 +194,10 @@ fn a_relay_with_no_token_in_its_environment_says_which_is_missing() {
     assert!(empty_token.to_string().contains(TOKEN_VAR), "{empty_token}");
     assert!(no_door.to_string().contains(DOOR_VAR), "{no_door}");
     assert_eq!(bad_door.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!((door.to_string(), token.as_str()), ("127.0.0.1:9".to_owned(), "abc"));
+    assert_eq!(
+        (door.to_string(), token.as_str()),
+        ("127.0.0.1:9".to_owned(), "abc")
+    );
 }
 
 #[test]
@@ -236,7 +243,9 @@ fn dropping_a_sessions_tools_ends_its_connection() {
 
     // The relay ends though its input is still open: kelpie closed the door's end
     let ended = relayed.ended;
-    until("the relay outlived its session's tools", || ended.is_finished());
+    until("the relay outlived its session's tools", || {
+        ended.is_finished()
+    });
     assert!(ended.join().unwrap().is_ok());
 }
 
@@ -280,7 +289,10 @@ fn the_server_is_handed_on_new_load_and_resume() {
         session.send("Hello", move |event| {
             let _ = sender.send(event);
         });
-        while !matches!(heard.recv_timeout(WAIT).unwrap(), SessionEvent::TurnEnded { .. }) {}
+        while !matches!(
+            heard.recv_timeout(WAIT).unwrap(),
+            SessionEvent::TurnEnded { .. }
+        ) {}
     };
     say(&news, None);
     say(&resumes, Some("old"));
@@ -309,7 +321,10 @@ fn a_session_with_no_tools_hands_its_harness_no_server() {
     session.send("Hello", move |event| {
         let _ = sender.send(event);
     });
-    while !matches!(heard.recv_timeout(WAIT).unwrap(), SessionEvent::TurnEnded { .. }) {}
+    while !matches!(
+        heard.recv_timeout(WAIT).unwrap(),
+        SessionEvent::TurnEnded { .. }
+    ) {}
 
     assert_eq!(agent.params("session/new")[0]["mcpServers"], json!([]));
 }
@@ -359,7 +374,10 @@ fn the_door_is_the_platforms_own() {
         assert!(door.socket().is_some_and(Path::exists), "{door}");
     } else {
         let address = door.tcp().expect("a TCP door");
-        assert!(address.ip().is_loopback() && address.ip().is_ipv4(), "{door}");
+        assert!(
+            address.ip().is_loopback() && address.ip().is_ipv4(),
+            "{door}"
+        );
         assert_ne!(address.port(), 0);
     }
 }
@@ -382,7 +400,11 @@ mod macos {
 
         let socket = tools.door().socket().unwrap().to_owned();
         assert!(!socket.starts_with(&long), "{}", socket.display());
-        assert!(socket.as_os_str().len() <= LONGEST_SOCKET, "{}", socket.display());
+        assert!(
+            socket.as_os_str().len() <= LONGEST_SOCKET,
+            "{}",
+            socket.display()
+        );
         // It binds and answers, which a path past the limit could not
         let session = tools.session();
         let mut relayed = relayed(session.door(), session.token());
@@ -392,13 +414,22 @@ mod macos {
     #[test]
     fn a_short_data_folder_keeps_the_socket_in_it() {
         let scratch = Scratch::new();
+        // A temporary folder that is itself long (a CI runner's) leaves no room
+        // for the name, and the socket goes to the temporary folder instead
+        let fits = scratch.0.as_os_str().len() + "/".len() + 32 + ".sock".len() <= LONGEST_SOCKET;
 
         let tools = started(&scratch);
 
         let socket = tools.door().socket().unwrap();
-        assert_eq!(socket.parent(), Some(scratch.0.as_path()));
+        let wanted = if fits {
+            scratch.0.clone()
+        } else {
+            env::temp_dir()
+        };
+        assert_eq!(socket.parent(), Some(wanted.as_path()));
         let name = socket.file_name().unwrap().to_string_lossy();
         let stem = name.strip_suffix(".sock").expect("a .sock file");
+        let stem = stem.strip_prefix("kelpie-").unwrap_or(stem);
         assert_eq!(stem.len(), 32);
         assert!(stem.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }

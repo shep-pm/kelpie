@@ -89,7 +89,9 @@ impl Door {
         match &self.address {
             Address::Tcp(address) => TcpStream::connect(address).map(Stream::Tcp),
             #[cfg(unix)]
-            Address::Socket(path) => std::os::unix::net::UnixStream::connect(path).map(Stream::Unix),
+            Address::Socket(path) => {
+                std::os::unix::net::UnixStream::connect(path).map(Stream::Unix)
+            }
             #[cfg(not(unix))]
             Address::Socket(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
