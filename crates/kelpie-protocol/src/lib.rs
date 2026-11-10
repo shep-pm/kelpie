@@ -103,6 +103,18 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// The agent asked to reach a host the sandbox refuses, and waits for the maintainer
+    ///
+    /// Answered with `Session::answer`. A turn that ends, or a session that
+    /// stops, while it waits answers it denied.
+    SandboxRequest {
+        /// The request's id, which the answer names
+        id: String,
+        /// The host the agent wants to reach, a name as the sandbox's network lists take it
+        host: String,
+        /// Why the agent wants it, in its own words
+        why: String,
+    },
     /// The turn is over
     TurnEnded {
         /// Why it ended
@@ -148,6 +160,21 @@ pub enum LogEntry {
         /// What the line says
         text: String,
     },
+}
+
+/// The maintainer's answer to a [`SessionEvent::SandboxRequest`]
+// wire format: changing this is a breaking change
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive] // an answer may grow a scope, such as every project
+pub enum SandboxAnswer {
+    /// Let the host through for as long as the session runs
+    Once,
+    /// Let it through for the session, and the app saves it to the project's allowlist
+    Project,
+    /// Change nothing
+    Deny,
 }
 
 /// How far a tool call got

@@ -22,7 +22,8 @@
 //! Dropping a [`SessionTools`] ends its token and the connections made with it.
 //! Dropping the [`Tools`] closes the door.
 //!
-//! This is the route with no tools on it yet.
+//! The tools on the route are `network`'s `request_network`, which asks the
+//! maintainer for a host the sandbox refuses.
 //!
 //! # Quick start
 //!
@@ -49,10 +50,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 pub use door::Door;
+pub(crate) use network::Asks;
+pub use network::Reach;
 pub use relay::{DOOR_VAR, TOKEN_VAR, run_from_args};
 use tokio_util::sync::CancellationToken;
 
 mod door;
+mod network;
 mod relay;
 #[cfg(test)]
 mod tests;
@@ -89,6 +93,8 @@ struct Shared {
 #[derive(Debug, Clone)]
 struct Live {
     key: SessionKey,
+    /// The session's waiting requests
+    asks: Asks,
     /// Cancelled when the session's tools are dropped
     ended: CancellationToken,
 }
@@ -211,10 +217,12 @@ impl Tools {
         let token = hex128().unwrap_or_else(|error| panic!("cannot draw a token: {error}"));
         let key = SessionKey(self.shared.next.fetch_add(1, Ordering::SeqCst));
         let ended = self.stop.child_token();
+        let asks = Asks::default();
         locked(&self.shared.live).insert(
             token.clone(),
             Live {
                 key,
+                asks: asks.clone(),
                 ended: ended.clone(),
             },
         );
@@ -224,6 +232,7 @@ impl Tools {
                 token,
                 door: self.door.clone(),
                 shared: Arc::clone(&self.shared),
+                asks,
                 ended,
             }),
         }
@@ -253,6 +262,7 @@ struct Inner {
     token: String,
     door: Door,
     shared: Arc<Shared>,
+    asks: Asks,
     ended: CancellationToken,
 }
 
@@ -274,6 +284,11 @@ impl SessionTools {
     pub fn token(&self) -> &str {
         &self.inner.token
     }
+
+    /// The session's waiting requests
+    pub(crate) fn asks(&self) -> &Asks {
+        &self.inner.asks
+    }
 }
 
 impl Drop for Inner {
@@ -290,13 +305,18 @@ mod serve {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rmcp::model::{ServerCapabilities, ServerConfig};
-    use rmcp::{ServerHandler, ServiceExt};
+    use rmcp::model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+        PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    };
+    use rmcp::service::RequestContext;
+    use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio_util::sync::CancellationToken;
 
     use super::door::{Accepted, Listener};
-    use super::{SessionKey, Shared, locked};
+    use super::network::REQUEST_NETWORK;
+    use super::{Asks, SessionKey, Shared, locked};
 
     /// How long a connection has to send its token
     const TOKEN_WITHIN: Duration = Duration::from_secs(5);
@@ -307,15 +327,88 @@ mod serve {
     /// The MCP server one connection is served by, for the session its token names
     #[derive(Debug)]
     struct Server {
-        /// Which session is asking, for the tools that come next to act for
-        #[expect(dead_code, reason = "no tool is on the route yet")]
-        key: SessionKey,
+        /// The session's waiting requests, which its tools act for
+        asks: Asks,
     }
 
     impl ServerHandler for Server {
         fn get_info(&self) -> ServerConfig {
             ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         }
+
+        async fn list_tools(
+            &self,
+            _request: Option<PaginatedRequestParams>,
+            _context: RequestContext<RoleServer>,
+        ) -> Result<ListToolsResult, ErrorData> {
+            Ok(ListToolsResult::with_all_items(vec![request_network()]))
+        }
+
+        async fn call_tool(
+            &self,
+            request: CallToolRequestParams,
+            _context: RequestContext<RoleServer>,
+        ) -> Result<CallToolResponse, ErrorData> {
+            if request.name != REQUEST_NETWORK {
+                return Err(ErrorData::invalid_params(
+                    format!("kelpie has no tool named {}", request.name),
+                    None,
+                ));
+            }
+            let argument = |name: &str| {
+                request
+                    .arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.get(name))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            };
+            let (Some(host), Some(why)) = (argument("host"), argument("why")) else {
+                return Ok(said(Err(
+                    "request_network takes a `host` and a `why`, both text".to_owned(),
+                )));
+            };
+            Ok(said(self.asks.request(&host, &why).await))
+        }
+    }
+
+    /// A tool's answer, which the agent reads as one line
+    fn said(line: Result<String, String>) -> CallToolResponse {
+        let (line, failed) = match line {
+            Ok(line) => (line, false),
+            Err(line) => (line, true),
+        };
+        let content = vec![ContentBlock::text(line)];
+        CallToolResponse::from(if failed {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        })
+    }
+
+    fn request_network() -> Tool {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "The host to reach, a name such as docs.rs or *.docs.rs. Not a URL, a path or a port.",
+                },
+                "why": {
+                    "type": "string",
+                    "description": "Why you need it, in a sentence the maintainer reads when they decide.",
+                },
+            },
+            "required": ["host", "why"],
+        });
+        let serde_json::Value::Object(schema) = schema else {
+            unreachable!("a JSON object literal")
+        };
+        Tool::new(
+            REQUEST_NETWORK,
+            "Ask the maintainer to let the sandbox reach a host it refused. Waits for their answer, and says in one line whether the host is now allowed.",
+            schema,
+        )
     }
 
     /// Accept connections until `stop`, each served on a task of its own
@@ -350,7 +443,7 @@ mod serve {
         let ended = live.ended;
         // A harness that connects and never says hello holds nothing open: the
         // handshake ends with the session's tools, and with its deadline
-        let hello = (Server { key: live.key }).serve_with_ct((read, write), ended.child_token());
+        let hello = (Server { asks: live.asks }).serve_with_ct((read, write), ended.child_token());
         let running = tokio::select! {
             () = ended.cancelled() => return,
             started = tokio::time::timeout(shared.hello_within, hello) => match started {
