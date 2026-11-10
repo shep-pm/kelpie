@@ -232,15 +232,22 @@ fn write(file: &Path, list: &[Project]) -> io::Result<()> {
 /// worker still holding a slot is marked Paused and gives it back. Its session id
 /// is kept, so the maintainer can resume it.
 ///
-/// # Errors
-///
-/// A project's records file cannot be read or written.
-fn pause_mid_turn_workers(data_dir: &Path, projects: &[Project]) -> io::Result<()> {
+/// One project's records file costs the launch nothing: it is left as it is and
+/// named on stderr, so the PM and every other project still start. A file from a
+/// newer kelpie, or one that cannot be read, is what a launch cannot settle.
+fn pause_mid_turn_workers(data_dir: &Path, projects: &[Project]) {
     for project in projects {
         let file = Paths::new(data_dir, &project.id).records();
-        Records::load(file)?.pause_mid_turn()?;
+        let paused = Records::load(file.clone())
+            .and_then(|mut records| records.pause_mid_turn())
+            .map(|_| ());
+        if let Err(error) = paused {
+            eprintln!(
+                "kelpie: {} was read without its workers paused: {error}",
+                file.display()
+            );
+        }
     }
-    Ok(())
 }
 
 /// Asks the maintainer for a folder: the path they picked, `None` when they closed the dialog
@@ -376,7 +383,7 @@ impl AppState {
         };
         let tree = Arc::new(tree);
         let projects = Projects::load(data_dir.join(PROJECTS_FILE))?;
-        pause_mid_turn_workers(&data_dir, projects.list())?;
+        pause_mid_turn_workers(&data_dir, projects.list());
         // A door that will not open costs the sessions kelpie's tools, not the app
         let tools = Tools::start(&data_dir)
             .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
