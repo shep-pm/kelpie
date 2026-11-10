@@ -85,6 +85,9 @@ fn tree(dir: &Scratch) -> ProcessTree {
 }
 
 /// Wait until `name` holds `want` places, as kelpie's lease status says
+///
+/// Only the rejoin test waits this way, and that test is macOS-only.
+#[cfg(target_os = "macos")]
 async fn holders_until(leases: &Leases, name: &str, want: usize) {
     let deadline = tokio::time::Instant::now() + WAIT;
     while held(leases, name) != want {
