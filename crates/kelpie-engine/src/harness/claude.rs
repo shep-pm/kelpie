@@ -9,6 +9,9 @@
 //! Each session gets `<state_dir>/claude/` as its config folder, so the person's
 //! `~/.claude` stays out until they turn it on. Claude Code keeps its login per
 //! config folder, which is why the session carries `CLAUDE_CODE_OAUTH_TOKEN`.
+//! With the setting on, the person's own `CLAUDE.md`, `settings.json`, `skills`,
+//! `agents`, `commands` and `output-styles` are linked in; `.credentials.json`,
+//! which holds their login, never is.
 //!
 //! The raw SDK messages asked for on `session/new` are what carry the split
 //! between the one-hour and the five-minute prompt cache, which ACP's own usage
@@ -30,6 +33,7 @@ use crate::login::Store;
 use crate::permission::{Call, ReadCall, read_acp};
 use crate::sandbox::fence::OwnFiles;
 
+use super::global::{self, Entry};
 use super::{HarnessError, install_folders, on_path};
 
 /// The registry id of the bridge kelpie installs
@@ -68,6 +72,23 @@ const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 /// The folder inside a session's state dir that Claude Code keeps its config in
 const CONFIG_FOLDER: &str = "claude";
+
+/// The folder inside the person's home folder that Claude Code keeps its own global config in
+const GLOBAL_FOLDER: &str = ".claude";
+
+/// Each entry of the person's global folder a session reads when they turn it on
+///
+/// Their instructions, settings and the things they added to Claude Code. The
+/// login and the account state Claude Code keeps beside them are not entries,
+/// and the sandbox keeps them closed (ADR 0005).
+const GLOBAL_ENTRIES: [Entry; 6] = [
+    "CLAUDE.md",
+    "settings.json",
+    "skills",
+    "agents",
+    "commands",
+    "output-styles",
+];
 
 /// The host the model answers on, which Claude Code's sandbox lets through
 const MODEL_HOST: &str = "api.anthropic.com";
@@ -205,24 +226,43 @@ pub fn pin() -> &'static Pin<'static> {
 /// `state_dir` is the folder the caller keeps for this session, such as
 /// `<data_dir>/projects/<id>/pm/`; Claude Code gets `<state_dir>/claude/`.
 /// The person's own Claude Code login is read from `logins` under [`LOGIN`].
+/// `harness_global_folder` is the project's resolved setting: on links the
+/// person's own global folder into the session's, off takes back the links a
+/// session made with it on.
 ///
 /// # Errors
 ///
 /// [`HarnessError::NotInstalled`] when `PATH` holds no `claude`,
-/// [`HarnessError::NoLogin`] when `logins` holds no Claude Code login, and
-/// [`HarnessError::Login`] when `logins` cannot be read.
-pub fn harness(bridge: PathBuf, state_dir: &Path, logins: &Store) -> Result<Harness, HarnessError> {
+/// [`HarnessError::NoLogin`] when `logins` holds no Claude Code login,
+/// [`HarnessError::Login`] when `logins` cannot be read, and
+/// [`HarnessError::Global`] when a link could not be made or removed.
+pub fn harness(
+    bridge: PathBuf,
+    state_dir: &Path,
+    logins: &Store,
+    harness_global_folder: bool,
+) -> Result<Harness, HarnessError> {
     let path = env::var_os("PATH").unwrap_or_default();
-    harness_on_path(bridge, state_dir, logins, &path)
+    let folder = global_folder();
+    harness_on_path(
+        bridge,
+        state_dir,
+        logins,
+        &path,
+        folder.as_deref(),
+        harness_global_folder,
+    )
 }
 
 /// [`harness`], searching `path` for the person's Claude Code instead of this
-/// process's `PATH`
+/// process's `PATH`, and reading their global config from `global` when it has one
 pub(super) fn harness_on_path(
     bridge: PathBuf,
     state_dir: &Path,
     logins: &Store,
     path: &OsStr,
+    global: Option<&Path>,
+    harness_global_folder: bool,
 ) -> Result<Harness, HarnessError> {
     let claude = on_path(CLAUDE, path).ok_or_else(|| HarnessError::NotInstalled {
         harness: NAME.to_owned(),
@@ -235,12 +275,22 @@ pub(super) fn harness_on_path(
     let mut installs = install_folders(&bridge, path);
     installs.extend(install_folders(&claude, path));
     installs.dedup();
+    let config_dir = state_dir.join(CONFIG_FOLDER);
+    let global_reads = match (global, harness_global_folder) {
+        (Some(folder), true) => global::link(folder, &config_dir, &GLOBAL_ENTRIES)?,
+        // Off, or no folder to name: take back every link a past start made, from
+        // whichever folder it linked
+        _ => {
+            global::unlink(&config_dir, &GLOBAL_ENTRIES)?;
+            Vec::new()
+        }
+    };
     Ok(Harness {
         program: bridge,
         args: Vec::new(),
         env: vec![
             (EXECUTABLE_ENV.into(), claude.into()),
-            (CONFIG_DIR_ENV.into(), state_dir.join(CONFIG_FOLDER).into()),
+            (CONFIG_DIR_ENV.into(), config_dir.into()),
             (LOGIN_ENV.into(), token.into()),
         ],
         // The raw SDK messages are the only route to the cache lifetime (ADR 0007)
@@ -248,9 +298,21 @@ pub(super) fn harness_on_path(
         extensions: vec![Extension::ClaudeSdkMessage],
         hosts: vec![MODEL_HOST.to_owned()],
         installs,
+        global_reads,
         unprompted: Some(UNPROMPTED.to_owned()),
         prompting: Some(PROMPTING.to_owned()),
         read_call: ReadCall::new(read_call),
         outdated: Some(OUTDATED.clone()),
     })
+}
+
+/// The folder the person's own Claude Code keeps its global config in
+///
+/// `CLAUDE_CONFIG_DIR` when they set it for their own Claude Code, else
+/// `~/.claude`. `None` when the OS gives no home folder to name it under.
+fn global_folder() -> Option<PathBuf> {
+    env::var_os(CONFIG_DIR_ENV)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| global::home().map(|home| home.join(GLOBAL_FOLDER)))
 }
