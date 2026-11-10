@@ -191,6 +191,11 @@ impl Sandbox {
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
+        Self::from_config(config)
+    }
+
+    /// Start crabpot on `config`, and keep its network lists for [`Sandbox::network`]
+    fn from_config(config: Config) -> Result<Self, SandboxError> {
         let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
         Ok(Self {
             inner: Arc::new(inner),
@@ -227,8 +232,7 @@ impl Sandbox {
     ) -> Result<Self, SandboxError> {
         let config = worker::policy(harness, project, worker).map_err(SandboxError::Policy)?;
         fs::create_dir_all(worker.state_dir).map_err(SandboxError::StateDir)?;
-        let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
-        Ok(Self { inner })
+        Self::from_config(config)
     }
 
     /// `command`, wrapped to run inside this sandbox
