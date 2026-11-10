@@ -53,14 +53,15 @@ use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use semver::Version;
 
-pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
+pub use kelpie_protocol::{LogEntry, SandboxAnswer, SessionEvent, SessionId};
 
 use crate::permission::{Judge, ReadCall};
 use crate::sandbox::Sandbox;
-use crate::tools::SessionTools;
+use crate::tools::{Asks, Reach, SessionTools};
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
+mod error;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
 pub mod log;
@@ -68,6 +69,8 @@ pub mod options;
 mod raw;
 pub mod seed;
 mod stderr;
+
+pub use error::SessionError;
 
 /// How long a harness that closed its pipes is given to show its exit status
 const EXIT_GRACE: Duration = Duration::from_millis(500);
@@ -190,94 +193,6 @@ pub struct Choice {
     pub effort: Option<String>,
 }
 
-/// Why kelpie could not learn what a harness offers
-// kelpie-engine is a library: an out-of-tree match would break on a new variant
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum SessionError {
-    /// The harness process could not be started
-    Start(io::Error),
-    /// The harness ended the connection before it listed its options, with what it left behind
-    Ended {
-        /// The harness's own end, as the tree and its stderr can say it
-        message: String,
-    },
-    /// The harness did not answer within the time kelpie waits, and was stopped
-    TimedOut {
-        /// How long kelpie waited
-        after: Duration,
-        /// How the harness ended once it was stopped, with what it last wrote
-        message: String,
-    },
-    /// The harness answered with an error instead of its options
-    Refused {
-        /// The error the harness answered with
-        message: String,
-    },
-    /// The harness id is not one file name, so no answer can be kept under it
-    Name {
-        /// The harness id kelpie was asked about
-        name: String,
-    },
-    /// The answer could not be written to the data folder
-    Cache {
-        /// The file kelpie could not write
-        path: PathBuf,
-        /// What the OS said
-        source: io::Error,
-    },
-}
-
-impl fmt::Display for SessionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Start(error) => write!(f, "kelpie could not start the harness: {error}"),
-            Self::Ended { message } => {
-                write!(
-                    f,
-                    "the harness ended the connection before it answered: {message}"
-                )
-            }
-            Self::TimedOut { after, message } => {
-                write!(
-                    f,
-                    "the harness did not answer within {} s and was stopped",
-                    after.as_secs_f32().ceil()
-                )?;
-                if message.is_empty() {
-                    Ok(())
-                } else {
-                    write!(f, ": {message}")
-                }
-            }
-            Self::Refused { message } => {
-                write!(f, "the harness would not list its options: {message}")
-            }
-            Self::Name { name } => {
-                write!(
-                    f,
-                    "{name} is not a name kelpie can keep a harness's answers under"
-                )
-            }
-            Self::Cache { path, source } => {
-                write!(f, "kelpie could not read or write {path:?}: {source}")
-            }
-        }
-    }
-}
-
-impl core::error::Error for SessionError {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::Start(error) | Self::Cache { source: error, .. } => Some(error),
-            Self::Ended { .. }
-            | Self::TimedOut { .. }
-            | Self::Refused { .. }
-            | Self::Name { .. } => None,
-        }
-    }
-}
-
 /// Where a turn's events go
 type Sink = Box<dyn FnMut(SessionEvent) + Send>;
 
@@ -328,6 +243,12 @@ pub trait Launch: Send + 'static {
     /// first one did (ADR 0005).
     fn sandboxed(&self) -> bool {
         false
+    }
+
+    /// The network lists of the sandbox the agent runs in, which a
+    /// `request_network` answer widens, if it runs in one
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        None
     }
 }
 
@@ -498,6 +419,8 @@ struct Setup {
     wanted: Arc<Mutex<Choice>>,
     instructions: Option<String>,
     tools: Option<SessionTools>,
+    /// The session's waiting `request_network` calls
+    asks: Asks,
     mode: Option<String>,
     /// What judges each tool call the harness asks about, `None` to refuse them all
     judge: Option<Judge>,
@@ -537,6 +460,9 @@ pub struct Session {
     instructions: Option<String>,
     /// The kelpie tools the session's harness is handed as an MCP server
     tools: Option<SessionTools>,
+    /// The session's waiting `request_network` calls, which its tools server and
+    /// its worker share
+    asks: Asks,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
     /// What judges each tool call the harness asks about, `None` to refuse them all
@@ -655,6 +581,7 @@ impl Session {
             choice: Arc::new(Mutex::new(choice)),
             instructions: None,
             tools: None,
+            asks: Asks::default(),
             mode: None,
             judge: None,
             log: None,
@@ -710,6 +637,7 @@ impl Session {
     /// the session and its worker drop it. Call this before the first send.
     #[must_use]
     pub fn with_tools(mut self, tools: SessionTools) -> Self {
+        self.asks = tools.asks().clone();
         self.tools = Some(tools);
         self
     }
@@ -841,6 +769,7 @@ impl Session {
             wanted: Arc::clone(&self.choice),
             instructions: self.instructions.clone(),
             tools: self.tools.clone(),
+            asks: self.asks.clone(),
             mode: self.mode.clone(),
             judge: self.judge.clone(),
             log: self.log.clone(),
@@ -870,10 +799,31 @@ impl Session {
     ///
     /// The turn then ends as the harness reports it, normally `Cancelled`.
     /// Does nothing between turns.
+    ///
+    /// A `request_network` call waiting for the maintainer is answered denied.
     pub fn cancel(&self) {
+        self.asks.deny_all();
         if let Some(Worker { inbox, .. }) = lock(&self.worker).as_ref() {
             let _ = inbox.unbounded_send(Command::Cancel);
         }
+    }
+
+    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and say whether one was waiting
+    ///
+    /// `Once` and `Project` let the request's host through the running sandbox
+    /// for as long as the session runs, and the agent hears so. `Project` is
+    /// also saved to the project's allowlist, which is the app's part. `Deny`
+    /// changes nothing. A request the turn's end or a cancel already answered
+    /// is gone, and this says `false`.
+    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> bool {
+        self.asks.answer(id, answer)
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Every call still waiting for the maintainer ends denied
+        self.asks.close();
     }
 }
 
@@ -893,6 +843,12 @@ struct ProcessLauncher {
 impl Launch for ProcessLauncher {
     fn sandboxed(&self) -> bool {
         self.sandbox.is_some()
+    }
+
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        self.sandbox
+            .as_ref()
+            .map(|sandbox| Arc::new(sandbox.network()) as Arc<dyn Reach>)
     }
 
     fn launch(&mut self) -> io::Result<Link> {

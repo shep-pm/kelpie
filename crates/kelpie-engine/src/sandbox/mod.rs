@@ -47,11 +47,13 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use crabpot::{ConfigError, StartError, WrapError};
+use crabpot::{Config, ConfigError, StartError, WrapError};
+use serde_json::json;
 
 use crate::session::Harness;
-use crate::tools::Door;
+use crate::tools::{Door, Reach};
 
 pub mod fence;
 mod policy;
@@ -141,7 +143,9 @@ impl From<SandboxError> for io::Error {
 /// long as any command wrapped by it may run.
 #[derive(Debug)]
 pub struct Sandbox {
-    inner: crabpot::Sandbox,
+    inner: Arc<crabpot::Sandbox>,
+    /// The network lists the sandbox runs under now
+    config: Arc<Mutex<Config>>,
 }
 
 impl Sandbox {
@@ -187,8 +191,28 @@ impl Sandbox {
         let config =
             policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
+        Self::from_config(config)
+    }
+
+    /// Start crabpot on `config`, and keep its network lists for [`Sandbox::network`]
+    fn from_config(config: Config) -> Result<Self, SandboxError> {
         let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Arc::new(inner),
+            config: Arc::new(Mutex::new(config)),
+        })
+    }
+
+    /// A handle on this sandbox's network lists, to widen them while it runs
+    ///
+    /// The handle does not keep the sandbox alive: once the sandbox drops, it
+    /// lets nothing through.
+    #[must_use]
+    pub fn network(&self) -> Network {
+        Network {
+            inner: Arc::downgrade(&self.inner),
+            config: Arc::clone(&self.config),
+        }
     }
 
     /// Start the sandbox of a worker on `harness`, in `project`
@@ -208,8 +232,7 @@ impl Sandbox {
     ) -> Result<Self, SandboxError> {
         let config = worker::policy(harness, project, worker).map_err(SandboxError::Policy)?;
         fs::create_dir_all(worker.state_dir).map_err(SandboxError::StateDir)?;
-        let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
-        Ok(Self { inner })
+        Self::from_config(config)
     }
 
     /// `command`, wrapped to run inside this sandbox
@@ -223,6 +246,57 @@ impl Sandbox {
     /// [`SandboxError::Wrap`] when the command cannot be put in the sandbox.
     pub fn command(&self, command: &Command) -> Result<Command, SandboxError> {
         self.inner.command(command).map_err(SandboxError::Wrap)
+    }
+}
+
+/// The hosts a running sandbox lets through, which can grow while it runs
+///
+/// What `request_network` widens when the maintainer allows a host (ADR 0005).
+/// Made by [`Sandbox::network`].
+#[derive(Debug, Clone)]
+pub struct Network {
+    inner: Weak<crabpot::Sandbox>,
+    config: Arc<Mutex<Config>>,
+}
+
+/// The port a request is judged on: a host the agent asks for is one it dials over TLS
+const HTTPS: u16 = 443;
+
+impl Reach for Network {
+    fn allows(&self, host: &str) -> bool {
+        let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
+        config
+            .network
+            .allowed_domains
+            .iter()
+            .any(|entry| entry.matches(host, HTTPS))
+    }
+
+    /// Adds `host` to the allowed domains, which crabpot's proxy follows from its next request on
+    ///
+    /// Says `false`, and changes nothing, when the sandbox has dropped or crabpot cannot list `host`
+    fn allow(&self, host: &str) -> bool {
+        let Some(sandbox) = self.inner.upgrade() else {
+            return false;
+        };
+        let mut config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut allowed: Vec<&str> = config
+            .network
+            .allowed_domains
+            .iter()
+            .map(|entry| entry.as_str())
+            .collect();
+        allowed.push(host);
+        let lists = json!({
+            "network": {"allowedDomains": allowed, "deniedDomains": []},
+            "filesystem": {"denyRead": [], "allowWrite": [], "denyWrite": []},
+        });
+        let Ok(widened) = Config::from_json(&lists.to_string()) else {
+            return false;
+        };
+        sandbox.replace_network_lists(&widened);
+        config.network.allowed_domains = widened.network.allowed_domains;
+        true
     }
 }
 
