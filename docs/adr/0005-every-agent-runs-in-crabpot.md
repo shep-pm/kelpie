@@ -23,7 +23,7 @@ Workers get the same shape, with write access to their own worktree.
 
 - Kelpie's `main` calls `crabpot::run_from_args()` first, before Tauri, since crabpot runs the host binary again as its helper on Linux and Windows.
 - crabpot's proxy lives inside kelpie until each `Sandbox` drops, so it stops when kelpie stops.
-- SK's sandbox glue (fence, srt, confine, about 6k lines) is lifted in Phase 1 with its tests, not Phase 2.
+- crabpot replaces SK's srt glue (fence, srt, confine, about 6k lines). SK's escape tests came over with the PM's sandbox (`crates/kelpie-engine/tests/sandbox/escapes.rs`), tried against the PM's policy. The fence and `confine` come with workers, and so do the escapes that need one.
 - Linux hosts on Ubuntu 24.04 or later need crabpot's AppArmor profile, naming kelpie's own binary as the helper.
 - **Open risk on Windows:** the command runs as a separate sandbox user, through `CreateProcessWithLogonW`. srt-win's runner holds a kill-on-close job over the command, but the runner is created by the seclogon service and may sit outside kelpie's job. Whether it dies when kelpie dies has to be tested before Windows is claimed.
 - The sweep must still find sandboxed processes by `KELPIE_RUN`, which a test confirms on each platform.
