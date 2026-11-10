@@ -644,6 +644,79 @@ fn two_writes_to_one_layer_keep_both_fields() {
 }
 
 #[test]
+fn an_update_adds_to_what_the_layers_already_resolve_to() {
+    let dir = Dir::new();
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::NetworkAllowlist,
+        &json!(["docs.rs"]),
+    )
+    .unwrap();
+
+    Settings::update(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::NetworkAllowlist,
+        |settings| {
+            let mut hosts = settings.network_allowlist.value.clone();
+            hosts.push("crates.io".to_owned());
+            Value::Array(hosts.into_iter().map(Value::String).collect())
+        },
+    )
+    .unwrap();
+
+    let hosts = Settings::load(&dir.config(), "web")
+        .unwrap()
+        .network_allowlist;
+
+    assert_eq!(hosts.value, ["docs.rs", "crates.io"]);
+    assert_eq!(hosts.from, Layer::Project, "the project's own file set it");
+}
+
+#[test]
+fn two_updates_of_one_list_keep_both_entries() {
+    let dir = Dir::new();
+    let config = dir.config();
+    for round in 0..ROUNDS {
+        let (first, second) = (format!("first-{round}.dev"), format!("second-{round}.dev"));
+        let barrier = Barrier::new(2);
+        let added = std::thread::scope(|scope| {
+            [first.as_str(), second.as_str()]
+                .map(|host| {
+                    let (config, barrier) = (&config, &barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        Settings::update(
+                            config,
+                            LayerFile::Project("web"),
+                            Field::NetworkAllowlist,
+                            |settings| {
+                                let mut hosts = settings.network_allowlist.value.clone();
+                                hosts.push(host.to_owned());
+                                Value::Array(hosts.into_iter().map(Value::String).collect())
+                            },
+                        )
+                    })
+                })
+                .map(|write| write.join().unwrap())
+        });
+        assert!(
+            added.iter().all(Result::is_ok),
+            "round {round} failed a write"
+        );
+        let hosts = Settings::load(&config, "web")
+            .unwrap()
+            .network_allowlist
+            .value;
+        assert!(
+            hosts.contains(&first) && hosts.contains(&second),
+            "round {round} lost one: {hosts:?}"
+        );
+    }
+}
+
+#[test]
 fn a_project_id_cannot_name_a_folder_outside_projects() {
     let dir = Dir::new();
     for id in [

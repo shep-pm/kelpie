@@ -581,23 +581,26 @@ pub fn pm_answer(
 /// Add `host` to the project's own `network-allowlist`
 ///
 /// A project's file replaces the global list rather than adding to it, so what
-/// the PM may already reach is written into it along with `host`.
+/// the PM may already reach is written into it along with `host`. The resolve
+/// and the write are one step ([`Settings::update`]), since two answers can be
+/// on their way at once and each adds one host to the same list.
 ///
 /// # Errors
 ///
 /// No project is picked, or its settings file cannot be read or written.
 fn allow_for_the_project(state: &AppState, host: &str) -> Result<(), String> {
     let id = state.project_id(None)?;
-    let resolved = Settings::load(state.config(), &id).map_err(|error| not_saved(host, error))?;
-    let mut hosts = resolved.network_allowlist.value.clone();
-    if !hosts.iter().any(|allowed| allowed == host) {
-        hosts.push(host.to_owned());
-    }
-    Settings::set(
+    Settings::update(
         state.config(),
         LayerFile::Project(&id),
         Field::NetworkAllowlist,
-        &Value::Array(hosts.into_iter().map(Value::String).collect()),
+        |resolved| {
+            let mut hosts = resolved.network_allowlist.value.clone();
+            if !hosts.iter().any(|allowed| allowed == host) {
+                hosts.push(host.to_owned());
+            }
+            Value::Array(hosts.into_iter().map(Value::String).collect())
+        },
     )
     .map_err(|error| not_saved(host, error))
 }
