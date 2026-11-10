@@ -4,6 +4,16 @@ export type HarnessInfo = {
   name: string;
   /** How the harness's login is kept and made, for a harness that has one. */
   login?: { key: string; command: string };
+  /** The bridge kelpie installs for it, for a harness that does not speak ACP itself. */
+  bridge?: BridgeInfo;
+};
+
+/** One bridge kelpie installs and updates (`docs/design/bridge-updates.md`). */
+export type BridgeInfo = {
+  /** The id its versions, installs and setting are keyed by. */
+  id: string;
+  /** The name a person reads, which is the command kelpie runs. */
+  name: string;
 };
 
 /**
@@ -15,6 +25,7 @@ export const HARNESSES: Record<string, HarnessInfo> = {
   "claude-code": {
     name: "Claude Code",
     login: { key: "claude", command: "claude setup-token" },
+    bridge: { id: "claude-acp", name: "claude-agent-acp" },
   },
   goose: { name: "goose" },
 };

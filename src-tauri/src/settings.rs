@@ -12,6 +12,9 @@
 //! file it sits in, never held here. The PM's harness, model and effort are one
 //! value kept in two places by layer: the global `pm` agent's keys on the Global
 //! tab, and the project's own `pm-*` settings on the Project tab.
+//!
+//! The bridge row beside a harness's login is `crate::bridges`, which reads what
+//! the bridge checks wrote rather than the settings file.
 
 use std::fs;
 
@@ -902,6 +905,34 @@ mod tests {
 
         assert!(seen.project.is_none());
         assert!(!seen.global.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn each_bridge_has_its_own_entry_in_the_update_setting() {
+        use tauri::Manager as _;
+        let dir = fresh_dir();
+        let app = app_with_project(&dir);
+        let state = app.state::<AppState>();
+        let set = |map: serde_json::Value| {
+            settings_set(state.clone(), Target::Global, "bridge-updates".into(), map)
+        };
+
+        // The bridge row writes one entry, and the field says where it came from
+        set(serde_json::json!({"claude-acp": "registry-ask-first"})).unwrap();
+        let seen = settings_get(state.clone(), None).unwrap().global;
+        let held = field(&seen, "bridge-updates");
+        assert_eq!(held.value["claude-acp"], "registry-ask-first");
+        assert_eq!(held.from, "global");
+
+        // A value kelpie does not offer is refused, and names the field
+        let error = set(serde_json::json!({"claude-acp": "whenever"})).unwrap_err();
+        assert!(error.contains("bridge-updates"), "{error}");
+
+        // The row's last entry dropped: the field falls back to kelpie
+        set(serde_json::Value::Null).unwrap();
+        let seen = settings_get(state.clone(), None).unwrap().global;
+        assert_eq!(field(&seen, "bridge-updates").from, "kelpie");
         fs::remove_dir_all(dir).unwrap();
     }
 
