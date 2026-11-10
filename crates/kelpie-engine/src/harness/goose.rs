@@ -27,6 +27,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use crate::sandbox::fence::OwnFiles;
 use crate::session::Harness;
 
 use super::global::{self, Entry};
@@ -64,6 +65,27 @@ const GLOBAL_FOLDER: &str = ".config/goose";
 /// `PATH` keeps it. The secrets goose keeps beside it are not an entry, and the
 /// sandbox keeps them closed (ADR 0005).
 const GLOBAL_ENTRIES: [Entry; 1] = ["config.yaml"];
+
+/// What the sandbox's fence keeps a worker from changing of goose's, and from
+/// reading of its login
+///
+/// goose also loads `.goosehints` from the working folder. It is not listed
+/// here: kelpie sets `CONTEXT_FILE_NAMES` so goose never reads it.
+pub const OWN_FILES: OwnFiles = OwnFiles {
+    harness: NAME,
+    folders: &[".goose"],
+    // `settings.local.json` and `settings.json` there can disable a plugin by name
+    nested: &[[".config", "goose"]],
+    root_files: &[],
+    // Its config, secrets and session database sit in four places, by platform
+    credentials: &[
+        "~/.config/goose/**",
+        "~/.local/share/goose/**",
+        "~/.local/state/goose/**",
+        "~/Library/Application Support/Block/goose/**",
+    ],
+    program: CMD,
+};
 
 /// The provider a goose session runs on, and where it answers
 ///
