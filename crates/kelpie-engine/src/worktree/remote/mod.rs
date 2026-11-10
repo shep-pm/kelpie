@@ -36,6 +36,67 @@ impl Remote {
         }
     }
 
+    // Where git is told to fetch from and push to.
+    fn target(&self) -> &str {
+        match self {
+            Self::Origin => "origin",
+        }
+    }
+
+    // The branch's full name on this remote, `branch` being the ticket's.
+    fn branch_ref(&self, branch: &str) -> String {
+        match self {
+            Self::Origin => format!("refs/heads/{branch}"),
+        }
+    }
+
+    /// Deletes `branch` here when it is here
+    ///
+    /// The forge may delete a merged branch itself between the check below and
+    /// this push, and git's error for that varies, so a failed delete is judged
+    /// by whether the ref is still there. The repo's own pre-push hook has no
+    /// say over a branch kelpie deletes.
+    pub(super) fn delete(
+        &self,
+        tree: &ProcessTree,
+        repo: &Path,
+        branch: &str,
+    ) -> Result<(), WorktreeError> {
+        let full_ref = self.branch_ref(branch);
+        if !self.has_branch(tree, repo, &full_ref)? {
+            return Ok(());
+        }
+        let target = self.target();
+        match git(
+            tree,
+            repo,
+            [
+                "push",
+                "--quiet",
+                "--no-verify",
+                "--delete",
+                "--",
+                target,
+                &full_ref,
+            ],
+        ) {
+            Err(e) if self.has_branch(tree, repo, &full_ref)? => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    // Whether `full_ref` is a branch here right now, asked of the remote.
+    fn has_branch(
+        &self,
+        tree: &ProcessTree,
+        repo: &Path,
+        full_ref: &str,
+    ) -> Result<bool, WorktreeError> {
+        let target = self.target();
+        let asked = git(tree, repo, ["ls-remote", "--heads", "--", target, full_ref])?;
+        Ok(!asked.is_empty())
+    }
+
     /// Fetches the branch, and returns the ref it was fetched to
     pub(super) fn fetch(
         &self,
@@ -44,8 +105,9 @@ impl Remote {
         branch: &str,
     ) -> Result<String, WorktreeError> {
         let tracking = self.tracking(branch);
+        let target = self.target();
         match self {
-            Self::Origin => git(tree, repo, ["fetch", "--quiet", "--", "origin", branch])?,
+            Self::Origin => git(tree, repo, ["fetch", "--quiet", "--", target, branch])?,
         };
         Ok(tracking)
     }
@@ -58,13 +120,10 @@ impl Remote {
         branch: &str,
         base: &str,
     ) -> Result<String, WorktreeError> {
+        let target = self.target();
         match self {
             Self::Origin => {
-                git(
-                    tree,
-                    repo,
-                    ["fetch", "--quiet", "--", "origin", base, branch],
-                )?;
+                git(tree, repo, ["fetch", "--quiet", "--", target, base, branch])?;
                 Ok(self.tracking(branch))
             }
         }
