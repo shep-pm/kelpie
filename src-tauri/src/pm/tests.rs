@@ -354,7 +354,7 @@ fn with_nothing_set_the_sandbox_has_no_extra_domain_and_reads_the_project_alone(
     let plan = plan(chat.state().config(), &project).unwrap();
 
     assert!(plan.network_allowlist.is_empty());
-    assert!(!plan.read_anywhere);
+    assert_eq!(plan.reads, Reads::Project);
 }
 
 #[test]
@@ -381,7 +381,7 @@ fn the_projects_allowlist_and_read_anywhere_settings_reach_the_plan() {
     let plan = plan(chat.state().config(), &project).unwrap();
 
     assert_eq!(plan.network_allowlist, ["docs.rs", "crates.io"]);
-    assert!(plan.read_anywhere);
+    assert_eq!(plan.reads, Reads::Anywhere);
 }
 
 #[test]
