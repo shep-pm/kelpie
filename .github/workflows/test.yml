@@ -44,22 +44,48 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # The sandbox tests run a real command inside crabpot, which on Linux is
+  # bubblewrap: it needs a user namespace, a mount of its own and a fresh
+  # `/proc`. Docker's defaults refuse all three, so this one job runs in a
+  # container with each of them lifted, as a user that is not root. Nothing is
+  # changed on the host or in the runner image. The rest of the jobs stay as
+  # they were.
+  #
+  # The three options are each load-bearing, tested with `bwrap --ro-bind / /
+  # --dev /dev --proc /proc --unshare-all true` as a non-root user: seccomp
+  # refuses the namespace, AppArmor refuses the mounts, and Docker's masked
+  # `/proc` refuses a fresh proc mount.
   test:
     runs-on: [self-hosted]
-    timeout-minutes: 25
+    # No rust-cache here: it keys on the user that runs it, and the build is
+    # the user's, not root's. So the build is cold, which the ceiling allows for.
+    timeout-minutes: 45
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --security-opt seccomp=unconfined
+        --security-opt apparmor=unconfined
+        --security-opt systempaths=unconfined
+    env:
+      CARGO_TERM_COLOR: always
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install the Linux packages Tauri builds against
+      # The image is bare and the step runs as root, so no `sudo`
+      - name: Install the packages the build and the sandbox need
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test --workspace --locked
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl wget file git build-essential pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Make the user the tests run as
+        run: |
+          useradd --create-home kelpie
+          chown -R kelpie "$GITHUB_WORKSPACE"
+      - name: Install the toolchain as that user
+        run: |
+          runuser -u kelpie -- env HOME=/home/kelpie sh -c 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'
+      - name: Test as that user
+        run: |
+          runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" CARGO_TERM_COLOR=always cargo test --workspace --locked
 
   docs:
     runs-on: [self-hosted]
