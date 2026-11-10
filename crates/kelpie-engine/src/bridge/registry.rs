@@ -94,17 +94,22 @@ impl Index {
     /// The pin for the agent `registry_id`, at the version the index calls stable
     ///
     /// `None` when the index does not list the agent, or lists it with no binary
-    /// for any platform kelpie ships on. That covers an agent the registry
+    /// for the platform this process runs on. That covers an agent the registry
     /// quarantined or removed, and kelpie then keeps the version it has.
     #[must_use]
     pub fn bridge(&self, registry_id: &str) -> Option<Pin<'_>> {
         let agent = self.agents.iter().find(|agent| agent.id == registry_id)?;
-        (!agent.platforms.is_empty()).then_some(Pin {
-            id: &agent.id,
-            registry_id: &agent.id,
-            version: &agent.version,
-            platforms: &agent.platforms,
-        })
+        let current = Platform::current()?;
+        agent
+            .platforms
+            .iter()
+            .any(|(platform, _)| *platform == current)
+            .then_some(Pin {
+                id: &agent.id,
+                registry_id: &agent.id,
+                version: &agent.version,
+                platforms: &agent.platforms,
+            })
     }
 
     /// Read the index from its JSON text
@@ -223,4 +228,48 @@ pub fn fetch(url: &str) -> Result<Index, RegistryError> {
         url: url.to_owned(),
         message,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An index whose one agent ships a binary for `platform` only
+    fn index_with_only(platform: &str) -> Index {
+        let text = format!(
+            r#"{{"agents": [{{"id": "claude-acp", "version": "0.102.0", "distribution": {{"binary": {{
+                "{platform}": {{"archive": "https://example.test/a.zip", "cmd": "./a", "sha256": "00"}}
+            }}}}}}]}}"#
+        );
+        Index::parse(&text).unwrap()
+    }
+
+    /// The registry's name for the platform these tests run on
+    fn this_platform() -> &'static str {
+        match Platform::current().expect("a platform kelpie ships on") {
+            Platform::LinuxX64 => "linux-x86_64",
+            Platform::LinuxArm64 => "linux-aarch64",
+            Platform::MacOsX64 => "darwin-x86_64",
+            Platform::MacOsArm64 => "darwin-aarch64",
+            Platform::WindowsX64 => "windows-x86_64",
+        }
+    }
+
+    #[test]
+    fn a_bridge_published_for_other_platforms_only_has_no_pin() {
+        let other = if this_platform() == "windows-x86_64" {
+            "linux-x86_64"
+        } else {
+            "windows-x86_64"
+        };
+
+        assert!(index_with_only(other).bridge("claude-acp").is_none());
+    }
+
+    #[test]
+    fn a_bridge_published_for_this_platform_has_a_pin() {
+        let index = index_with_only(this_platform());
+
+        assert_eq!(index.bridge("claude-acp").unwrap().version, "0.102.0");
+    }
 }

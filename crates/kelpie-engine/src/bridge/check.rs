@@ -111,7 +111,11 @@ fn run(
         });
     };
     let candidate = versions::parse(stable.version).map_err(|error| error.to_string())?;
+    // A kelpie release can ship a pin newer than the `in_use` an older run wrote,
+    // and a version older than kelpie's own is no update
+    let shipped = versions::parse(pin.version).map_err(|error| error.to_string())?;
     if candidate <= versions.in_use
+        || candidate <= shipped
         || versions.ready.as_ref() == Some(&candidate)
         || versions.is_bad(&candidate)
     {

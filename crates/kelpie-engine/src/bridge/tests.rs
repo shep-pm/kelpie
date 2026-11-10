@@ -721,6 +721,34 @@ fn a_bad_version_is_not_tried_again() {
 }
 
 #[test]
+fn a_version_older_than_kelpies_own_pin_is_no_update() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let platforms = platforms_for(&server, TAR);
+    let mut versions = Versions::load(dir.data(), &pin(&platforms)).unwrap();
+    versions.in_use = version("0.101.1");
+    versions.save(dir.data(), ID).unwrap();
+    let mut newer_pin = pin(&platforms);
+    newer_pin.version = "0.103.0";
+
+    let outcome = check::checked(
+        &server.url(REGISTRY),
+        dir.data(),
+        &newer_pin,
+        BridgeUpdates::RegistryAutomatic,
+        &|_| panic!("a version older than kelpie's pin was probed"),
+    );
+
+    assert_eq!(outcome, CheckOutcome::Current);
+    assert_eq!(server.served(), 0, "an older version was downloaded");
+    assert_eq!(
+        Versions::load(dir.data(), &newer_pin).unwrap().ready,
+        None,
+        "an older version was recorded as ready"
+    );
+}
+
+#[test]
 fn kelpies_pin_fetches_nothing() {
     let dir = Dir::new();
     let server = Server::start(Duration::ZERO);
