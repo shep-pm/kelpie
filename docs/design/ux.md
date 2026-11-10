@@ -97,6 +97,7 @@ Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, st
 4. A per-project setting, **Read anywhere by default**, lifts the read limit (secrets still denied). It is off by default. The closed area is the home folder and the folder holding every session's state: crabpot allows every read the policy does not deny, so every other folder on the machine is read whichever way the setting is set.
 5. A project whose folder is the home folder, or a folder above it, is refused when its session's sandbox starts, whichever way that setting is set, whether it reaches the home folder by name or through a link. The home folder holds every harness's login and every secret, so a sandbox over it would read them along with the project: the project needs a folder of its own. Folders are compared as crabpot matches them, with their links resolved, so a project at `/data/home/<name>` is refused as readily as one at `/home/<name>` when `/home` is a link to `/data/home`.
 6. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
+7. A machine whose sandbox cannot start, such as Ubuntu 24.04 without kelpie's AppArmor profile, gets an Attention item with **Install** and **Run without a sandbox**. The second is a project setting for the PM and its threads only, shown with a red **No sandbox** badge. Workers never run without one (`docs/design/sandbox-setup.md`).
 
 ## Settings and agents
 
