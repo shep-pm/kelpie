@@ -37,6 +37,7 @@ use super::{
 };
 
 mod swap;
+use crate::tools::Asks;
 use swap::{Attempt, Done, Fault, fault, fell_back, moved, moves, start};
 
 /// The divider a refused resume leaves in the log
@@ -56,6 +57,12 @@ pub const COULDNT_RESUME: &str = "Couldn't resume, started a new session";
 /// (`docs/design/bridge-updates.md`, Flow).
 pub(super) async fn run(setup: Setup, mut commands: Inbox) {
     let shared = Arc::new(Shared::default());
+    // A `request_network` call puts its question on the turn in flight
+    setup.asks.emit_to(Some(Arc::new({
+        let shared = Arc::downgrade(&shared);
+        move |event| shared.upgrade().is_some_and(|shared| shared.deliver(event))
+    })));
+    let _ended = TurnsOver(&setup.asks);
     let mut turns: Turns = VecDeque::new();
     let first = loop {
         match commands.next().await {
@@ -178,6 +185,16 @@ pub(super) async fn run(setup: Setup, mut commands: Inbox) {
     }
 }
 
+/// Takes the worker's turn off its session's requests when the worker ends
+struct TurnsOver<'a>(&'a Asks);
+
+impl Drop for TurnsOver<'_> {
+    fn drop(&mut self) {
+        self.0.emit_to(None);
+        self.0.deny_all();
+    }
+}
+
 const ENDED_BEFORE: &str = "the session ended before this message ran";
 
 /// Messages waiting for the turn in flight, each with the sink it streams to
@@ -270,9 +287,17 @@ impl Shared {
     }
 
     fn emit(&self, event: SessionEvent) {
-        if let Some(sink) = self.state().sink.as_mut() {
-            sink(event);
-        }
+        self.deliver(event);
+    }
+
+    /// Put `event` on the turn in flight, and say whether there was one
+    fn deliver(&self, event: SessionEvent) -> bool {
+        let mut state = self.state();
+        let Some(sink) = state.sink.as_mut() else {
+            return false;
+        };
+        sink(event);
+        true
     }
 
     fn update(&self, update: SessionUpdate) {
@@ -559,6 +584,8 @@ async fn serve(
             Err(error) => shared.emit(failed(format!("the turn failed: {error}"))),
         }
         shared.set_sink(None);
+        // A request the turn's end left waiting has no one to answer it
+        setup.asks.deny_all();
     }
 }
 

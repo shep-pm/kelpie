@@ -50,10 +50,10 @@ use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use semver::Version;
 
-pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
+pub use kelpie_protocol::{LogEntry, SandboxAnswer, SessionEvent, SessionId};
 
 use crate::sandbox::Sandbox;
-use crate::tools::SessionTools;
+use crate::tools::{Asks, Reach, SessionTools};
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
@@ -313,6 +313,12 @@ pub trait Launch: Send + 'static {
     fn sandboxed(&self) -> bool {
         false
     }
+
+    /// The network lists of the sandbox the agent runs in, which a
+    /// `request_network` answer widens, if it runs in one
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        None
+    }
 }
 
 /// The launcher that starts `harness` through `tree`, in `project`
@@ -482,6 +488,8 @@ struct Setup {
     wanted: Arc<Mutex<Choice>>,
     instructions: Option<String>,
     tools: Option<SessionTools>,
+    /// The session's waiting `request_network` calls
+    asks: Asks,
     mode: Option<String>,
     log: Option<log::Log>,
     seed: Option<Seed>,
@@ -519,6 +527,9 @@ pub struct Session {
     instructions: Option<String>,
     /// The kelpie tools the session's harness is handed as an MCP server
     tools: Option<SessionTools>,
+    /// The session's waiting `request_network` calls, which its tools server and
+    /// its worker share
+    asks: Asks,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
     log: Option<log::Log>,
@@ -635,6 +646,7 @@ impl Session {
             choice: Arc::new(Mutex::new(choice)),
             instructions: None,
             tools: None,
+            asks: Asks::default(),
             mode: None,
             log: None,
             seed: None,
@@ -674,6 +686,7 @@ impl Session {
     /// the session and its worker drop it. Call this before the first send.
     #[must_use]
     pub fn with_tools(mut self, tools: SessionTools) -> Self {
+        self.asks = tools.asks().clone();
         self.tools = Some(tools);
         self
     }
@@ -805,6 +818,7 @@ impl Session {
             wanted: Arc::clone(&self.choice),
             instructions: self.instructions.clone(),
             tools: self.tools.clone(),
+            asks: self.asks.clone(),
             mode: self.mode.clone(),
             log: self.log.clone(),
             seed: self.seed.clone(),
@@ -833,10 +847,31 @@ impl Session {
     ///
     /// The turn then ends as the harness reports it, normally `Cancelled`.
     /// Does nothing between turns.
+    ///
+    /// A `request_network` call waiting for the maintainer is answered denied.
     pub fn cancel(&self) {
+        self.asks.deny_all();
         if let Some(Worker { inbox, .. }) = lock(&self.worker).as_ref() {
             let _ = inbox.unbounded_send(Command::Cancel);
         }
+    }
+
+    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and say whether one was waiting
+    ///
+    /// `Once` and `Project` let the request's host through the running sandbox
+    /// for as long as the session runs, and the agent hears so. `Project` is
+    /// also saved to the project's allowlist, which is the app's part. `Deny`
+    /// changes nothing. A request the turn's end or a cancel already answered
+    /// is gone, and this says `false`.
+    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> bool {
+        self.asks.answer(id, answer)
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Every call still waiting for the maintainer ends denied
+        self.asks.close();
     }
 }
 
@@ -856,6 +891,12 @@ struct ProcessLauncher {
 impl Launch for ProcessLauncher {
     fn sandboxed(&self) -> bool {
         self.sandbox.is_some()
+    }
+
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        self.sandbox
+            .as_ref()
+            .map(|sandbox| Arc::new(sandbox.network()) as Arc<dyn Reach>)
     }
 
     fn launch(&mut self) -> io::Result<Link> {
