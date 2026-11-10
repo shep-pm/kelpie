@@ -95,7 +95,8 @@ Every agent runs in crabpot (ADR 0005): the PM, its threads and every worker, st
 2. Every other change goes through kelpie's own tools: tickets, links, areas, notes to workers, GitHub. The PM's permissions are its tool list.
 3. When the sandbox refuses something, the agent asks through a kelpie tool and a prompt appears in its panel: *"PM wants to reach docs.rs: Allow once · Allow for this project · Deny"*. The sandbox widens while the session runs. "Allow for this project" is saved to the project's settings, where it can be undone.
 4. A per-project setting, **Read anywhere by default**, lifts the read limit (secrets still denied). It is off by default.
-5. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
+5. A project whose folder is the home folder, or a folder above it, is refused when its session's sandbox starts, whichever way that setting is set. The home folder holds every harness's login and every secret, so a sandbox over it would read them along with the project: the project needs a folder of its own.
+6. Windows is unproven: whether the sandbox user's processes stop when kelpie dies is still to be tested.
 
 ## Settings and agents
 
