@@ -270,6 +270,24 @@ describe("the settings page", () => {
     );
   });
 
+  it("a refused value shows its reason after the fields are read again", async () => {
+    settingsSet.mockResolvedValue({
+      status: "error",
+      error: "pm-model: that model is not one the harness offers",
+    });
+    await openPage();
+    const select = await screen.findByRole("combobox", { name: "PM model" });
+    await waitFor(() => expect(harnessOptions).toHaveBeenCalled());
+    fireEvent.keyDown(select, { key: "Enter" });
+
+    fireEvent.click(await screen.findByRole("option", { name: /Sonnet/ }));
+
+    // The fields are read again after a refusal; the reason must outlive that
+    await waitFor(() => expect(settingsGet).toHaveBeenCalledTimes(2));
+    await new Promise((done) => setTimeout(done, 50));
+    expect(screen.getByText(/not one the harness offers/)).toBeTruthy();
+  });
+
   it("the refresh button asks the harness again", async () => {
     await openPage();
     await waitFor(() => expect(harnessOptions).toHaveBeenCalledTimes(1));
