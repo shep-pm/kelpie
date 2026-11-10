@@ -198,6 +198,10 @@ const TESTS: &[(&str, fn())] = &[
         "escapes::a_host_not_allowed_and_a_socket_not_listed_are_refused",
         escapes::a_host_not_allowed_and_a_socket_not_listed_are_refused,
     ),
+    (
+        "a_denied_folder_under_an_allowed_one_stays_closed",
+        a_denied_folder_under_an_allowed_one_stays_closed,
+    ),
     // Only Linux turns a listed socket off; macOS reaches it
     #[cfg(target_os = "linux")]
     (
@@ -548,6 +552,71 @@ fn a_real_read_outside_the_project_follows_the_setting() {
     assert!(
         other_read.is_none(),
         "another session's state was read: {other_read:?}"
+    );
+}
+
+/// A denied folder under the allowed folder beside a project stays closed
+///
+/// The rule `reads` and `in_denied` are built on, run for real: crabpot masks a
+/// denied path again when an allowed folder sits above it, so a project at
+/// `<home>/.config/nvim` reads `<home>/.config/other` beside it and reads nothing
+/// of the `<home>/.config/gh` beside that. An allow at or inside a denied folder
+/// is the other half, and `sandbox::tests` holds it.
+///
+/// In a home of its own, so the stand-in for a login never lands in the person's
+/// own `~/.config`.
+fn a_denied_folder_under_an_allowed_one_stays_closed() {
+    escapes::in_own_home("mask");
+}
+
+/// The case `in_own_home` runs for `mask`
+fn a_denied_folder_under_an_allowed_one() {
+    let home = fs::canonicalize(std::env::var_os("HOME").expect("the case has a home folder"))
+        .expect("the home folder is there");
+    let (folder, beside, secret) = (
+        home.join(".config/nvim"),
+        home.join(".config/other"),
+        home.join(".config/gh"),
+    );
+    let (sessions_root, state) = (home.join("projects"), home.join("projects/pm"));
+    for held in [&folder, &beside, &secret, &state] {
+        fs::create_dir_all(held).expect("the case's folders are made");
+    }
+    for (file, text) in [
+        (folder.join("notes.md"), "the project's own\n"),
+        (beside.join("file"), "beside the project\n"),
+        (secret.join("hosts.yml"), "a login\n"),
+    ] {
+        fs::write(&file, text).expect("the case's file is written");
+    }
+
+    let mut harness = Harness::new("/bin/sh");
+    harness.installs = vec![PathBuf::from("/bin")];
+    let allowlist: Vec<String> = Vec::new();
+    let project = Project {
+        folder: &folder,
+        network_allowlist: &allowlist,
+        reads: Reads::Project,
+        sessions_root: &sessions_root,
+    };
+    let sandbox = Sandbox::start(&harness, &project, &state)
+        .expect("a project beside a denied folder starts a sandbox");
+    let name = "a_denied_folder_under_an_allowed_one_stays_closed";
+    if !host_can_run(name, &sh(&sandbox, "true")) {
+        return;
+    }
+
+    // The control: the folder beside the project is read, so the refusal below is
+    // the policy's and not a sandbox that reads nothing
+    assert_eq!(
+        cat(&sandbox, &beside.join("file")).as_deref(),
+        Some("beside the project\n"),
+        "the folder beside the project was not read"
+    );
+    let read = cat(&sandbox, &secret.join("hosts.yml"));
+    assert!(
+        read.is_none(),
+        "the denied folder under the allowed one was read: {read:?}"
     );
 }
 
