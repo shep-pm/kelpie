@@ -259,6 +259,11 @@ fn fields(
                 &resolved.worker_slots.value,
                 resolved.worker_slots.from,
             ),
+            Field::WorkerTurnTimeout => layered(
+                field,
+                &resolved.worker_turn_timeout.value,
+                resolved.worker_turn_timeout.from,
+            ),
             Field::LeaseCapacity => layered(
                 field,
                 &resolved.lease_capacity.value,
