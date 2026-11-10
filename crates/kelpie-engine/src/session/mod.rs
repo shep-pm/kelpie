@@ -166,6 +166,7 @@ impl fmt::Debug for Harness {
             .field("extensions", &self.extensions)
             .field("hosts", &self.hosts)
             .field("installs", &self.installs)
+            .field("global_reads", &self.global_reads)
             .field("unprompted", &self.unprompted)
             .field("outdated", &self.outdated)
             .finish()

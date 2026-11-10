@@ -17,7 +17,8 @@
 //! what a text names of this machine. [`pacer`] holds a new turn while a limit's
 //! window is spent, and [`worker`] caps how many of a project's workers run at
 //! once. [`worktree`] reads a ticket's worktree, in this process where it can and
-//! through [`tree`] where it cannot. The crate has no Tauri dependency, so the app
+//! through [`tree`] where it cannot. [`worker_folder`] reads and writes the files in a
+//! folder a worker can write, and follows no link there. The crate has no Tauri dependency, so the app
 //! crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
@@ -41,7 +42,8 @@
 //! off its wrappers and reads its scripts; [`local_paths`] is the one check for
 //! what must not leave this machine; [`pacer`] holds a turn while a limit's window
 //! is spent; [`worker`] counts how many of a project's workers may run at once;
-//! [`worktree`] reads a ticket's worktree.
+//! [`worktree`] reads a ticket's worktree; [`worker_folder`] reads and writes a
+//! worker's folder without following a link.
 
 #![doc(test(attr(deny(warnings))))]
 
@@ -60,4 +62,5 @@ pub mod session;
 pub mod settings;
 pub mod tree;
 pub mod worker;
+pub mod worker_folder;
 pub mod worktree;
