@@ -10,8 +10,12 @@ use std::time::Duration;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::SessionId;
-use kelpie_engine::session::fake::{FakeAgent, Turn};
+use kelpie_engine::session::fake::{FakeAgent, FakeNetwork, Turn};
 use kelpie_engine::settings::ConfigDir;
+use kelpie_engine::tools::DOOR_VAR;
+use kelpie_engine::tools::SERVER_NAME;
+use kelpie_engine::tools::TOKEN_VAR;
+use kelpie_engine::tools::fake::FakeTools;
 use kelpie_protocol::{LogEntry, StopReason, ToolStatus};
 use tauri::ipc::InvokeResponseBody;
 use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
@@ -28,6 +32,8 @@ const WAIT: Duration = Duration::from_secs(10);
 struct Chat {
     app: App<MockRuntime>,
     dir: PathBuf,
+    /// The tools the opener gave the session, `None` when it gave none
+    tools: Arc<Mutex<Option<SessionTools>>>,
 }
 
 impl Chat {
@@ -106,6 +112,51 @@ impl Chat {
         log::read(self.state().pm_log_path().unwrap()).unwrap()
     }
 
+    /// A chat whose PM runs on `agent` with kelpie's tools, in a sandbox whose lists `network` holds
+    ///
+    /// The opener keeps the session's tools, so a test can dial the door the way
+    /// the harness's relay does.
+    fn with_tools(agent: &FakeAgent, network: &FakeNetwork) -> Self {
+        let (agent, network) = (agent.clone(), network.clone());
+        let kept: Arc<Mutex<Option<SessionTools>>> = Arc::new(Mutex::new(None));
+        let opener: Opener = {
+            let kept = Arc::clone(&kept);
+            Box::new(move |opening| {
+                let Some(tools) = opening.tools.map(Tools::session) else {
+                    return Err("kelpie's tools door did not open".to_owned());
+                };
+                *kept.lock().unwrap() = Some(tools.clone());
+                Ok(agent
+                    .clone()
+                    .sandbox_network(&network)
+                    .session(
+                        opening.project.path.clone(),
+                        opening.project.pm_session.clone(),
+                        Choice::default(),
+                    )
+                    .with_tools(tools))
+            })
+        };
+        let mut chat = Self::with(opener, Box::new(|| Ok(None)), None);
+        chat.tools = kept;
+        chat.state().set_project(chat.dir.clone()).unwrap();
+        chat
+    }
+
+    /// The tools the opener handed the session
+    fn session_tools(&self) -> SessionTools {
+        self.tools
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the session was given kelpie's tools")
+    }
+
+    /// The agent's side of kelpie's tools, dialled with the session's token
+    fn asking(&self) -> FakeTools {
+        FakeTools::connect(&self.session_tools()).unwrap()
+    }
+
     /// An opener whose session asks the harness for no model or effort
     fn opener(agent: &FakeAgent) -> Opener {
         let agent = agent.clone();
@@ -140,7 +191,11 @@ impl Chat {
             .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
-        Self { app, dir }
+        Self {
+            app,
+            dir,
+            tools: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// What a command that reaches the window sees
@@ -213,6 +268,18 @@ impl Events {
             }
         }
     }
+
+    /// Everything up to and including the sandbox request the maintainer is asked about,
+    /// as its id, host and why
+    fn until_request(&self) -> (String, String, String) {
+        loop {
+            match self.next() {
+                SessionEvent::SandboxRequest { id, host, why } => return (id, host, why),
+                SessionEvent::Failed { message } => panic!("the turn failed: {message}"),
+                _ => {}
+            }
+        }
+    }
 }
 
 #[test]
@@ -270,185 +337,6 @@ fn pm_send_forwards_every_event_to_the_channel() {
         ),
         "{events:?}"
     );
-}
-
-#[test]
-fn the_next_send_uses_the_new_model() {
-    let agent = FakeAgent::new()
-        .offers_models("small", &["small", "large"])
-        .turn(Turn::new().text("one"))
-        .turn(Turn::new().text("two"));
-    let chat = Chat::planned(&agent);
-    let project = chat.state().project_id(None).unwrap();
-    let layer = || Target::Project {
-        id: project.clone(),
-    };
-    settings_set(
-        chat.handle(),
-        chat.state(),
-        layer(),
-        "pm-model".to_owned(),
-        "small".into(),
-    )
-    .unwrap();
-    chat.send("First").until_turn_ends();
-
-    settings_set(
-        chat.handle(),
-        chat.state(),
-        layer(),
-        "pm-model".to_owned(),
-        "large".into(),
-    )
-    .unwrap();
-    chat.send("Second").until_turn_ends();
-
-    assert_eq!(agent.launches(), 1, "the same session carries on");
-    assert_eq!(
-        agent.params("session/set_config_option"),
-        [
-            serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "small"}),
-            serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "large"}),
-        ]
-    );
-}
-
-#[test]
-fn a_model_the_global_pm_agent_sets_reaches_the_first_send() {
-    let agent = FakeAgent::new()
-        .offers_models("small", &["small", "large"])
-        .turn(Turn::new().text("one"));
-    let chat = Chat::planned(&agent);
-    settings_set(
-        chat.handle(),
-        chat.state(),
-        Target::Global,
-        "pm-model".to_owned(),
-        "large".into(),
-    )
-    .unwrap();
-
-    chat.send("First").until_turn_ends();
-
-    assert_eq!(
-        agent.params("session/set_config_option"),
-        [serde_json::json!({"sessionId": "fake-1", "configId": "model", "value": "large"})]
-    );
-}
-
-#[test]
-fn with_nothing_set_the_pm_runs_on_kelpies_default() {
-    let chat = Chat::on(&FakeAgent::new());
-    let project = chat.state().project_id(None).unwrap();
-
-    let plan = plan(chat.state().config(), &project).unwrap();
-
-    assert_eq!(plan.harness, PM_DEFAULT.harness);
-    assert_eq!(plan.choice.model.as_deref(), Some(PM_DEFAULT.model));
-    assert_eq!(plan.choice.effort.as_deref(), Some(PM_DEFAULT.effort));
-}
-
-#[test]
-fn another_harness_gets_no_model_kelpie_named_for_the_default_one() {
-    let chat = Chat::on(&FakeAgent::new());
-    let project = chat.state().project_id(None).unwrap();
-    settings_set(
-        chat.handle(),
-        chat.state(),
-        Target::Project {
-            id: project.clone(),
-        },
-        "pm-harness".to_owned(),
-        "goose".into(),
-    )
-    .unwrap();
-
-    let plan = plan(chat.state().config(), &project).unwrap();
-
-    assert_eq!(plan.harness, Harness::Goose);
-    assert_eq!(plan.choice, Choice::default());
-}
-
-#[test]
-fn with_nothing_set_the_sandbox_has_no_extra_domain_and_reads_the_project_alone() {
-    let chat = Chat::on(&FakeAgent::new());
-    let project = chat.state().project_id(None).unwrap();
-
-    let plan = plan(chat.state().config(), &project).unwrap();
-
-    assert!(plan.network_allowlist.is_empty());
-    assert_eq!(plan.reads, Reads::Project);
-    assert!(!plan.harness_global_folder);
-}
-
-#[test]
-fn the_projects_sandbox_settings_reach_the_plan() {
-    let chat = Chat::on(&FakeAgent::new());
-    let project = chat.state().project_id(None).unwrap();
-    let set = |key: &str, value: serde_json::Value| {
-        settings_set(
-            chat.handle(),
-            chat.state(),
-            Target::Project {
-                id: project.clone(),
-            },
-            key.to_owned(),
-            value,
-        )
-        .unwrap();
-    };
-    set(
-        "network-allowlist",
-        serde_json::json!(["docs.rs", "crates.io"]),
-    );
-    set("read-anywhere", serde_json::json!(true));
-    set("harness-global-folder", serde_json::json!(true));
-
-    let plan = plan(chat.state().config(), &project).unwrap();
-
-    assert_eq!(plan.network_allowlist, ["docs.rs", "crates.io"]);
-    assert_eq!(plan.reads, Reads::Anywhere);
-    assert!(plan.harness_global_folder);
-}
-
-#[test]
-fn the_reply_style_is_part_of_the_instructions_unless_the_harness_default_is_chosen() {
-    let chat = Chat::on(&FakeAgent::new());
-    let project = chat.state().project_id(None).unwrap();
-    let instructions = || {
-        plan(chat.state().config(), &project)
-            .unwrap()
-            .instructions
-            .unwrap()
-    };
-    assert!(instructions().contains("## Replies"));
-    assert!(instructions().contains("decisions.md"));
-
-    settings_set(
-        chat.handle(),
-        chat.state(),
-        Target::Global,
-        "reply-style".to_owned(),
-        "harness-default".into(),
-    )
-    .unwrap();
-
-    assert!(!instructions().contains("## Replies"));
-    assert!(instructions().contains("decisions.md"));
-}
-
-#[test]
-fn a_settings_file_that_cannot_be_used_reaches_the_chat_as_failed() {
-    let chat = Chat::on(&FakeAgent::new());
-    let file = chat.dir.join("config").join("settings.json");
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "{ not json").unwrap();
-
-    let SessionEvent::Failed { message } = chat.send("Hi").next() else {
-        panic!("the chat should hear a Failed");
-    };
-
-    assert!(message.contains("settings.json"), "{message}");
 }
 
 #[test]
@@ -962,3 +850,121 @@ fn a_log_with_a_bad_line_in_the_middle_does_not_stop_a_send() {
     // The history cannot be read as a whole, and says why
     assert!(pm_history(chat.state()).unwrap_err().contains("line 1"));
 }
+
+#[test]
+fn the_pm_session_is_given_kelpies_tools() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+    let chat = Chat::with_tools(&agent, &FakeNetwork::allowing(&["api.anthropic.com"]));
+
+    chat.send("Fetch docs.rs").until_turn_ends();
+
+    let opened = agent.params("session/new");
+    let [new] = opened.as_slice() else {
+        panic!("the agent should have been opened once");
+    };
+    let tools = chat.session_tools();
+    let servers = new["mcpServers"].as_array().unwrap();
+    assert_eq!(servers.len(), 1, "{servers:?}");
+    let server = &servers[0];
+    assert_eq!(server["name"], serde_json::json!(SERVER_NAME));
+    assert_eq!(server["args"], serde_json::json!(["tools"]));
+    assert_eq!(
+        server["env"],
+        serde_json::json!([
+            {"name": DOOR_VAR, "value": tools.door().to_string()},
+            {"name": TOKEN_VAR, "value": tools.token()},
+        ])
+    );
+}
+
+#[test]
+fn pm_answer_widens_the_session() {
+    let network = FakeNetwork::allowing(&["api.anthropic.com"]);
+    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
+    let chat = Chat::with_tools(&agent, &network);
+    let events = chat.send("Fetch docs.rs");
+    let mut asked = chat.asking();
+
+    asked.ask("docs.rs", "to read the crate's docs").unwrap();
+    let (id, host, why) = events.until_request();
+    assert_eq!(
+        (host.as_str(), why.as_str()),
+        ("docs.rs", "to read the crate's docs")
+    );
+    assert_eq!(
+        network.allowed(),
+        ["api.anthropic.com"],
+        "refused until the answer"
+    );
+
+    pm_answer(chat.state(), id.clone(), SandboxAnswer::Once).unwrap();
+
+    assert_eq!(
+        asked.answered().unwrap(),
+        ("docs.rs is allowed for this session".to_owned(), false)
+    );
+    assert_eq!(network.allowed(), ["api.anthropic.com", "docs.rs"]);
+    assert_eq!(
+        pm_answer(chat.state(), id, SandboxAnswer::Once),
+        Err("That request is over.".to_owned()),
+        "the answered request is not waiting any more"
+    );
+}
+
+#[test]
+fn allow_for_this_project_saves_the_host() {
+    let network = FakeNetwork::default();
+    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
+    let chat = Chat::with_tools(&agent, &network);
+    let events = chat.send("Fetch docs.rs");
+    let mut asked = chat.asking();
+
+    asked.ask("docs.rs", "to read the crate's docs").unwrap();
+    let (id, ..) = events.until_request();
+
+    pm_answer(chat.state(), id, SandboxAnswer::Project).unwrap();
+
+    assert_eq!(
+        asked.answered().unwrap().0,
+        "docs.rs is allowed and saved for this project"
+    );
+    assert_eq!(network.allowed(), ["docs.rs"]);
+
+    let project = chat.state().project_id(None).unwrap();
+    let plan = plan(chat.state().config(), &project).unwrap();
+    assert_eq!(plan.network_allowlist, ["docs.rs"]);
+}
+
+#[test]
+fn a_project_answer_the_sandbox_could_not_take_says_so_and_saves_nothing() {
+    let network = FakeNetwork::gone();
+    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
+    let chat = Chat::with_tools(&agent, &network);
+    let events = chat.send("Fetch docs.rs");
+    let mut asked = chat.asking();
+
+    asked.ask("docs.rs", "to read the crate's docs").unwrap();
+    let (id, ..) = events.until_request();
+
+    assert_eq!(
+        pm_answer(chat.state(), id, SandboxAnswer::Project),
+        Err(
+            "docs.rs is not through this session's sandbox, so kelpie saved nothing for it"
+                .to_owned()
+        ),
+    );
+    assert_eq!(
+        asked.answered().unwrap().0,
+        "docs.rs was allowed, but the sandbox could not take it, so it is still refused"
+    );
+
+    let project = chat.state().project_id(None).unwrap();
+    let plan = plan(chat.state().config(), &project).unwrap();
+    assert!(
+        plan.network_allowlist.is_empty(),
+        "the project was not told"
+    );
+    assert!(network.allowed().is_empty(), "the sandbox took nothing");
+}
+
+mod plan;
