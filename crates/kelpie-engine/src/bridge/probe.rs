@@ -8,7 +8,9 @@
 //!
 //! The start is the one [`crate::session::options::ask`] uses to list a
 //! harness's models, less its `session/new`: no session opens, so no login is
-//! needed and nothing is spent.
+//! needed and nothing is spent. Unlike the ask, it starts the bridge in no
+//! sandbox yet: it has none to hand in (#63 sandboxes the ask, and the probe
+//! follows once it starts through the same seam).
 
 use std::fmt;
 use std::io;
@@ -19,8 +21,8 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::InitializeResponse;
 
-use crate::session::options::{initialized_within, launcher};
-use crate::session::{Harness, Launch, SessionError};
+use crate::session::options::initialized_within;
+use crate::session::{Harness, Launch, SessionError, launcher};
 use crate::tree::ProcessTree;
 
 /// How long a bridge is given to answer `initialize` before the probe fails
@@ -172,7 +174,7 @@ pub fn probe(
 ) -> Result<(), ProbeError> {
     let folder = harness.program.parent().unwrap_or(Path::new("."));
     probed_within(
-        &mut launcher(tree, harness, folder),
+        &mut *launcher(Arc::clone(tree), harness.clone(), folder.to_path_buf()),
         requires,
         ANSWER_WITHIN,
     )
