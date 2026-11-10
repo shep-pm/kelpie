@@ -17,7 +17,8 @@
 //! what a text names of this machine. [`pacer`] holds a new turn while a limit's
 //! window is spent, and [`worker`] caps how many of a project's workers run at
 //! once. [`worktree`] reads a ticket's worktree, in this process where it can and
-//! through [`tree`] where it cannot. The crate has no Tauri dependency, so the app
+//! through [`tree`] where it cannot. [`tools`] serves kelpie's own tools to each
+//! session over MCP, through a relay and the one door its sandbox leaves open. The crate has no Tauri dependency, so the app
 //! crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
@@ -41,7 +42,8 @@
 //! off its wrappers and reads its scripts; [`local_paths`] is the one check for
 //! what must not leave this machine; [`pacer`] holds a turn while a limit's window
 //! is spent; [`worker`] counts how many of a project's workers may run at once;
-//! [`worktree`] reads a ticket's worktree.
+//! [`worktree`] reads a ticket's worktree; [`tools`] opens the door each session's
+//! `kelpie tools` relay reaches kelpie by.
 
 #![doc(test(attr(deny(warnings))))]
 
@@ -58,6 +60,7 @@ pub mod run;
 pub mod sandbox;
 pub mod session;
 pub mod settings;
+pub mod tools;
 pub mod tree;
 pub mod worker;
 pub mod worktree;

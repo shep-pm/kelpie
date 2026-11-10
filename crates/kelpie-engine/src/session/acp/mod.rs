@@ -14,7 +14,7 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
     CancelNotification, ContentBlock, ContentChunk, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
+    EnvVariable, LoadSessionRequest, McpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionCategory, SessionConfigSelectOptions, SessionNotification, SessionUpdate,
@@ -610,6 +610,28 @@ fn system_prompt(init: &InitializeResponse, setup: &Setup) -> Option<SystemPromp
     })
 }
 
+/// kelpie's tools as the stdio server `kelpie tools`, for a session that has them
+///
+/// The harness starts it as its own child, so it is in the session's process
+/// group with its `KELPIE_RUN` (ADR 0001). The program is kelpie's own binary,
+/// which the harness must be able to read and run inside its sandbox.
+fn mcp_servers(setup: &Setup) -> Result<Vec<McpServer>, Error> {
+    let Some(tools) = &setup.tools else {
+        return Ok(Vec::new());
+    };
+    let exe = std::env::current_exe().map_err(|error| {
+        Error::internal_error().data(format!("cannot tell which program kelpie is: {error}"))
+    })?;
+    Ok(vec![McpServer::Stdio(
+        McpServerStdio::new(crate::tools::SERVER_NAME, exe)
+            .args(vec!["tools".to_owned()])
+            .env(vec![
+                EnvVariable::new(crate::tools::DOOR_VAR, tools.door().to_string()),
+                EnvVariable::new(crate::tools::TOKEN_VAR, tools.token()),
+            ]),
+    )])
+}
+
 /// The session a connection opened
 struct Opened {
     session: agent_client_protocol::v1::schema::SessionId,
@@ -652,11 +674,18 @@ async fn open(
 ) -> Result<Opened, Open> {
     let gone = |error: &Error| cx.is_incoming_closed() || is_gone(error);
     let mut refused = false;
+    let servers = mcp_servers(setup).map_err(|error| Open::Failed {
+        fault: Fault::NotTheBridge {
+            message: describe(&error),
+        },
+        why: "start",
+    })?;
     let wanted = lock(&setup.id).clone();
     if let Some(wanted) = &wanted {
         let capabilities = &init.agent_capabilities;
         let resumed = if capabilities.session_capabilities.resume.is_some() {
             let request = ResumeSessionRequest::new(wanted.to_string(), setup.project.clone())
+                .mcp_servers(servers.clone())
                 .system_prompt(system_prompt(init, setup));
             cx.send_request(request)
                 .block_task()
@@ -665,6 +694,7 @@ async fn open(
         } else if capabilities.load_session {
             shared.set_replaying(true);
             let request = LoadSessionRequest::new(wanted.to_string(), setup.project.clone())
+                .mcp_servers(servers.clone())
                 .system_prompt(system_prompt(init, setup));
             let loaded = cx.send_request(request).block_task().await;
             shared.set_replaying(false);
@@ -717,6 +747,7 @@ async fn open(
         },
         why: "start",
     })?
+    .mcp_servers(servers)
     .system_prompt(system_prompt(init, setup));
     let response = match cx.send_request(request).block_task().await {
         Ok(response) => response,
