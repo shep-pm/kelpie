@@ -132,6 +132,23 @@ impl Records {
         write(&self.file, &self.list)
     }
 
+    /// Drop `ticket`'s record and write the file, `false` when it had none
+    ///
+    /// For a start that held a slot and never began a worker: nothing runs for
+    /// the ticket and nothing is queued for it, so it is listed nowhere.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn remove(&mut self, ticket: &str) -> io::Result<bool> {
+        let Some(at) = self.list.iter().position(|record| record.ticket == ticket) else {
+            return Ok(false);
+        };
+        self.list.remove(at);
+        write(&self.file, &self.list)?;
+        Ok(true)
+    }
+
     /// Keep `status` as `ticket`'s state, give its slot back when the new state
     /// needs none, and write the file when either changed
     ///

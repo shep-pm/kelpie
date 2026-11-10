@@ -34,7 +34,7 @@ pub mod start;
 
 pub use record::{Record, Records};
 pub use slots::{Seat, seat};
-pub use start::{Opening, Paths, Project, Started, Ticket, start};
+pub use start::{Opening, Paths, Project, StartError, Started, Ticket, start};
 
 #[cfg(test)]
 mod tests;

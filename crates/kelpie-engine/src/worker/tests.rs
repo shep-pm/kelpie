@@ -352,6 +352,10 @@ fn a_start_with_no_free_slot_waits_for_one() {
     )
     .unwrap();
     assert!(matches!(first, Started::Running { .. }), "{first:?}");
+    assert!(
+        matches!(until_started(&heard), SessionEvent::Started { .. }),
+        "the first worker's turn is in flight"
+    );
 
     let (sink, idle) = events();
     let second = start(
@@ -454,6 +458,113 @@ fn a_worker_mid_turn_at_quit_is_paused_on_the_next_launch() {
         Records::load(rig.paths.records()).unwrap().list(),
         records.list(),
         "the pause is kept for the launch after that"
+    );
+}
+
+#[test]
+fn a_start_that_never_begins_gives_its_slot_back() {
+    let rig = Rig::new("slot back");
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("second turn"));
+    // What a harness that is not installed does
+    let broken = |_opening: &Opening<'_>| -> Result<Session, String> {
+        Err("the harness is not installed".to_owned())
+    };
+    let project = rig.project(&binding, &broken, 1);
+
+    let (sink, heard) = events();
+    let error = start(&project, &ticket("74", "First ticket"), sink).expect_err("the opener fails");
+    assert!(matches!(error, StartError::Session(_)), "{error:?}");
+    assert!(heard.try_recv().is_err(), "nothing ran for it");
+    assert!(kept(&rig).is_empty(), "the failed start holds no slot");
+
+    // The slot the failed start held goes to the next ticket
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+    let project = rig.project(&binding, &open, 1);
+    let (sink, heard) = events();
+    let second = start(&project, &ticket("75", "Second ticket"), sink).unwrap();
+    assert!(matches!(second, Started::Running { .. }), "{second:?}");
+    until_turn_ends(&heard);
+    assert_eq!(
+        kept(&rig)
+            .iter()
+            .map(|record| (record.ticket.as_str(), record.seat))
+            .collect::<Vec<_>>(),
+        [("75", Seat::Without)],
+        "one worker ran, and it holds no slot now its turn ended"
+    );
+}
+
+#[test]
+fn a_ticket_already_running_is_not_started_twice() {
+    let rig = Rig::new("twice");
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("first turn"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+    let project = rig.project(&binding, &open, 2);
+
+    let (sink, heard) = events();
+    let first = start(&project, &ticket("74", "Build the thing"), sink).unwrap();
+    assert!(matches!(first, Started::Running { .. }), "{first:?}");
+    assert!(
+        matches!(until_started(&heard), SessionEvent::Started { .. }),
+        "the turn is in flight"
+    );
+
+    // The Start button again, or the PM and the button at once
+    let (sink, idle) = events();
+    let again = start(&project, &ticket("74", "Build the thing"), sink)
+        .expect_err("the ticket's worker is already running");
+    assert!(
+        matches!(again, StartError::Running { ticket: ref name } if name == "74"),
+        "{again:?}"
+    );
+    assert!(idle.try_recv().is_err(), "no second turn ran");
+    assert_eq!(agent.launches(), 1, "one session for one worktree");
+    assert_eq!(
+        kept(&rig)
+            .iter()
+            .map(|record| (record.ticket.as_str(), record.status, record.seat))
+            .collect::<Vec<_>>(),
+        [("74", Status::Running, Seat::Held)],
+        "the record is as the running worker left it"
+    );
+}
+
+#[test]
+fn a_ticket_id_is_refused_where_it_collides_with_another_worktree() {
+    let rig = Rig::new("names");
+    let binding = binding();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
+    let project = rig.project(&binding, &open, 2);
+
+    // `74.git` is ticket 74's clone git dir, and the rest are ref names git refuses
+    for id in ["74.git", "74.lock", "74..75", "74.", ".74", ""] {
+        let (sink, heard) = events();
+        let error = start(&project, &ticket(id, "Build the thing"), sink)
+            .expect_err("{id} names a folder or a branch kelpie cannot use");
+        assert!(matches!(error, StartError::Name { .. }), "{id}: {error:?}");
+        assert!(heard.try_recv().is_err(), "{id}: nothing ran");
+    }
+    assert!(kept(&rig).is_empty(), "a refused id holds nothing");
+    assert_eq!(agent.launches(), 0, "nothing ran for a refused id");
+
+    // An id with a dot inside is one kelpie can name a git dir for
+    let (sink, heard) = events();
+    let dotted = start(&project, &ticket("1.2", "Build the thing"), sink).unwrap();
+    assert!(matches!(dotted, Started::Running { .. }), "{dotted:?}");
+    until_turn_ends(&heard);
+    let mut git_dir = rig.paths.worktree("1.2").as_os_str().to_owned();
+    git_dir.push(".git");
+    assert_eq!(
+        rig.paths.git_dir("1.2"),
+        PathBuf::from(git_dir),
+        "the clone's git dir is the worktree plus `.git`, not its extension swapped"
+    );
+    assert!(
+        rig.paths.git_dir("1.2").join("HEAD").is_file(),
+        "the clone the worktree was prepared into is the one Paths names"
     );
 }
 

@@ -30,7 +30,7 @@ use crate::session::log::Log;
 use crate::session::{Choice, Harness, Session, SessionEvent, SessionId};
 use crate::tools::{SessionTools, Tools};
 use crate::tree::ProcessTree;
-use crate::worktree::{self, Remote};
+use crate::worktree::{self, Remote, clone};
 
 use super::{Record, Records, Seat, Status};
 
@@ -108,9 +108,12 @@ impl Paths {
     }
 
     /// `<data_dir>/projects/<id>/worktrees/<ticket>.git`, the clone's own git dir
+    ///
+    /// [`clone::git_dir_of`] is the one spelling of it, so a ticket whose id
+    /// holds a dot, `1.2`, gets `1.2.git` here and not `1.git`.
     #[must_use]
     pub fn git_dir(&self, ticket: &str) -> PathBuf {
-        self.worktree(ticket).with_extension("git")
+        clone::git_dir_of(&self.worktree(ticket))
     }
 
     /// `<data_dir>/projects/<id>/workers/<ticket>`, which holds the worker's
@@ -291,6 +294,13 @@ pub enum StartError {
         id: String,
     },
 
+    /// The ticket already has a worker holding a slot, so a second session would
+    /// write the same worktree on the same branch
+    Running {
+        /// The ticket as it was given
+        ticket: String,
+    },
+
     /// The ticket's worktree could not be prepared
     Worktree(worktree::WorktreeError),
 
@@ -311,6 +321,9 @@ impl std::fmt::Display for StartError {
                 f,
                 "{id} is not a ticket id kelpie can name a branch and a folder with"
             ),
+            Self::Running { ticket } => {
+                write!(f, "ticket {ticket} already has a worker on its worktree")
+            }
             Self::Worktree(error) => {
                 write!(f, "the ticket's worktree could not be prepared: {error}")
             }
@@ -326,7 +339,7 @@ impl std::fmt::Display for StartError {
 impl core::error::Error for StartError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::Name { .. } | Self::Session(_) => None,
+            Self::Name { .. } | Self::Running { .. } | Self::Session(_) => None,
             Self::Worktree(error) => Some(error),
             Self::Record(error) | Self::Log(error) => Some(error),
         }
@@ -335,20 +348,26 @@ impl core::error::Error for StartError {
 
 /// Start a worker on `ticket`, and stream its turn into `events`
 ///
-/// A ticket already started is started again: its worktree keeps what its last
-/// turn left, and its session resumes under the id its harness gave it. A ticket
-/// with no free slot is kept in line for one and nothing starts for it, which is
-/// what a caller that wants it running tries again for.
+/// A ticket whose worker has ended, is Paused, or is still in line for a slot is
+/// started again: its worktree keeps what its last turn left, and its session
+/// resumes under the id its harness gave it. A ticket with no free slot is kept
+/// in line for one and nothing starts for it, which is what a caller that wants
+/// it running tries again for. A ticket whose worker already holds a slot is
+/// refused, so no two sessions write one worktree.
 ///
 /// `events` hears every [`SessionEvent`] of the turn, after `start` has read it
 /// for the record: the session id is kept as soon as the harness gives it, and
 /// the worker is done and holds no slot once its turn ends.
 ///
+/// A slot held here is given back when the worker never began. The design's
+/// order puts the slot first (`docs/design/workers.md`, Starting one), and the
+/// worktree, the log and the opener can each still fail after it.
+///
 /// # Errors
 ///
-/// [`StartError`]: the ticket id names nothing, the worktree could not be
-/// prepared, the record or the log could not be written, or the session could
-/// not be built.
+/// [`StartError`]: the ticket id names nothing, the ticket already has a worker
+/// running, the worktree could not be prepared, the record or the log could not
+/// be written, or the session could not be built.
 pub fn start(
     project: &Project<'_>,
     ticket: &Ticket,
@@ -359,12 +378,41 @@ pub fn start(
             id: ticket.id.clone(),
         });
     }
-    let branch = branch_of(&ticket.id);
-    let record = hold_slot(project, &ticket.id, &branch)?;
-    if record.seat == Seat::Waiting {
-        return Ok(Started::Waiting { record });
+    let held = hold_slot(project, &ticket.id, &branch_of(&ticket.id))?;
+    if held.record.seat == Seat::Waiting {
+        return Ok(Started::Waiting {
+            record: held.record,
+        });
     }
+    match begin(project, ticket, held.record, events) {
+        Ok(started) => Ok(started),
+        Err(error) => {
+            // The slot was held for a worker that never began
+            if let Err(lost) = give_slot_back(project, &ticket.id, held.before.as_ref()) {
+                eprintln!(
+                    "kelpie: the slot of ticket {} was not given back: {lost}",
+                    ticket.id
+                );
+            }
+            Err(error)
+        }
+    }
+}
 
+/// The worker a held slot begins: its worktree, its sandbox and its session
+///
+/// # Errors
+///
+/// [`StartError::Worktree`], [`StartError::Log`] or [`StartError::Session`]: the
+/// worktree could not be prepared, the log could not be opened, or the session
+/// could not be built.
+fn begin(
+    project: &Project<'_>,
+    ticket: &Ticket,
+    record: Record,
+    events: impl FnMut(SessionEvent) + Send + 'static,
+) -> Result<Started, StartError> {
+    let branch = branch_of(&ticket.id);
     let worktree = project.paths.worktree(&ticket.id);
     let state_dir = project.paths.state_dir(&ticket.id);
     let prepared = worktree::prepare(
@@ -438,17 +486,26 @@ pub fn start(
 /// Put `ticket`'s worker in the project's slots, and keep its record
 ///
 /// A ticket already started keeps its place in the list, which is the order
-/// freed slots go out in. Returns its record, whose seat says whether it has a
-/// slot or is in line for one.
+/// freed slots go out in. A ticket whose worker holds a slot is refused, since a
+/// second session would write the same worktree on the same branch.
 ///
 /// # Errors
 ///
+/// [`StartError::Running`]: the ticket's worker is already running.
 /// [`StartError::Record`]: the records file could not be written.
-fn hold_slot(project: &Project<'_>, ticket: &str, branch: &str) -> Result<Record, StartError> {
+fn hold_slot(project: &Project<'_>, ticket: &str, branch: &str) -> Result<Held, StartError> {
     let mut records = lock(project.records);
-    let mut record = records
-        .get(ticket)
-        .cloned()
+    let before = records.get(ticket).cloned();
+    if before
+        .as_ref()
+        .is_some_and(|held| held.status == Status::Running && held.seat == Seat::Held)
+    {
+        return Err(StartError::Running {
+            ticket: ticket.to_owned(),
+        });
+    }
+    let mut record = before
+        .clone()
         .unwrap_or_else(|| Record::new(ticket, branch));
     record.status = Status::Running;
     records.keep(record.clone()).map_err(StartError::Record)?;
@@ -456,7 +513,39 @@ fn hold_slot(project: &Project<'_>, ticket: &str, branch: &str) -> Result<Record
     if let Some(seated) = records.get(ticket) {
         record.seat = seated.seat;
     }
-    Ok(record)
+    Ok(Held { record, before })
+}
+
+/// The record a start holds, and what the ticket's record was before it
+struct Held {
+    /// The record as the slots now see it: [`Seat::Held`], or [`Seat::Waiting`]
+    /// when the project has no free slot
+    record: Record,
+
+    /// The record as it was before this start, `None` when the ticket had none.
+    /// A start that never began puts this back.
+    before: Option<Record>,
+}
+
+/// Give back the slot of a worker that never began
+///
+/// A ticket that had no record before is dropped, since nothing runs for it and
+/// nothing is queued for it. One that had a record is put back as it was. Either
+/// way the slot count runs again, so the next ticket in line takes the freed slot.
+///
+/// # Errors
+///
+/// The records file could not be written.
+fn give_slot_back(project: &Project<'_>, ticket: &str, before: Option<&Record>) -> io::Result<()> {
+    let mut records = lock(project.records);
+    match before {
+        Some(record) => records.keep(record.clone())?,
+        None => {
+            records.remove(ticket)?;
+        }
+    }
+    records.seat(project.slots)?;
+    Ok(())
 }
 
 /// The caller's sink, with the record read from every event that changes it
@@ -476,18 +565,41 @@ fn kept(
         let mut records = lock(&kept);
         match &event {
             SessionEvent::Started { session_id } => {
-                let _ = records.set_session(&ticket, session_id);
+                lost(
+                    &ticket,
+                    records.set_session(&ticket, session_id),
+                    "its session id",
+                );
             }
             SessionEvent::TurnEnded { .. } => {
-                let _ = records.set_status(&ticket, Status::Ended);
+                lost(
+                    &ticket,
+                    records.set_status(&ticket, Status::Ended),
+                    "its end",
+                );
             }
             SessionEvent::Failed { .. } => {
-                let _ = records.set_status(&ticket, Status::Paused);
+                lost(
+                    &ticket,
+                    records.set_status(&ticket, Status::Paused),
+                    "its pause",
+                );
             }
             _ => {}
         }
         drop(records);
         events(event);
+    }
+}
+
+/// Say what a record that would not be written cost the ticket
+///
+/// The turn goes on either way, so the loss is named rather than swallowed: the
+/// next start opens a new session instead of resuming, or the slot stays held
+/// until the next launch pauses the worker.
+fn lost(ticket: &str, kept: io::Result<()>, what: &str) {
+    if let Err(error) = kept {
+        eprintln!("kelpie: the record of ticket {ticket} did not keep {what}: {error}");
     }
 }
 
@@ -528,9 +640,20 @@ fn choice(binding: &Binding) -> Choice {
 }
 
 /// Whether `ticket` can name a folder, a branch and a file of its own
+///
+/// The id names a worktree, its clone's git dir, a state folder and the branch
+/// `kelpie/<id>`, so it is refused wherever those collide or where git refuses a
+/// branch name: an id ending in `.git` is another ticket's clone git dir
+/// ([`clone::git_dir_of`]), one ending in `.lock` is a ref git locks, `..` and a
+/// trailing dot are refused in a ref name, and a leading dot would hide the
+/// folder.
 fn is_name(ticket: &str) -> bool {
     !ticket.is_empty()
         && !ticket.starts_with('.')
+        && !ticket.ends_with('.')
+        && !ticket.ends_with(".git")
+        && !ticket.ends_with(".lock")
+        && !ticket.contains("..")
         && ticket
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
