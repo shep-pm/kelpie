@@ -225,8 +225,8 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 /// long as the launcher that holds it.
 ///
 /// Before it builds the session it starts the PM's sandbox once and runs a
-/// command in it ([`probe`]), and records in `opening.sandbox_setup` whether
-/// bwrap refused, so the chat can say why.
+/// command in it, and records in `opening.sandbox_setup` whether bwrap
+/// refused, so the chat can say why.
 ///
 /// # Errors
 ///
