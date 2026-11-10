@@ -92,6 +92,13 @@ pub struct Harness {
     /// Folders outside the project that the harness reads to run, such as the
     /// one its own install sits in
     pub installs: Vec<PathBuf>,
+    /// What the harness reads of the person's own global folder, when they turned
+    /// the setting on
+    ///
+    /// Each is one entry [`crate::harness::global`] linked into the session's
+    /// config folder. The folder itself is never opened whole: it holds the
+    /// person's login and secrets, which stay closed (ADR 0005).
+    pub global_reads: Vec<PathBuf>,
     /// The value of the harness's `mode` option that turns its own permission
     /// prompts off, which a sandboxed session sets
     pub unprompted: Option<String>,
@@ -112,6 +119,7 @@ impl Harness {
             extensions: Vec::new(),
             hosts: Vec::new(),
             installs: Vec::new(),
+            global_reads: Vec::new(),
             unprompted: None,
             outdated: None,
         }

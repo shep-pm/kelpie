@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crabpot::Config;
 use serde_json::json;
@@ -127,6 +127,115 @@ fn reads_are_the_project_the_folders_beside_it_and_the_state_dir() {
             .contains(&entries(&["~"]).filesystem.deny_read[0]),
         "the home folder is closed"
     );
+}
+
+/// The person's home folder, as a harness's slice spells it when it names an entry of their global folder
+const PERSON: &str = "/home/person";
+
+/// `PERSON` with `rest` after it
+fn theirs(rest: &str) -> PathBuf {
+    PathBuf::from(PERSON).join(rest)
+}
+
+#[test]
+fn a_linked_entry_of_the_persons_global_folder_joins_the_reads() {
+    let mut harness = on(&[]);
+    harness.installs = vec!["/opt/claude/bin".into()];
+    harness.global_reads = vec![theirs(".claude/CLAUDE.md"), theirs(".claude/skills")];
+
+    let config = built(&harness, &[], false);
+
+    assert_eq!(
+        config.filesystem.allow_read,
+        Some(
+            entries(&[
+                PROJECT,
+                "/work",
+                STATE,
+                "/opt/claude/bin",
+                "/home/person/.claude/CLAUDE.md",
+                "/home/person/.claude/skills",
+            ])
+            .filesystem
+            .allow_read
+            .unwrap()
+        )
+    );
+    let whole = entries(&["/home/person/.claude"])
+        .filesystem
+        .allow_read
+        .unwrap();
+    assert!(
+        !config
+            .filesystem
+            .allow_read
+            .unwrap()
+            .iter()
+            .any(|read| whole.contains(read)),
+        "the person's global folder was opened whole, and not just what was linked into the session"
+    );
+}
+
+#[test]
+fn a_global_folder_read_opens_no_login_or_secret_and_no_write() {
+    let mut harness = on(&[]);
+    harness.global_reads = vec![
+        theirs(".claude/CLAUDE.md"),
+        theirs(".config/goose/config.yaml"),
+    ];
+
+    // goose keeps its config beside its keys, so its whole config folder is a denied
+    // login folder. The linked entry is allowed inside it, which is what crabpot
+    // carves the deny for (crabpot-macos `allow_read::late_denies`).
+    let opened = entries(&["/home/person/.config/goose/config.yaml"])
+        .filesystem
+        .allow_read
+        .unwrap();
+
+    for read_anywhere in [false, true] {
+        let config = built(&harness, &[], read_anywhere);
+
+        let closed = entries(&[
+            "~/.claude/.credentials.json",
+            "~/.claude.json",
+            "~/.config/goose/**",
+            "~/.ssh/**",
+        ]);
+        for denied in &closed.filesystem.deny_read {
+            assert!(
+                config.filesystem.deny_read.contains(denied),
+                "{denied:?} is readable with read_anywhere {read_anywhere}"
+            );
+        }
+        assert!(
+            config
+                .filesystem
+                .allow_read
+                .iter()
+                .flatten()
+                .any(|read| opened.contains(read)),
+            "goose's own config was not opened inside its denied config folder"
+        );
+        assert_eq!(
+            config.filesystem.allow_write,
+            entries(&[STATE]).filesystem.allow_write,
+            "a harness could write outside the state folder"
+        );
+        let linked = read(json!({
+            "network": {"allowedDomains": [], "deniedDomains": []},
+            "filesystem": {
+                "denyRead": [], "allowRead": [], "allowWrite": [],
+                "denyWrite": [
+                    "/home/person/.claude/CLAUDE.md",
+                    "/home/person/.config/goose/config.yaml"
+                ],
+            },
+        }));
+        assert_eq!(
+            config.filesystem.deny_write, linked.filesystem.deny_write,
+            "a harness could write through a link into the person's own folder"
+        );
+    }
 }
 
 #[test]

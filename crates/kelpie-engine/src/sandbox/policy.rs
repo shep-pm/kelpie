@@ -4,11 +4,14 @@
 //! builds from the session's harness, its project and its state folder (ADR 0005).
 //! Reads are wide and writes narrow:
 //!
-//! - **Reads:** the project, the folders beside it, the session's state folder
-//!   and the harness's own install. The rest of the home folder is closed. With
-//!   the project's *Read anywhere by default* setting on, only the logins and
-//!   secrets are closed.
-//! - **Writes:** the state folder alone.
+//! - **Reads:** the project, the folders beside it, the session's state folder,
+//!   the harness's own install, and the entries of the person's global folder
+//!   their harness linked into the session. The rest of the home folder is
+//!   closed. With the project's *Read anywhere by default* setting on, only the
+//!   logins and secrets are closed.
+//! - **Writes:** the state folder alone. Each entry linked in from the person's
+//!   global folder is denied by its own name besides, so a harness cannot change
+//!   their own file through a link.
 //! - **Network:** the harness's model hosts plus the project's allowlist, and
 //!   nothing else gets through: a host off the list is refused, not asked about.
 //!
@@ -112,11 +115,19 @@ pub fn policy(
     state_dir: &Path,
 ) -> Result<Config, ConfigError> {
     let mut deny_read: Vec<String> = denied().into_iter().map(str::to_owned).collect();
-    let mut allow_read = Vec::new();
-    if !project.read_anywhere {
+    // The linked entries are named as allows whatever the project's *Read anywhere
+    // by default* setting says: goose keeps its own config inside a folder the policy
+    // denies as a login folder, and an allow is what crabpot carves that deny around
+    let allow_read: Vec<String> = if project.read_anywhere {
+        harness
+            .global_reads
+            .iter()
+            .map(|entry| text(entry))
+            .collect()
+    } else {
         deny_read.push("~".to_owned());
-        allow_read = reads(harness, project, state_dir);
-    }
+        reads(harness, project, state_dir)
+    };
     let mut network = json!({
         "allowedDomains": hosts(harness, project),
         "deniedDomains": [],
@@ -134,7 +145,14 @@ pub fn policy(
             "denyRead": deny_read,
             "allowRead": allow_read,
             "allowWrite": [text(state_dir)],
-            "denyWrite": [],
+            // A link is a name in the session's folder for a file of the person's own.
+            // Each one is denied by its own name too, so a harness writing through it
+            // is refused whether the OS checks the link or what it points at
+            "denyWrite": harness
+                .global_reads
+                .iter()
+                .map(|entry| text(entry))
+                .collect::<Vec<String>>(),
         },
     });
     Config::from_json(&settings.to_string())
@@ -153,6 +171,9 @@ fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<Stri
     }
     folders.push(text(state_dir));
     folders.extend(harness.installs.iter().map(|folder| text(folder)));
+    // One entry per linked entry of the person's global folder, never the folder
+    // whole: it holds their login and secrets, which stay denied
+    folders.extend(harness.global_reads.iter().map(|entry| text(entry)));
     let mut seen = HashSet::new();
     folders.retain(|folder| seen.insert(folder.clone()));
     folders

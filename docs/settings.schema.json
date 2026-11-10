@@ -76,7 +76,7 @@
     },
     "harness-global-folder": {
       "default": null,
-      "description": "Whether a harness may read the global config folder it keeps for itself",
+      "description": "Whether a harness may read the global config folder it keeps for itself: Claude Code's `~/.claude`, or `CLAUDE_CONFIG_DIR` when the person set it, and goose's `~/.config/goose`. Each applies when the session next starts.",
       "type": [
         "boolean",
         "null"

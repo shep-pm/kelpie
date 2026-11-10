@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use kelpie_engine::harness::global;
 use kelpie_engine::run::RunId;
 use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
@@ -25,6 +26,13 @@ use kelpie_engine::tree::{ProcessTree, sweep_marked};
 
 /// The argument that makes this binary the sandboxed process the sweep looks for
 const SLEEP: &str = "--sleep-in-the-sandbox";
+
+/// The argument that makes this binary run the global folder checks with `HOME` moved
+/// into the scratch folder, which is how a test reaches a path the policy denies
+const IN_HOME: &str = "--in-the-persons-home";
+
+/// What that child exits with when this host runs no sandbox at all
+const CHILD_SKIPPED: i32 = 3;
 
 /// How long a test waits for something it forced to happen
 const WAIT: Duration = Duration::from_secs(20);
@@ -37,6 +45,12 @@ fn main() {
         return;
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|word| word == IN_HOME) {
+        let root = args
+            .get(1)
+            .expect("the scratch folder follows --in-the-persons-home");
+        std::process::exit(in_the_persons_home(Path::new(root)));
+    }
     let selection = Selection::of(&args);
     let mut failed = false;
     let (mut ran, mut filtered) = (0_usize, 0_usize);
@@ -126,7 +140,7 @@ impl Selection {
     }
 }
 
-const TESTS: [(&str, fn()); 5] = [
+const TESTS: [(&str, fn()); 6] = [
     (
         "the_value_of_a_libtest_option_is_not_a_filter",
         the_value_of_a_libtest_option_is_not_a_filter,
@@ -142,6 +156,10 @@ const TESTS: [(&str, fn()); 5] = [
     (
         "a_sandboxed_command_reads_the_project_and_writes_the_state_dir",
         a_sandboxed_command_reads_the_project_and_writes_the_state_dir,
+    ),
+    (
+        "the_global_folder_is_read_only_when_on",
+        the_global_folder_is_read_only_when_on,
     ),
     (
         "the_sweep_finds_a_sandboxed_process",
@@ -188,22 +206,22 @@ impl Scratch {
         self.root.join("outside")
     }
 
+    /// A folder of this scratch, made when it is asked for
+    fn folder(&self, name: &str) -> PathBuf {
+        let path = self.root.join(name);
+        fs::create_dir_all(&path).expect("the scratch folder is made");
+        path
+    }
+
     /// A sandbox for a session in the project, whose harness is `program`
     fn sandbox(&self, program: &Path) -> Sandbox {
-        let mut harness = Harness::new(program);
-        // The harness's own install is read, as a real one's is
-        harness.installs = program
-            .parent()
-            .map(Path::to_path_buf)
-            .into_iter()
-            .collect();
-        let project = Project {
-            folder: &self.project(),
-            network_allowlist: &[],
-            read_anywhere: false,
-        };
-        Sandbox::start(&harness, &project, &self.state())
-            .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
+        self.sandbox_for(program, &self.project(), &[])
+    }
+
+    /// A sandbox for a session in `project`, whose harness is `program` and reads
+    /// `global_reads` of the person's own global folder
+    fn sandbox_for(&self, program: &Path, project: &Path, global_reads: &[PathBuf]) -> Sandbox {
+        sandbox_in(program, project, &self.state(), global_reads)
     }
 }
 
@@ -211,6 +229,26 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+/// A sandbox for a session whose harness is `program`, working in `project`, keeping its
+/// files in `state` and reading `global_reads` of the person's own global folder
+fn sandbox_in(program: &Path, project: &Path, state: &Path, global_reads: &[PathBuf]) -> Sandbox {
+    let mut harness = Harness::new(program);
+    // The harness's own install is read, as a real one's is
+    harness.installs = program
+        .parent()
+        .map(Path::to_path_buf)
+        .into_iter()
+        .collect();
+    harness.global_reads = global_reads.to_vec();
+    let confined = Project {
+        folder: project,
+        network_allowlist: &[],
+        read_anywhere: false,
+    };
+    Sandbox::start(&harness, &confined, state)
+        .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
 }
 
 /// `script` run by `sh` inside the sandbox
@@ -249,16 +287,20 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
     cfg!(target_os = "linux") && stderr.starts_with("bwrap:")
 }
 
-/// A sandbox for `program` that is known to run commands, or `None` when this
-/// host cannot run one at all.
+/// shorthand for [`working`] with a sandbox for a session on `program` in the project
+fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
+    working(scratch.sandbox(program), test)
+}
+
+/// `sandbox`, once it is known to run commands, or `None` when this host cannot
+/// run one at all
 ///
 /// A refusal test that ran in a sandbox which never started would pass, as a
 /// command that did not run leaves no file and exits non-zero. So each test
 /// asks for a sandbox that has run a command first, and a host that cannot
 /// fails the test. `KELPIE_SKIP_SANDBOX_TESTS` skips it instead, shown as
 /// `SKIPPED`, for a host known not to run one.
-fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
-    let sandbox = scratch.sandbox(program);
+fn working(sandbox: Sandbox, test: &str) -> Option<Sandbox> {
     let probe = sh(&sandbox, "true");
     if probe.status.success() {
         return Some(sandbox);
@@ -338,6 +380,115 @@ fn a_sandboxed_command_reads_the_project_and_writes_the_state_dir() {
 
     assert!(run.status.success(), "{run:?}");
     assert_eq!(fs::read_to_string(&written).unwrap(), "from the project");
+}
+
+/// A session reads the entry of the person's global folder its harness linked, and nothing
+/// else there, whatever the setting it is run with
+///
+/// Every path the policy denies lies under `~`, so the checks run in a child whose `HOME`
+/// is the scratch folder: only there is the person's folder one the policy closes and a
+/// link reaches into. `set_var` is unsafe, which the crate forbids, so the scratch is
+/// named to the child instead of set here.
+fn the_global_folder_is_read_only_when_on() {
+    let scratch = Scratch::new("global-folder");
+    // The person's own folder, kept out of the folders beside the project so only
+    // what is linked can be read
+    let global = scratch.folder("home/.claude");
+    let (login, linked) = (global.join(".credentials.json"), global.join("CLAUDE.md"));
+    fs::write(&login, "their login\n").unwrap();
+    fs::write(&linked, "the person's own instructions\n").unwrap();
+
+    let run = Command::new(std::env::current_exe().expect("this binary"))
+        .arg(IN_HOME)
+        .arg(&scratch.root)
+        .env("HOME", &scratch.root)
+        .output()
+        .expect("the child runs with the scratch folder as its home folder");
+
+    match run.status.code() {
+        Some(CHILD_SKIPPED) => {
+            SKIPPED.fetch_add(1, Ordering::SeqCst);
+            println!(
+                "SKIPPED the_global_folder_is_read_only_when_on: the child found no sandbox to run"
+            );
+        }
+        Some(0) => {}
+        _ => panic!(
+            "the linked entry, the login beside it or a write through the link was not what the policy says: {}",
+            String::from_utf8_lossy(&run.stderr)
+        ),
+    }
+}
+
+/// The checks of [`the_global_folder_is_read_only_when_on`], with `root` as this home folder
+fn in_the_persons_home(root: &Path) -> i32 {
+    let (global, project, state) = (
+        root.join("home/.claude"),
+        root.join("work/project"),
+        root.join("state"),
+    );
+    let (login, linked) = (global.join(".credentials.json"), global.join("CLAUDE.md"));
+    // The session's config folder, holding the person's entry as a harness builder links it
+    let (config, through) = (state.join("claude"), state.join("claude").join("CLAUDE.md"));
+    let reads = global::link(&global, &config, &["CLAUDE.md"]).unwrap_or_else(|error| {
+        panic!("the person's entry was not linked into the session: {error}")
+    });
+
+    let Some(on) = working(
+        sandbox_in(Path::new("/bin/sh"), &project, &state, &reads),
+        "the_global_folder_is_read_only_when_on",
+    ) else {
+        return CHILD_SKIPPED;
+    };
+
+    let read = sh(&on, &format!("cat {}", through.display()));
+    assert!(
+        read.status.success(),
+        "the linked entry was not read through the session's name for it: {read:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&read.stdout),
+        "the person's own instructions\n"
+    );
+
+    let login_read = sh(&on, &format!("cat {}", login.display()));
+    assert!(
+        !login_read.status.success(),
+        "the person's login was read through their global folder: {login_read:?}"
+    );
+
+    let written = sh(&on, &format!("echo nope > {}", through.display()));
+    assert!(
+        !written.status.success(),
+        "a write through the linked entry was not refused: {written:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&linked).unwrap(),
+        "the person's own instructions\n",
+        "a sandboxed write changed the person's own file"
+    );
+    drop(on);
+
+    // The same session with the setting off: the link is taken back, and the person's
+    // own file is closed again
+    let cleared = global::link(&global, &config, &[])
+        .unwrap_or_else(|error| panic!("the link was not taken back: {error}"));
+    assert!(cleared.is_empty(), "{cleared:?}");
+    assert!(!through.exists(), "the link stayed in the session's folder");
+
+    let Some(off) = working(
+        sandbox_in(Path::new("/bin/sh"), &project, &state, &[]),
+        "the_global_folder_is_read_only_when_on",
+    ) else {
+        return CHILD_SKIPPED;
+    };
+
+    let read = sh(&off, &format!("cat {}", linked.display()));
+    assert!(
+        !read.status.success(),
+        "the person's own file was read with nothing linked into the session: {read:?}"
+    );
+    0
 }
 
 fn the_sweep_finds_a_sandboxed_process() {

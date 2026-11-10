@@ -55,7 +55,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Reply style | Global, project | Kelpie's Concise-plus style by default (`ux.md`, item 4) |
 | Network allowlist | Project | Domains a sandbox request saved with *Allow for this project* (ADR 0005) |
 | Read anywhere by default | Project | Off (`ux.md`, Sandbox) |
-| Harness global folder | Project | Off. Reads `~/.claude` or goose's own config when on (ADR 0006) |
+| Harness global folder | Project | Off. When on, the entries each harness reads from its own global folder are linked into the session's config folder: Claude Code's `CLAUDE.md`, `settings.json`, `skills`, `agents`, `commands` and `output-styles` from `~/.claude` (or `CLAUDE_CONFIG_DIR`), and goose's `config.yaml` from `~/.config/goose`. Logins and secrets stay closed, and the harness writes nothing there. Applies when the session next starts (ADR 0006) |
 | Bridge updates | Global | Per bridge: *Registry, automatic* by default, *Registry, ask first*, or *Kelpie's pin* (`bridge-updates.md`) |
 | Lease capacity | Global | How many commands hold each lease at once, keyed by the lease's name, with `cargo-test` at 3. Each count is 1 to 64: a lease with no place can never be taken, and every command queued behind one waits forever. A lease no layer names holds one at a time. A lease is the machine's, so its capacity is one value for every project. The form has no row for the map yet, so the file is the way in (`workers.md`, Slots, pacing and leases) |
 

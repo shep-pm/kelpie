@@ -485,6 +485,7 @@ impl FakeAgent {
             extensions: self.script.extensions.clone(),
             hosts: Vec::new(),
             installs: Vec::new(),
+            global_reads: Vec::new(),
             unprompted: self.script.sandboxed.clone(),
             outdated: self.script.outdated.clone(),
         }

@@ -102,7 +102,10 @@ pub fn harness_options(
     let bridge = bridge::ensure(data, claude::pin()).map_err(|error| error.to_string())?;
     let asked = data.join(ASKS_FOLDER).join(&harness);
     fs::create_dir_all(&asked).map_err(|error| error.to_string())?;
-    let harness = claude::harness(bridge, &asked, &logins).map_err(|error| error.to_string())?;
+    // The ask is kelpie's own, not a project's session: the person's global
+    // folder stays out of it (`harness-global-folder` is a project setting)
+    let harness =
+        claude::harness(bridge, &asked, &logins, false).map_err(|error| error.to_string())?;
     options::offerings(
         &state.tree(),
         &harness,

@@ -6,7 +6,9 @@
 //! (ADR 0006).
 //!
 //! Each session gets `<state_dir>/goose/` as its goose root, so the person's
-//! own goose config, `~/.goose`, stays out until they turn it on (ADR 0006).
+//! own goose config, `~/.config/goose`, stays out until they turn it on
+//! (ADR 0006). With the setting on, their own `config.yaml` is linked in;
+//! `secrets.yaml`, which holds their model keys, never is.
 //! The provider is named in the environment; the model and the effort are config
 //! options, as they are for every harness. goose answers a resume with
 //! `session/load` only, which [`crate::session`] handles for any harness that
@@ -23,10 +25,11 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::session::Harness;
 
+use super::global::{self, Entry};
 use super::{HarnessError, install_folders, on_path};
 
 /// The command kelpie looks for on `PATH`, and runs
@@ -51,6 +54,17 @@ const UNPROMPTED: &str = "auto";
 /// The folder inside a session's state dir that goose keeps its files in
 const CONFIG_FOLDER: &str = "goose";
 
+/// The folder inside the person's home folder that goose keeps its own files in
+const GLOBAL_FOLDER: &str = ".config/goose";
+
+/// Each entry of the person's global folder a session reads when they turn it on
+///
+/// goose's own config, which holds its extensions and its default provider. It
+/// sits directly under the home dir `GOOSE_PATH_ROOT` names, as the goose on
+/// `PATH` keeps it. The secrets goose keeps beside it are not an entry, and the
+/// sandbox keeps them closed (ADR 0005).
+const GLOBAL_ENTRIES: [Entry; 1] = ["config.yaml"];
+
 /// The provider a goose session runs on, and where it answers
 ///
 /// `name` is goose's own name for the provider, such as `ollama`. Kelpie names
@@ -73,21 +87,38 @@ pub struct Provider {
 /// `state_dir` is the folder the caller keeps for this session, such as
 /// `<data_dir>/projects/<id>/pm/`; goose gets `<state_dir>/goose/`.
 /// `provider` is where the person's model comes from.
+/// `harness_global_folder` is the project's resolved setting: on links the
+/// person's own goose config into the session's root, off takes back the links a
+/// session made with it on.
 ///
 /// # Errors
 ///
-/// [`HarnessError::NotInstalled`] when `PATH` holds no `goose`.
-pub fn harness(state_dir: &Path, provider: Provider) -> Result<Harness, HarnessError> {
+/// [`HarnessError::NotInstalled`] when `PATH` holds no `goose`, and
+/// [`HarnessError::Global`] when a link could not be made or removed.
+pub fn harness(
+    state_dir: &Path,
+    provider: Provider,
+    harness_global_folder: bool,
+) -> Result<Harness, HarnessError> {
     let path = env::var_os("PATH").unwrap_or_default();
-    harness_on_path(state_dir, &provider, &path)
+    let folder = global_folder();
+    harness_on_path(
+        state_dir,
+        &provider,
+        &path,
+        folder.as_deref(),
+        harness_global_folder,
+    )
 }
 
 /// [`harness`], searching `path` for the person's goose instead of this
-/// process's `PATH`
+/// process's `PATH`, and reading their goose config from `global` when it has one
 pub(super) fn harness_on_path(
     state_dir: &Path,
     provider: &Provider,
     path: &OsStr,
+    global: Option<&Path>,
+    harness_global_folder: bool,
 ) -> Result<Harness, HarnessError> {
     let goose = on_path(CMD, path).ok_or_else(|| HarnessError::NotInstalled {
         harness: NAME.to_owned(),
@@ -101,6 +132,15 @@ pub(super) fn harness_on_path(
         env.push((host_env(&provider.name), host.clone().into()));
     }
     let installs = install_folders(&goose, path);
+    let root = state_dir.join(CONFIG_FOLDER);
+    let global_reads = match (global, harness_global_folder) {
+        (Some(folder), true) => global::link(folder, &root, &GLOBAL_ENTRIES)?,
+        (Some(folder), false) => {
+            global::link(folder, &root, &[])?;
+            Vec::new()
+        }
+        (None, _) => Vec::new(),
+    };
     Ok(Harness {
         program: goose,
         args: vec![ACP.into()],
@@ -111,10 +151,23 @@ pub(super) fn harness_on_path(
         extensions: Vec::new(),
         hosts: hosts_of(provider),
         installs,
+        global_reads,
         unprompted: Some(UNPROMPTED.to_owned()),
         // goose speaks ACP itself, so no bridge says anything about its version
         outdated: None,
     })
+}
+
+/// The folder the person's own goose keeps its files in
+///
+/// `GOOSE_PATH_ROOT` when they set it for their own goose, else the `goose`
+/// folder under `~/.config`. `None` when the OS gives no home folder to name it
+/// under.
+fn global_folder() -> Option<PathBuf> {
+    env::var_os(PATH_ROOT_ENV)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| global::home().map(|home| home.join(GLOBAL_FOLDER)))
 }
 
 /// The hosts a sandboxed session on `provider` may reach
