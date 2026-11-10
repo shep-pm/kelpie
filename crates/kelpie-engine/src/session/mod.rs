@@ -11,6 +11,9 @@
 //!   session built with [`Session::sandboxed`] runs inside crabpot (ADR 0005),
 //!   so its harness is set to stop asking, and a command the sandbox refuses
 //!   shows as a failed step.
+//! - A session given [`Session::with_judge`] is the other way: its harness is
+//!   set to ask, and each request is judged in process, so a refusal's reason
+//!   stays on the refused step.
 //! - When the harness exits, the turn in flight ends with a
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
@@ -52,6 +55,7 @@ use semver::Version;
 
 pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
+use crate::permission::{Judge, ReadCall};
 use crate::sandbox::Sandbox;
 use crate::tools::SessionTools;
 use crate::tree::{Child, ProcessTree};
@@ -96,6 +100,14 @@ pub struct Harness {
     /// The value of the harness's `mode` option that turns its own permission
     /// prompts off, which a sandboxed session sets
     pub unprompted: Option<String>,
+    /// The value of the harness's `mode` option that makes it ask before each
+    /// tool call, which a judged session sets so every call reaches the judge
+    ///
+    /// A harness set to [`Harness::unprompted`] never asks, so the judge would
+    /// see nothing.
+    pub prompting: Option<String>,
+    /// How the harness's adapter reads a tool call it asks about
+    pub read_call: ReadCall,
     /// What its bridge says when the harness behind it is too old, and how the
     /// person updates that harness
     pub outdated: Option<Outdated>,
@@ -114,6 +126,8 @@ impl Harness {
             hosts: Vec::new(),
             installs: Vec::new(),
             unprompted: None,
+            prompting: None,
+            read_call: ReadCall::standard(),
             outdated: None,
         }
     }
@@ -160,6 +174,8 @@ impl fmt::Debug for Harness {
             .field("hosts", &self.hosts)
             .field("installs", &self.installs)
             .field("unprompted", &self.unprompted)
+            .field("prompting", &self.prompting)
+            .field("read_call", &self.read_call)
             .field("outdated", &self.outdated)
             .finish()
     }
@@ -483,6 +499,8 @@ struct Setup {
     instructions: Option<String>,
     tools: Option<SessionTools>,
     mode: Option<String>,
+    /// What judges each tool call the harness asks about, `None` to refuse them all
+    judge: Option<Judge>,
     log: Option<log::Log>,
     seed: Option<Seed>,
     /// The bridge version the session's process runs on, shared with [`Session::bridge_version`]
@@ -521,6 +539,8 @@ pub struct Session {
     tools: Option<SessionTools>,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
+    /// What judges each tool call the harness asks about, `None` to refuse them all
+    judge: Option<Judge>,
     log: Option<log::Log>,
     seed: Option<Seed>,
     id: Arc<Mutex<Option<SessionId>>>,
@@ -636,6 +656,7 @@ impl Session {
             instructions: None,
             tools: None,
             mode: None,
+            judge: None,
             log: None,
             seed: None,
             id: Arc::new(Mutex::new(resume)),
@@ -648,6 +669,21 @@ impl Session {
     #[cfg(test)]
     fn with_mode(mut self, mode: &str) -> Self {
         self.mode = Some(mode.to_owned());
+        self
+    }
+
+    /// Judge each tool call the harness asks about, and answer for the person
+    ///
+    /// The harness is set to its [`Harness::prompting`] mode, so every tool call
+    /// reaches the handler, which reads the call with the harness's own
+    /// [`Harness::read_call`] and asks `judge`. A call it allows is answered with
+    /// the harness's allow option. One it refuses is answered with the reject
+    /// option, and the refused step keeps the reason. A harness that names no
+    /// prompting mode is left in the mode it starts in. Without a judge every
+    /// request is refused. Call this before the first send.
+    #[must_use]
+    pub fn with_judge(mut self, judge: Judge) -> Self {
+        self.judge = Some(judge);
         self
     }
 
@@ -806,6 +842,7 @@ impl Session {
             instructions: self.instructions.clone(),
             tools: self.tools.clone(),
             mode: self.mode.clone(),
+            judge: self.judge.clone(),
             log: self.log.clone(),
             seed: self.seed.clone(),
             running: Arc::clone(&self.running),

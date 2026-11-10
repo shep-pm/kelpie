@@ -76,10 +76,7 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
                     harness: (**harness).clone(),
                     version: None,
                     from: None,
-                    mode: setup
-                        .mode
-                        .clone()
-                        .or_else(|| unprompted(&**launcher, harness)),
+                    mode: mode_of(setup, &**launcher, harness),
                 },
                 link,
             ))
@@ -93,10 +90,7 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
             };
             let Started { harness, launch } = (bridge.start)(&version).map_err(not_started)?;
             let mut launch = launch;
-            let mode = setup
-                .mode
-                .clone()
-                .or_else(|| unprompted(&*launch, &harness));
+            let mode = mode_of(setup, &*launch, &harness);
             let Link {
                 transport,
                 explain,
@@ -127,6 +121,21 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
             ))
         }
     }
+}
+
+/// The `mode` option to set on `harness`
+///
+/// The session's own, else the mode that makes a judged session's harness ask,
+/// else the one that stops its prompts when `launch` runs it in a sandbox. A
+/// judged session never stops them: the judge would see nothing.
+fn mode_of(setup: &Setup, launch: &dyn Launch, harness: &Harness) -> Option<String> {
+    setup.mode.clone().or_else(|| {
+        if setup.judge.is_some() {
+            harness.prompting.clone()
+        } else {
+            unprompted(launch, harness)
+        }
+    })
 }
 
 /// The mode that stops `harness`'s own prompts, when `launch` runs it in a sandbox

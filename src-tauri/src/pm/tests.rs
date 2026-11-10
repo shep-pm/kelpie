@@ -245,11 +245,13 @@ fn pm_send_forwards_every_event_to_the_channel() {
                 id: "t1".to_owned(),
                 title: "Read decisions.md".to_owned(),
                 status: ToolStatus::Pending,
+                reason: None,
             },
             SessionEvent::ToolStep {
                 id: "t1".to_owned(),
                 title: "Read decisions.md".to_owned(),
                 status: ToolStatus::Done,
+                reason: None,
             },
         ]
     );
