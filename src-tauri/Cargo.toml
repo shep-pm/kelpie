@@ -25,6 +25,7 @@ self_named_module_files = "deny"
 getrandom.workspace = true
 kelpie-engine.workspace = true
 kelpie-protocol = { workspace = true, features = ["specta"] }
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true

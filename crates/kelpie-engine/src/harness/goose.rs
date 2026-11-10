@@ -99,6 +99,8 @@ pub(super) fn harness_on_path(
         new_session_meta: None,
         // kelpie reads no goose notification beyond ACP's own
         extensions: Vec::new(),
+        // goose speaks ACP itself, so no bridge says anything about its version
+        outdated: None,
     })
 }
 
