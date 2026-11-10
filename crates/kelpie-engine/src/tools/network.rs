@@ -101,16 +101,14 @@ impl Asks {
         self.state().turn = turn;
     }
 
-    /// Answer the request `id`, and say whether one was waiting for it
+    /// Answer the request `id`, and give the host it asked for, `None` when none was waiting
     ///
     /// `Once` and `Project` let its host through the sandbox first, so the agent
     /// can use it as soon as it hears. Saving a `Project` answer to the
-    /// project's allowlist is the app's part.
-    pub(crate) fn answer(&self, id: &str, answer: SandboxAnswer) -> bool {
+    /// project's allowlist is the app's part, and the host is what it saves.
+    pub(crate) fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<String> {
         let mut state = self.state();
-        let Some(waiting) = state.waiting.remove(id) else {
-            return false;
-        };
+        let waiting = state.waiting.remove(id)?;
         let widened = !matches!(answer, SandboxAnswer::Once | SandboxAnswer::Project)
             || state
                 .reach
@@ -127,7 +125,7 @@ impl Asks {
         drop(state);
         // The agent gave up on the call in the meantime, which no one hears of
         let _ = waiting.answer.send(reply);
-        true
+        Some(waiting.host)
     }
 
     /// Answer every waiting request denied

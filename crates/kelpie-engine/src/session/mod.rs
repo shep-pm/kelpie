@@ -808,14 +808,15 @@ impl Session {
         }
     }
 
-    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and say whether one was waiting
+    /// Answer the [`SessionEvent::SandboxRequest`] `id`, and give the host it asked
+    /// for, `None` when none was waiting
     ///
     /// `Once` and `Project` let the request's host through the running sandbox
     /// for as long as the session runs, and the agent hears so. `Project` is
-    /// also saved to the project's allowlist, which is the app's part. `Deny`
-    /// changes nothing. A request the turn's end or a cancel already answered
-    /// is gone, and this says `false`.
-    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> bool {
+    /// also saved to the project's allowlist, which is the app's part, and the
+    /// host is what it saves. `Deny` changes nothing. A request the turn's end
+    /// or a cancel already answered is gone, and this says `None`.
+    pub fn answer(&self, id: &str, answer: SandboxAnswer) -> Option<String> {
         self.asks.answer(id, answer)
     }
 }

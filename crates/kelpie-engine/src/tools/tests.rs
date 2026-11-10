@@ -622,7 +622,14 @@ fn request_network_waits_for_the_answer() {
     );
     // Nothing is said until the maintainer answers
     assert!(agent.relayed.lines.try_recv().is_err());
-    assert!(agent.session.asks().answer(&id, SandboxAnswer::Once));
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Once)
+            .as_deref(),
+        Some("docs.rs"),
+    );
     assert_eq!(
         agent.heard(),
         ("docs.rs is allowed for this session".to_owned(), false)
@@ -636,7 +643,14 @@ fn allow_for_the_project_tells_the_agent_it_was_saved() {
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
 
-    agent.session.asks().answer(&id, SandboxAnswer::Project);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Project)
+            .as_deref(),
+        Some("docs.rs"),
+    );
 
     assert_eq!(
         agent.heard().0,
@@ -651,7 +665,14 @@ fn deny_changes_nothing() {
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
 
-    agent.session.asks().answer(&id, SandboxAnswer::Deny);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Deny)
+            .as_deref(),
+        Some("docs.rs"),
+    );
 
     assert_eq!(
         agent.heard(),
@@ -769,8 +790,9 @@ fn an_interrupt_answers_denied() {
     turn.session.cancel();
 
     assert_eq!(turn.asking.heard().0, "denied by the maintainer");
-    assert!(
-        !turn.session.answer(&id, SandboxAnswer::Once),
+    assert_eq!(
+        turn.session.answer(&id, SandboxAnswer::Once),
+        None,
         "a cancelled request was still waiting"
     );
     assert!(turn.asking.hosts.list().is_empty());
@@ -802,7 +824,7 @@ fn a_turn_that_ended_answers_what_it_left_waiting_denied() {
     ) {}
 
     assert_eq!(turn.asking.heard().0, "denied by the maintainer");
-    assert!(!turn.session.answer(&id, SandboxAnswer::Once));
+    assert_eq!(turn.session.answer(&id, SandboxAnswer::Once), None);
 }
 
 #[test]
@@ -816,7 +838,10 @@ fn an_answer_through_the_session_widens_the_sandbox() {
         "refused before the answer"
     );
 
-    assert!(turn.session.answer(&id, SandboxAnswer::Once));
+    assert_eq!(
+        turn.session.answer(&id, SandboxAnswer::Once).as_deref(),
+        Some("docs.rs"),
+    );
 
     assert_eq!(turn.asking.heard().0, "docs.rs is allowed for this session");
     assert_eq!(turn.asking.hosts.list(), ["api.anthropic.com", "docs.rs"]);
@@ -843,7 +868,14 @@ fn allow_once_widens_the_running_sandbox() {
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
     assert!(!network.allows("docs.rs"), "refused while it is asked");
-    agent.session.asks().answer(&id, SandboxAnswer::Once);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Once)
+            .as_deref(),
+        Some("docs.rs"),
+    );
 
     assert_eq!(agent.heard().0, "docs.rs is allowed for this session");
     assert!(network.allows("docs.rs"), "reached after the answer");
@@ -860,11 +892,25 @@ fn a_sandbox_that_replaces_the_one_before_gets_what_was_allowed() {
     let mut agent = asking(&[]);
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
-    agent.session.asks().answer(&id, SandboxAnswer::Once);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Once)
+            .as_deref(),
+        Some("docs.rs"),
+    );
     agent.heard();
     agent.asks_for("example.com", "to fetch a file");
     let (id, ..) = agent.shown();
-    agent.session.asks().answer(&id, SandboxAnswer::Deny);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Deny)
+            .as_deref(),
+        Some("example.com"),
+    );
     agent.heard();
 
     // A newer harness's launch starts a sandbox of its own
@@ -895,7 +941,14 @@ fn an_allow_the_sandbox_could_not_take_is_not_told_as_allowed() {
     agent.asks_for("docs.rs", "to read the crate's docs");
     let (id, ..) = agent.shown();
 
-    agent.session.asks().answer(&id, SandboxAnswer::Once);
+    assert_eq!(
+        agent
+            .session
+            .asks()
+            .answer(&id, SandboxAnswer::Once)
+            .as_deref(),
+        Some("docs.rs"),
+    );
 
     let (line, failed) = agent.heard();
     assert!(!failed);

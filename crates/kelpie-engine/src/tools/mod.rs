@@ -56,6 +56,8 @@ pub use relay::{DOOR_VAR, TOKEN_VAR, run_from_args};
 use tokio_util::sync::CancellationToken;
 
 mod door;
+#[cfg(any(test, feature = "testing"))]
+pub mod fake;
 mod network;
 mod relay;
 #[cfg(test)]

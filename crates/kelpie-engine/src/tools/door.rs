@@ -22,6 +22,8 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "testing"))]
+use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::{env, fs};
 
@@ -133,6 +135,18 @@ impl Stream {
             Self::Tcp(stream) => stream.shutdown(Shutdown::Write),
             #[cfg(unix)]
             Self::Unix(stream) => stream.shutdown(Shutdown::Write),
+        }
+    }
+
+    /// Give up on a read that `timeout` outlasts, so a reader fails rather than waits forever
+    ///
+    /// A test's reader only: a relay waits as long as the agent behind it does.
+    #[cfg(any(test, feature = "testing"))]
+    pub(super) fn set_read_timeout(&self, timeout: Duration) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.set_read_timeout(Some(timeout)),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.set_read_timeout(Some(timeout)),
         }
     }
 }

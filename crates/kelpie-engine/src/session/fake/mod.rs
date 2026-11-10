@@ -67,9 +67,12 @@ use crate::permission::ReadCall;
 use crate::run::{ENV, RunId};
 
 use super::{Choice, Extension, Harness, Launch, Link, Outdated, Session, SessionId};
+use crate::tools::Reach;
 
 mod bridge;
 pub use bridge::{BRIDGE, FakeBridge};
+mod network;
+pub use network::FakeNetwork;
 
 /// What a session adds to the `Failed` message when it asks how the agent ended
 pub const EXPLANATION: &str = "the fake agent is gone";
@@ -346,6 +349,8 @@ struct Script {
     sandboxed: Option<String>,
     /// The mode its harness names to ask before each tool call
     prompting: Option<String>,
+    /// The network lists of the sandbox it runs in, which an answer widens
+    network: Option<FakeNetwork>,
 }
 
 #[derive(Debug, Default)]
@@ -496,6 +501,16 @@ impl FakeAgent {
     #[must_use]
     pub fn sandboxed(mut self, mode: &str) -> Self {
         self.script.sandboxed = Some(mode.to_owned());
+        self
+    }
+
+    /// Say this agent runs in a sandbox whose network lists `network` holds
+    ///
+    /// A `request_network` answer widens them, as it widens a real sandbox's,
+    /// and the session's `asks` are the ones the tool server answers.
+    #[must_use]
+    pub fn sandbox_network(mut self, network: &FakeNetwork) -> Self {
+        self.script.network = Some(network.clone());
         self
     }
 
@@ -660,6 +675,13 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl Launch for FakeAgent {
     fn sandboxed(&self) -> bool {
         self.script.sandboxed.is_some()
+    }
+
+    fn network(&self) -> Option<Arc<dyn Reach>> {
+        self.script
+            .network
+            .clone()
+            .map(|network| Arc::new(network) as Arc<dyn Reach>)
     }
 
     fn launch(&mut self) -> io::Result<Link> {
