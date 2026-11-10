@@ -17,6 +17,7 @@
 //! the bridge checks wrote rather than the settings file.
 
 use std::fs;
+use std::sync::{Mutex, PoisonError};
 
 use kelpie_engine::agents::{Agents, Binding, Origin, PM, PmKey, WORKER};
 use kelpie_engine::bridge;
@@ -36,6 +37,18 @@ use crate::theme;
 
 /// The folder under the data folder a harness is asked in
 const ASKS_FOLDER: &str = "asks";
+
+/// One theme write at a time, across its save and the window change it makes
+///
+/// [`settings_set`] runs off the main thread, so two quick theme picks land on two
+/// threads, and each saves the file, reads it back and themes the window. Held
+/// across all three, this makes the write that lands last the one that themes the
+/// window last, so the window always ends up on the theme the file holds. The
+/// engine's own write lock covers a layer file's read-modify-write and is let go
+/// before the window change, so it cannot reach that change.
+///
+/// `pub(crate)` so a test can hold it and show a theme write waits on it.
+pub(crate) static THEME_WRITES: Mutex<()> = Mutex::new(());
 
 /// Keep `value` as `harness`'s login, replacing any it had
 ///
@@ -462,7 +475,8 @@ pub fn settings_reset<R: Runtime>(
 ///
 /// A theme the write lands is read back from the layers and set on the window, so
 /// the change shows without a restart (`docs/design/settings.md`, When a change
-/// applies).
+/// applies). A theme write holds [`THEME_WRITES`] over the save, the read-back and
+/// the window change, so no other theme write slips between them.
 fn write<R: Runtime>(
     app: &AppHandle<R>,
     config: &ConfigDir,
@@ -474,6 +488,8 @@ fn write<R: Runtime>(
         Some(id) => LayerFile::Project(id),
         None => LayerFile::Global,
     };
+    let _theme_write = (field == Field::Theme)
+        .then(|| THEME_WRITES.lock().unwrap_or_else(PoisonError::into_inner));
     if project.is_none()
         && let Some(key) = pm_key(field)
     {

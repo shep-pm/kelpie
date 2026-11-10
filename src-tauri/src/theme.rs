@@ -53,6 +53,8 @@ pub fn apply_to_main<R: Runtime>(app: &AppHandle<R>, theme: Theme) -> Result<(),
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use kelpie_engine::login::Store;
     use kelpie_engine::run::RunId;
@@ -143,6 +145,66 @@ mod tests {
         // Resetting it hands the window back to the OS
         settings::settings_reset(handle, state, Target::Global, "theme".into()).unwrap();
         assert!(!held().contains("theme"), "{}", held());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// How long a theme write held behind another one is given to land anyway
+    ///
+    /// The write is only ever late here: the lock is held for the whole wait.
+    const HELD: Duration = Duration::from_millis(200);
+
+    /// The theme the global layer file holds, or `nothing` when it holds none
+    fn held_at(dir: &std::path::Path) -> String {
+        let Ok(text) = fs::read_to_string(dir.join("config/settings.json")) else {
+            return "nothing".to_owned();
+        };
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["theme"]
+            .as_str()
+            .unwrap_or("nothing")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_theme_write_waits_for_the_one_before_it_to_theme_the_window() {
+        let dir = std::env::temp_dir().join(format!("kelpie-theme-lock-{}", RunId::new().unwrap()));
+        fs::create_dir_all(&dir).unwrap();
+        let app = app_with_project(&dir);
+        let window = WebviewWindowBuilder::new(&app, MAIN, WebviewUrl::default())
+            .build()
+            .unwrap();
+        assert_eq!(window.label(), MAIN);
+        let handle = app.handle().clone();
+
+        // A theme write holds its lock from the save through the window change, so a
+        // second pick cannot save over the first and then let the first theme the
+        // window on the theme the file has already moved past.
+        let held = settings::THEME_WRITES.lock().unwrap();
+        let (wrote, came_back) = mpsc::channel();
+        std::thread::spawn(move || {
+            let done = settings::settings_set(
+                handle.clone(),
+                handle.state::<AppState>(),
+                Target::Global,
+                "theme".into(),
+                "dark".into(),
+            );
+            let _ = wrote.send(done);
+        });
+
+        std::thread::sleep(HELD);
+        assert_eq!(
+            held_at(&dir),
+            "nothing",
+            "the save ran while another theme write held the lock"
+        );
+        assert!(
+            came_back.recv_timeout(HELD).is_err(),
+            "the write came back while another theme write held the lock"
+        );
+
+        drop(held);
+        came_back.recv().unwrap().unwrap();
+        assert_eq!(held_at(&dir), "dark");
         fs::remove_dir_all(dir).unwrap();
     }
 
