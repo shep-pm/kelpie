@@ -273,6 +273,8 @@ struct Setup {
     project: PathBuf,
     resume: Option<SessionId>,
     choice: Choice,
+    /// What [`Session::choose`] last set, read before each turn
+    wanted: Arc<Mutex<Choice>>,
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
@@ -285,7 +287,8 @@ struct Setup {
 pub struct Session {
     launcher: Arc<Mutex<Box<dyn Launch>>>,
     project: PathBuf,
-    choice: Choice,
+    /// The choice the next message runs on, which [`Session::choose`] changes
+    choice: Arc<Mutex<Choice>>,
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
@@ -299,7 +302,7 @@ impl fmt::Debug for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Session")
             .field("project", &self.project)
-            .field("choice", &self.choice)
+            .field("choice", &*lock(&self.choice))
             .field("id", &*lock(&self.id))
             .finish_non_exhaustive()
     }
@@ -345,7 +348,7 @@ impl Session {
         Self {
             launcher: Arc::new(Mutex::new(launcher)),
             project,
-            choice,
+            choice: Arc::new(Mutex::new(choice)),
             meta,
             extensions,
             instructions: None,
@@ -393,6 +396,16 @@ impl Session {
         }
     }
 
+    /// Change the model and effort the next message runs on
+    ///
+    /// The same session carries on: the harness is asked to set each option
+    /// that differs from what it last set, before the next prompt. A turn in
+    /// flight keeps what it started with. A field left empty is not asked, so
+    /// clearing one leaves the harness on the value it last took.
+    pub fn choose(&self, choice: Choice) {
+        *lock(&self.choice) = choice;
+    }
+
     /// The session's id: the one to resume, then the one the harness gave
     #[must_use]
     pub fn session_id(&self) -> Option<SessionId> {
@@ -426,7 +439,8 @@ impl Session {
         let setup = Setup {
             project: self.project.clone(),
             resume: lock(&self.id).clone(),
-            choice: self.choice.clone(),
+            choice: lock(&self.choice).clone(),
+            wanted: Arc::clone(&self.choice),
             meta: self.meta.clone(),
             extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
@@ -435,7 +449,9 @@ impl Session {
         let id = Arc::clone(&self.id);
         let started = thread::Builder::new()
             .name("kelpie-session".to_owned())
-            .spawn(move || futures::executor::block_on(acp::run(launcher, setup, commands, id)));
+            .spawn(move || {
+                futures::executor::block_on(acp::run(launcher, setup, commands, id));
+            });
         match started {
             Ok(_) => {
                 // The thread holds the receiver, so this cannot fail

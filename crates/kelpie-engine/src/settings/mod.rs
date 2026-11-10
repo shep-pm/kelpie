@@ -171,6 +171,28 @@ pub enum ReplyStyle {
     HarnessDefault,
 }
 
+impl ReplyStyle {
+    /// The instructions this style adds to an agent's own, `None` where it adds none
+    ///
+    /// The style is part of the instructions, so it is the same on every harness
+    /// (ADR 0006).
+    #[must_use]
+    pub fn instructions(self) -> Option<&'static str> {
+        match self {
+            Self::ConcisePlus => Some(CONCISE_PLUS),
+            Self::HarnessDefault => None,
+        }
+    }
+}
+
+/// Kelpie's own reply style, as instructions
+const CONCISE_PLUS: &str = "## Replies
+
+- Lead with the answer or the decision needed, then the reasons.
+- Keep to short prose. Use a list for steps or parallel items, a table for a comparison across several attributes, and a before and after for a change.
+- Say what you know and what you do not. Mark a guess as one.
+- Ask one question at a time, with your recommendation, when the maintainer has to choose.";
+
 /// One settings field
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -378,6 +400,22 @@ impl Settings {
     pub fn load(dir: &ConfigDir, project_id: &str) -> Result<Resolved, SettingsError> {
         let global = schema::read(dir, LayerFile::Global)?;
         let project = schema::read(dir, LayerFile::Project(project_id))?;
+        layers::resolve(&global, &project)
+    }
+
+    /// Read the global layer file and resolve every field from it alone
+    ///
+    /// What the form's Global tab shows: no project's file is read.
+    ///
+    /// # Errors
+    ///
+    /// As [`Settings::load`], for the global file.
+    pub fn load_global(dir: &ConfigDir) -> Result<Resolved, SettingsError> {
+        let global = schema::read(dir, LayerFile::Global)?;
+        let project = layers::LayerDoc {
+            file: PathBuf::new(),
+            fields: Map::new(),
+        };
         layers::resolve(&global, &project)
     }
 

@@ -40,6 +40,8 @@ The settings types live in Rust, and `schemars` writes their JSON Schema. The fo
 
 The form is rendered by `@rjsf/shadcn`. The layered field is its first test: if showing the layer and its reset fights rjsf's templates, that one widget is kelpie's own, not the whole form.
 
+The layered field fit rjsf's `FieldTemplate`, so it is one template and no widget of kelpie's own (`src/settings/LayeredField.tsx`). rjsf's own selects and switch are replaced by kelpie's shadcn ones, and the schema is made drawable first (`src/settings/schema.ts`): nullable types collapse, `$ref`s resolve, and each `const` is titled. A choice and a switch are written as they change, a text field and a list when it is left.
+
 ### Phase 1's fields
 
 | Field | Layer | Notes |

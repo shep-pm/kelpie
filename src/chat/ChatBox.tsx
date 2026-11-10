@@ -135,16 +135,16 @@ export function ChatBox() {
     if (project) void useChat.getState().load();
   }, [project]);
 
-  if (project === undefined) return <main className="h-screen" />;
+  if (project === undefined) return <main className="min-h-0 flex-1" />;
   if (project === null) {
     return (
-      <main className="flex h-screen flex-col">
+      <main className="flex min-h-0 flex-1 flex-col">
         <PickFolder onPicked={setProject} />
       </main>
     );
   }
   return (
-    <main className="flex h-screen flex-col">
+    <main className="flex min-h-0 flex-1 flex-col">
       <Turns />
       <Composer />
     </main>

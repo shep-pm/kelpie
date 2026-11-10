@@ -308,7 +308,7 @@ fn entries(front: &str) -> Vec<Entry> {
 }
 
 // The top-level key a frontmatter line starts, if it starts one.
-fn key_of(line: &str) -> Option<&str> {
+pub(super) fn key_of(line: &str) -> Option<&str> {
     (!line.starts_with([' ', '\t', '#', '-', '\r', '\n']))
         .then(|| line.split_once(':'))
         .flatten()
