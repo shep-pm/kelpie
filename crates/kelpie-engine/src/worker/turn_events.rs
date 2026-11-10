@@ -21,7 +21,9 @@ use super::{
 /// A worker's later turns, the one a Note starts and the one Stop and tell
 /// starts, reach the caller that started it through this.
 #[derive(Clone)]
-pub(super) struct Events(Arc<Mutex<Box<dyn FnMut(SessionEvent) + Send>>>);
+pub(super) struct Events(Arc<Mutex<Sink>>);
+
+type Sink = Box<dyn FnMut(SessionEvent) + Send>;
 
 impl Events {
     pub(super) fn new(sink: impl FnMut(SessionEvent) + Send + 'static) -> Self {
@@ -85,12 +87,7 @@ impl Turns {
         Some(Self::on(project, ticket, session, events))
     }
 
-    fn on(
-        project: &Project<'_>,
-        ticket: &str,
-        session: &Arc<Session>,
-        events: Events,
-    ) -> Self {
+    fn on(project: &Project<'_>, ticket: &str, session: &Arc<Session>, events: Events) -> Self {
         Self {
             records: Arc::clone(project.records),
             ticket: ticket.to_owned(),

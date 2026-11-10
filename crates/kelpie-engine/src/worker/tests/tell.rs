@@ -18,7 +18,10 @@ fn told<R>(rig: &Rig, then: impl FnOnce(&Project<'_>) -> R) -> R {
 /// Wait until the turn has said something, which it does once the harness has its prompt
 fn until_working(turn: &Mid) {
     loop {
-        let event = turn.heard.recv_timeout(WAIT).expect("the turn said nothing");
+        let event = turn
+            .heard
+            .recv_timeout(WAIT)
+            .expect("the turn said nothing");
         if matches!(event, SessionEvent::Text { .. }) {
             return;
         }
@@ -192,4 +195,90 @@ fn an_old_workers_json_with_no_notes_still_loads() {
     let records = Records::load(rig.paths.records()).unwrap();
 
     assert_eq!(records.get("74").unwrap().notes, Vec::<String>::new());
+}
+
+#[test]
+fn stop_and_tell_keeps_the_slot_and_the_running_status_across_the_cancelled_turn() {
+    let rig = Rig::new("stop and tell slot");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("working").until_cancelled())
+        .turn(Turn::new().text("redirected").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+    until_working(&turn);
+
+    let noted = told(&rig, |project| {
+        stop_and_tell(project, &turn.session, "74", "do the other thing")
+    })
+    .unwrap();
+
+    assert_eq!(noted, Noted::Sent);
+    let cancelled = until_turn_ends(&turn.heard);
+    assert!(
+        matches!(
+            cancelled.last(),
+            Some(SessionEvent::TurnEnded {
+                stop_reason: StopReason::Cancelled,
+                ..
+            })
+        ),
+        "the first turn was cancelled: {cancelled:?}"
+    );
+    assert_eq!(
+        standing(&rig),
+        (Status::Running, Seat::Held),
+        "the cancelled turn's end settles nothing"
+    );
+
+    // The new turn's end settles it as any other
+    until_working(&turn);
+    turn.session.cancel();
+    until_turn_ends(&turn.heard);
+    assert_eq!(standing(&rig), (Status::Ended, Seat::Without));
+}
+
+#[test]
+fn stop_and_tell_sends_its_text_as_the_next_prompt() {
+    let rig = Rig::new("stop and tell prompt");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("working").until_cancelled())
+        .turn(Turn::new().text("redirected"));
+    let turn = mid_turn(&rig, &agent);
+    until_working(&turn);
+
+    told(&rig, |project| {
+        stop_and_tell(project, &turn.session, "74", "do the other thing")
+    })
+    .unwrap();
+    until_turn_ends(&turn.heard);
+    until_turn_ends(&turn.heard);
+
+    assert_eq!(prompts(&agent)[1..], ["do the other thing"]);
+    assert_eq!(standing(&rig), (Status::Ended, Seat::Without));
+}
+
+#[test]
+fn stop_leaves_the_worker_paused_and_gives_its_slot_back() {
+    let rig = Rig::new("stop");
+    let agent = FakeAgent::new().turn(Turn::new().text("working").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+    until_working(&turn);
+
+    told(&rig, |project| stop(project, &turn.session, "74")).unwrap();
+    let ended = until_turn_ends(&turn.heard);
+
+    assert!(
+        matches!(
+            ended.last(),
+            Some(SessionEvent::TurnEnded {
+                stop_reason: StopReason::Cancelled,
+                ..
+            })
+        ),
+        "{ended:?}"
+    );
+    assert_eq!(
+        standing(&rig),
+        (Status::Paused, Seat::Without),
+        "the turn's end leaves it Paused, holding no slot"
+    );
 }

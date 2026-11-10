@@ -423,7 +423,8 @@ impl core::error::Error for StartError {
 /// it running tries again for. A ticket whose worker already holds a slot is
 /// refused, so no two sessions write one worktree.
 ///
-/// `events` hears every [`SessionEvent`] of the turn, after `start` has read it
+/// `events` hears every [`SessionEvent`] of the turn, and of each turn after it that
+/// a [`super::note`] or a [`super::stop_and_tell`] starts, after `start` has read it
 /// for the record: the session id is kept as soon as the harness gives it, and
 /// once the turn ends its branch passes the fence ([`super::turn_end`]), which settles
 /// the record and holds no slot.
