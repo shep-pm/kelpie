@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn no_command_returns_a_login() {
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .build(mock_context(noop_assets()))
             .unwrap();
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn there_is_no_command_that_reads_a_login_back() {
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .build(mock_context(noop_assets()))
             .unwrap();
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
@@ -201,9 +201,10 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();
@@ -248,9 +249,10 @@ mod tests {
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
-        let app = crate::builder_with(mock_builder(), Store::memory())
+        let app = crate::builder_with(mock_builder(), Store::memory(), None)
             .manage(state)
             .build(mock_context(noop_assets()))
             .unwrap();

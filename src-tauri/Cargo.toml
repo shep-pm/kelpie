@@ -45,3 +45,5 @@ tauri-build.workspace = true
 tauri = { workspace = true, features = ["test"] }
 # `testing` for `session::fake`, the scripted agent the command tests run on
 kelpie-engine = { workspace = true, features = ["testing"] }
+# The process table the reaper test reads, to see whether the reaper it started runs
+sysinfo.workspace = true
