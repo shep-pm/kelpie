@@ -102,3 +102,34 @@ fn git_command(dir: &Path, args: &[&str]) -> Command {
     .env("GIT_CONFIG_NOSYSTEM", "1");
     git
 }
+
+#[test]
+fn a_missing_ref_is_absent_but_a_folder_git_cannot_read_is_an_error() {
+    let dir = Dir::new("has-ref");
+    let tree = process_tree(dir.path());
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    assert!(super::has_ref(&tree, &repo, "refs/heads/kelpie/7").is_err());
+    git(&repo, &["init", "--quiet"]);
+    assert!(!super::has_ref(&tree, &repo, "refs/heads/kelpie/7").unwrap());
+}
+
+#[test]
+fn a_status_names_every_changed_staged_renamed_and_new_path() {
+    let status = "1 .M N... 100644 100644 100644 aaaa bbbb src/a b.rs\0\
+                  1 AD N... 000000 100644 000000 0000 cccc staged.txt\0\
+                  2 R. N... 100644 100644 100644 dddd eeee R100 new.rs\0old.rs\0\
+                  u UU N... 100644 100644 100644 100644 ffff gggg hhhh clash.rs\0\
+                  ? left.txt\0";
+    assert_eq!(
+        super::status_names(status),
+        [
+            "src/a b.rs",
+            "staged.txt",
+            "old.rs",
+            "new.rs",
+            "clash.rs",
+            "left.txt"
+        ]
+    );
+}
