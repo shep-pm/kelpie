@@ -28,7 +28,7 @@ use std::{env, fs};
 /// The longest path a socket may be bound to on macOS, in bytes
 ///
 /// `sockaddr_un.sun_path` is 104 bytes there, the last of them the NUL.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(super) const LONGEST_SOCKET: usize = 103;
 
 /// What a relay dials: a Unix socket's path, or a TCP address
