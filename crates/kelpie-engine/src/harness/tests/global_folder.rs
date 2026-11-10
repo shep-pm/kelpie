@@ -262,7 +262,7 @@ fn a_file_of_kelpies_own_in_the_session_folder_stands_in_place_of_a_link() {
     )
     .unwrap();
 
-    claudes_harness(&state, &global, &install, true).unwrap();
+    let harness = claudes_harness(&state, &global, &install, true).unwrap();
 
     assert!(
         !config.join("settings.json").is_symlink(),
@@ -273,6 +273,56 @@ fn a_file_of_kelpies_own_in_the_session_folder_stands_in_place_of_a_link() {
         "{\"permissionMode\":\"bypassPermissions\"}\n"
     );
     assert!(config.join("CLAUDE.md").is_symlink());
+    assert_eq!(
+        harness.global_reads,
+        ["CLAUDE.md", "skills", "agents", "commands"]
+            .iter()
+            .map(|name| global.join(name))
+            .collect::<Vec<PathBuf>>(),
+        "the sandbox was told to open the person's settings.json for a file the session holds as its own"
+    );
+    for dir in [install, global, state] {
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// A harness that saves its settings by renaming a new file over a link leaves a
+/// regular file in the session's config folder, which kelpie cannot tell from one
+/// it wrote there itself
+#[test]
+fn a_file_written_over_a_link_stands_and_is_not_read_as_the_persons() {
+    let (install, global, state) = (installed(), claudes_global(), session_state());
+    let config = state.join("claude");
+    let (link, persons_own) = (config.join("settings.json"), global.join("settings.json"));
+
+    claudes_harness(&state, &global, &install, true).unwrap();
+    assert!(link.is_symlink());
+    fs::remove_file(&link).unwrap();
+    fs::write(&link, "{\"model\":\"sonnet\"}\n").unwrap();
+
+    let on = claudes_harness(&state, &global, &install, true).unwrap();
+    assert!(
+        !link.is_symlink(),
+        "the session's own settings were replaced by a link"
+    );
+    assert!(
+        !on.global_reads.contains(&persons_own),
+        "the person's settings.json was opened for a file the session holds as its own: {:?}",
+        on.global_reads
+    );
+
+    let off = claudes_harness(&state, &global, &install, false).unwrap();
+    assert!(off.global_reads.is_empty(), "{:?}", off.global_reads);
+    assert_eq!(
+        fs::read_to_string(&link).unwrap(),
+        "{\"model\":\"sonnet\"}\n",
+        "a file of the session's own was taken back with the links"
+    );
+    assert_eq!(
+        fs::read_to_string(&persons_own).unwrap(),
+        "{\"model\":\"opus\"}\n",
+        "the person's own file was changed"
+    );
     for dir in [install, global, state] {
         fs::remove_dir_all(dir).unwrap();
     }

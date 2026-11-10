@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 /// One file or folder of the person's global folder that a harness reads
 ///
-/// A name inside the folder, which may sit in a folder of its own, as goose's
-/// `config/config.yaml` does. A login or a secret is never one.
+/// A name inside the folder, which may itself be a folder, as Claude Code's
+/// `skills` is. A login or a secret is never one.
 pub type Entry = &'static str;
 
 /// Why a session's config folder could not be linked to the person's global folder
@@ -74,13 +74,15 @@ impl core::error::Error for GlobalError {}
 /// Each link is named for its entry, so the harness finds the person's own
 /// `skills` where it looks for its own. An entry the person does not have is
 /// skipped, and a name `session` already holds as something other than a link
-/// stands: kelpie's own settings for the session come first. Every link under
-/// `session` that points into `global` and is not one of `entries` is removed,
-/// which is how turning the setting off takes back what a session linked with it
-/// on.
+/// stands: kelpie's own settings for the session come first. Such a name is left
+/// whatever the setting says, since kelpie cannot tell its own file there from
+/// one the harness wrote over a link. Every link under `session` that points into
+/// `global` and is not one of `entries` is removed, which is how turning the
+/// setting off takes back what a session linked with it on.
 ///
 /// The paths it linked, which are the ones the sandbox has to open for the
-/// harness to read them.
+/// harness to read them. A name that stands is not among them: the harness reads
+/// `session`'s own file there, and nothing of the person's is opened for it.
 ///
 /// # Errors
 ///
@@ -95,8 +97,9 @@ pub fn link(global: &Path, session: &Path, entries: &[Entry]) -> Result<Vec<Path
     unhook(global, session, &wanted)?;
     let mut linked = Vec::new();
     for name in wanted {
-        hook(global, session, name)?;
-        linked.push(global.join(name));
+        if hook(global, session, name)? {
+            linked.push(global.join(name));
+        }
     }
     Ok(linked)
 }
@@ -135,7 +138,10 @@ fn unhook(global: &Path, session: &Path, wanted: &[Entry]) -> Result<(), GlobalE
 }
 
 /// Make the link for one entry, refreshing one that is already a link
-fn hook(global: &Path, session: &Path, name: Entry) -> Result<(), GlobalError> {
+///
+/// `false` when `session` holds `name` as something other than a link, which
+/// stands and is read as the session's own.
+fn hook(global: &Path, session: &Path, name: Entry) -> Result<bool, GlobalError> {
     let (from, to) = (global.join(name), session.join(name));
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|source| refused_folder(parent, &source))?;
@@ -144,11 +150,12 @@ fn hook(global: &Path, session: &Path, name: Entry) -> Result<(), GlobalError> {
         Ok(held) if held.is_symlink() => {
             fs::remove_file(&to).map_err(|source| refused(&to, &source))?
         }
-        Ok(_) => return Ok(()),
+        Ok(_) => return Ok(false),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
         Err(source) => return Err(refused(&to, &source)),
     }
-    link_to(&from, &to, from.is_dir()).map_err(|source| refused(&to, &source))
+    link_to(&from, &to, from.is_dir()).map_err(|source| refused(&to, &source))?;
+    Ok(true)
 }
 
 /// What the OS said about `path`, as a link refusal
