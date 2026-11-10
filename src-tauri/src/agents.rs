@@ -252,7 +252,7 @@ pub fn agent_save(
         .map_err(|error| error.to_string())
 }
 
-/// Make a new agent that builds on `extends`, or with none a plain `pm` agent
+/// Make a new agent that builds on `parent`, or with none a plain `pm` agent
 ///
 /// # Errors
 ///
@@ -262,9 +262,9 @@ pub fn agent_save(
 pub fn agent_new(
     state: State<'_, AppState>,
     name: String,
-    extends: Option<String>,
+    parent: Option<String>,
 ) -> Result<(), String> {
-    Agents::create(state.config(), &name, extends.as_deref())
+    Agents::create(state.config(), &name, parent.as_deref())
         .map(drop)
         .map_err(|error| error.to_string())
 }

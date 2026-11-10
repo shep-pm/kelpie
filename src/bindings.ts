@@ -183,13 +183,13 @@ export const commands = {
 	 */
 	agentSave: (name: string, frontmatter: Frontmatter, body: string) => typedError<null, string>(__TAURI_INVOKE("agent_save", { name, frontmatter, body })),
 	/**
-	 *  Make a new agent that builds on `extends`, or with none a plain `pm` agent
+	 *  Make a new agent that builds on `parent`, or with none a plain `pm` agent
 	 * 
 	 *  # Errors
 	 * 
 	 *  The text of why not: the name is taken or is no name, or the parent is one the loader cannot find.
 	 */
-	agentNew: (name: string, extends: string | null) => typedError<null, string>(__TAURI_INVOKE("agent_new", { name, extends })),
+	agentNew: (name: string, parent: string | null) => typedError<null, string>(__TAURI_INVOKE("agent_new", { name, parent })),
 };
 
 /* Types */
