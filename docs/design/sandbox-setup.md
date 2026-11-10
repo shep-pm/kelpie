@@ -2,7 +2,7 @@
 
 Some machines need a one-time change before any sandbox can start on them. On Ubuntu 24.04 and later, AppArmor strips the capabilities from bwrap's user namespace, and every session fails with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` (crabpot's README, Linux setup). This note covers how kelpie finds that out, how it makes the change, and what runs when the person declines. It places itself in `docs/design/ux.md` (Sandbox, Attention) and amends ADR 0005. Terms are in `GLOSSARY.md`.
 
-**Status:** draft. Running without a sandbox (option B: opt in per project, the PM only) was confirmed by the maintainer on 2026-11-10, and so was the profile scoped to kelpie in place of a bwrap of its own. The rest awaits confirmation.
+**Status:** confirmed by the maintainer on 2026-11-10: running without a sandbox (opt in per project, the PM only), the profile scoped to kelpie, Install through `pkexec`, the AppImage offering only Run without a sandbox, and Windows later.
 
 ## Use case
 
