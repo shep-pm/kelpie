@@ -56,7 +56,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Network allowlist | Project | Domains a sandbox request saved with *Allow for this project* (ADR 0005) |
 | Read anywhere by default | Project | Off (`ux.md`, Sandbox). On, it opens the whole file system and keeps every harness's login, every secret and every other session's state folder closed |
 | Run without a sandbox | Project | Off. Applies only while this machine's sandbox cannot start, and only to the PM and its threads (`sandbox-setup.md`) |
-| Harness global folder | Project | Off. Reads `~/.claude` or goose's own config when on (ADR 0006) |
+| Harness global folder | Project | Off. When on, the entries each harness reads from its own global folder are linked into the folder the harness reads its config from: Claude Code's `CLAUDE.md`, `settings.json`, `skills`, `agents`, `commands` and `output-styles` from `~/.claude` (or `CLAUDE_CONFIG_DIR`) into `<state>/claude`, and goose's `config.yaml` from `~/.config/goose` (or `<GOOSE_PATH_ROOT>/config` when the person set it) into `<state>/goose/config`, which is where goose looks and not in the root kelpie gives it. Logins and secrets stay closed whatever this setting says, and the harness writes nothing there, for the PM or a worker. Applies when the session next starts (ADR 0006) |
 | Bridge updates | Global | Per bridge: *Registry, automatic* by default, *Registry, ask first*, or *Kelpie's pin* (`bridge-updates.md`) |
 | Lease capacity | Global | How many commands hold each lease at once, keyed by the lease's name, with `cargo-test` at 3. Each count is 1 to 64: a lease with no place can never be taken, and every command queued behind one waits forever. A lease no layer names holds one at a time. A lease is the machine's, so its capacity is one value for every project. The form has no row for the map yet, so the file is the way in (`workers.md`, Slots, pacing and leases) |
 
@@ -70,7 +70,7 @@ The editor: the frontmatter as the layered form, the body in an MDX editor (chel
 
 From the next message, as `pm-chat.md` settles for switching. A model change keeps the session. A harness change starts a new one behind a divider.
 
-Read anywhere by default is the exception: it lands at the session's next start, a relaunch or a harness switch, since crabpot widens only the network lists of a sandbox that is already running.
+Read anywhere by default and Harness global folder are the exception: each lands at the session's next start, a relaunch or a harness switch, since crabpot widens only the network lists of a sandbox that is already running, and a link is made when the session's config folder is built.
 
 A project whose folder is the home folder, or a folder above it, is refused at that start whichever way the setting is set, whether it reaches the home folder by name or through a link, and the refusal says so with the folder's path as the person chose it. The home folder holds every harness's login and every secret, so the project needs a folder of its own.
 

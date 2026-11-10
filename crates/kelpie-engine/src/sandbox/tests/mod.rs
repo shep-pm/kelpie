@@ -1,12 +1,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crabpot::Config;
 use serde_json::json;
 
 use super::*;
+use crate::sandbox::policy::text;
 use crate::session::Harness;
 use crate::tools::Door;
+
+// The Harness global folder setting, in its own file to stay under the 1000-line cap
+mod global_folder;
 
 const PROJECT: &str = "/work/kelpie";
 const BESIDE: &str = "/work";
@@ -65,6 +72,11 @@ fn home() -> PathBuf {
         .or_else(|| std::env::var_os("USERPROFILE"))
         .expect("the OS names a home folder")
         .into()
+}
+
+/// The folder or file `path` really names, as the policy resolves one to compare it
+fn resolved(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
 /// Whether `config` denies `path` whole, as crabpot reads it
@@ -281,8 +293,9 @@ fn no_allow_lands_on_the_home_folder() {
     }
 }
 
-/// The home folder, the folder holding it, and the folder holding every
-/// session's state, each reachable through a link as well as by name
+/// The home folder, the folder holding it, the folder holding every session's
+/// state, and a folder the policy denies its reads, each reachable through a
+/// link as well as by name
 ///
 /// As `/home` linked to `/data/home` spells one folder two ways, `/home/<name>`
 /// and `/data/home/<name>`. The scratch folder is removed when this drops, links
@@ -307,6 +320,7 @@ impl Linked {
             ("home", home()),
             ("above", above_home()),
             ("state", scratch.join("real")),
+            ("secret", home().join(".ssh")),
         ] {
             std::os::unix::fs::symlink(named, scratch.join(link)).expect("the link is made");
         }
@@ -331,6 +345,11 @@ impl Linked {
     /// That same folder, named as the OS names it
     fn real_sessions_root(&self) -> PathBuf {
         self.scratch.join("real/projects")
+    }
+
+    /// A folder the policy denies its reads, named through a link
+    fn secret(&self) -> PathBuf {
+        self.scratch.join("secret")
     }
 
     /// A folder of its own, holding nothing the policy closes
@@ -452,6 +471,273 @@ fn a_project_that_links_to_the_folder_holding_home_is_refused() {
     for reads in [Reads::Project, Reads::Anywhere] {
         refuses("links-above-home", &linked.above(), reads);
     }
+}
+
+/// A session whose project folder `wanted` is at or inside the denied folder
+/// `denied` is refused, naming both
+///
+/// Its state folder is under the machine's temp folder, so a refusal that came
+/// too late would leave it behind.
+fn refuses_denied(name: &str, wanted: &Path, denied: &Path, reads: Reads) {
+    let scratch = std::env::temp_dir()
+        .join("kelpie-sandbox-refused")
+        .join(name);
+    let _ = fs::remove_dir_all(&scratch);
+    let (sessions_root, state) = (scratch.join("projects"), scratch.join("projects/pm"));
+    let allowlist: Vec<String> = Vec::new();
+    let project = Project {
+        folder: wanted,
+        network_allowlist: &allowlist,
+        reads,
+        sessions_root: &sessions_root,
+    };
+
+    let error = Sandbox::start(&on(&[]), &project, &state)
+        .expect_err("a project at or inside a denied folder is refused");
+    let (wanted, message) = (wanted.to_string_lossy().into_owned(), error.to_string());
+
+    let SandboxError::ProjectInDenied {
+        folder,
+        denied: held,
+    } = &error
+    else {
+        panic!("the refusal is not the project folder's, with {reads:?}: {error}");
+    };
+    assert_eq!(folder.to_string_lossy(), wanted, "{reads:?}");
+    assert_eq!(held, &resolved(denied), "{reads:?}");
+    let held = held.to_string_lossy().into_owned();
+    assert!(
+        message.contains(&wanted)
+            && message.contains(&held)
+            && message.contains("move the project out of"),
+        "the refusal names neither folder nor what to do: {message}"
+    );
+    assert!(
+        !state.exists(),
+        "the state folder was made, so the session started with {reads:?}: {state:?}"
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn a_project_inside_a_login_folder_is_refused() {
+    let denied = home().join(".codex");
+    let folder = denied.join("skills/x");
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses_denied("inside-codex", &folder, &denied, reads);
+    }
+}
+
+#[test]
+fn a_project_inside_a_secret_folder_is_refused() {
+    let secret = home().join(".ssh");
+    let folder = secret.join("keys/x");
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        refuses_denied("inside-ssh", &folder, &secret, reads);
+    }
+
+    // And the same folder reached through a link, which is only refused when
+    // the folder the link names is there to be reached
+    #[cfg(unix)]
+    {
+        let secret = SecretFolder::new();
+        let linked = Linked::new("inside-secret");
+
+        for reads in [Reads::Project, Reads::Anywhere] {
+            refuses_denied("links-into-ssh", &linked.secret(), &secret.folder, reads);
+        }
+    }
+}
+
+/// The folder `~/.ssh`, made when this machine has none and taken back when this
+/// made it
+///
+/// A project reached through a link is only refused when the folder the link
+/// names is there to be reached, so the test that links to it needs it to be
+/// one. It is made private, as a person's own would be.
+#[cfg(unix)]
+struct SecretFolder {
+    folder: PathBuf,
+    made: bool,
+}
+
+#[cfg(unix)]
+impl SecretFolder {
+    fn new() -> Self {
+        let folder = home().join(".ssh");
+        let made = !folder.try_exists().expect("the home folder is read");
+        if made {
+            fs::create_dir_all(&folder)
+                .expect("the home folder takes the denied folder the test needs");
+            fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))
+                .expect("the denied folder is private");
+        }
+        Self { folder, made }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SecretFolder {
+    fn drop(&mut self) {
+        if self.made {
+            let _ = fs::remove_dir(&self.folder);
+        }
+    }
+}
+
+/// The guard, on a project whose own folder is inside a denied one
+///
+/// `Sandbox::start` refuses such a project outright, so this builds the reads
+/// directly: the project, the folder beside it and a harness installed in the
+/// denied folder are each named, and none of them is.
+#[test]
+fn no_allow_lands_inside_a_denied_folder() {
+    let denied = home().join(".pi");
+    let folder = denied.join("agent/x");
+    let harness = installed(on(&[]), &[denied.join("agent")]);
+    let allowlist: Vec<String> = Vec::new();
+
+    for reads in [Reads::Project, Reads::Anywhere] {
+        let project = Project {
+            folder: &folder,
+            network_allowlist: &allowlist,
+            reads,
+            sessions_root: Path::new(SESSIONS),
+        };
+        let allowed = policy::reads(&harness, &project, Path::new(STATE));
+        let held = resolved(&denied);
+
+        assert!(
+            !allowed.contains(&denied.join("agent").to_string_lossy().into_owned()),
+            "the folder beside the project opens {denied:?} back with {reads:?}: {allowed:?}"
+        );
+        for entry in &allowed {
+            assert!(
+                !resolved(Path::new(entry)).starts_with(&held),
+                "{entry} is at or inside the denied folder {denied:?} with {reads:?}"
+            );
+        }
+        assert!(
+            allowed.contains(&STATE.to_owned()),
+            "the session cannot read its own state folder with {reads:?}: {allowed:?}"
+        );
+    }
+}
+
+/// A folder holding a denied folder, and not itself one, is read as it was
+///
+/// crabpot lands the deny of `~/.config/gh` after the allow of the folder above
+/// it, so a project there needs no refusal. `tests/sandbox.rs` runs the read
+/// itself.
+#[test]
+fn a_project_above_a_denied_folder_still_starts() {
+    let folder = home().join(".config/nvim");
+    let project = Project {
+        folder: &folder,
+        network_allowlist: &[],
+        reads: Reads::Project,
+        sessions_root: Path::new(SESSIONS),
+    };
+
+    refused_project(&project)
+        .unwrap_or_else(|error| panic!("a project beside a denied folder is refused: {error}"));
+
+    let allowed = policy::reads(&on(&[]), &project, Path::new(STATE));
+    let beside = folder
+        .parent()
+        .expect("the OS puts the project in a folder");
+    for wanted in [&folder, beside] {
+        assert!(
+            allowed.contains(&wanted.to_string_lossy().into_owned()),
+            "{wanted:?} is not read: {allowed:?}"
+        );
+    }
+}
+
+/// The refusal `Sandbox::start_worker` gives a project at `wanted`, which it
+/// gives before the settings are built or the state folder made
+///
+/// The worker's folders are under the machine's temp folder, so a refusal that
+/// came too late would leave them behind.
+fn refuses_worker(name: &str, wanted: &Path) -> SandboxError {
+    let scratch = std::env::temp_dir()
+        .join("kelpie-sandbox-refused")
+        .join(name);
+    let _ = fs::remove_dir_all(&scratch);
+    let (sessions_root, state) = (scratch.join("projects"), scratch.join("state"));
+    let (worktree, git_dir, common) = (
+        scratch.join("worktree"),
+        scratch.join("worktree.git"),
+        scratch.join("project/.git"),
+    );
+    let allowlist: Vec<String> = Vec::new();
+    let project = Project {
+        folder: wanted,
+        network_allowlist: &allowlist,
+        reads: Reads::Project,
+        sessions_root: &sessions_root,
+    };
+    let worker = Worker {
+        worktree: &worktree,
+        git_dir: &git_dir,
+        git_common_dir: &common,
+        state_dir: &state,
+        kelpie_home: &scratch,
+        door: None,
+        lease_address: None,
+    };
+
+    let error = Sandbox::start_worker(&on(&[]), &project, &worker)
+        .expect_err("a worker whose project is not a folder of its own is refused");
+    assert!(
+        !state.exists(),
+        "the worker's state folder was made, so it started: {state:?}"
+    );
+    let _ = fs::remove_dir_all(&scratch);
+    error
+}
+
+#[test]
+fn a_worker_in_the_home_folder_is_refused() {
+    let home = home();
+
+    let error = refuses_worker("worker-at-home", &home);
+    let SandboxError::ProjectAtHome { folder } = &error else {
+        panic!("the refusal is not the project folder's: {error}");
+    };
+    assert_eq!(folder, &home);
+    assert!(
+        error
+            .to_string()
+            .contains("move the project into a folder of its own"),
+        "the refusal says nothing about what to do: {error}"
+    );
+}
+
+#[test]
+fn a_worker_inside_a_login_folder_is_refused() {
+    let denied = home().join(".codex");
+    let folder = denied.join("skills/x");
+
+    let error = refuses_worker("worker-inside-codex", &folder);
+    let SandboxError::ProjectInDenied {
+        folder: named,
+        denied: held,
+    } = &error
+    else {
+        panic!("the refusal is not the project folder's: {error}");
+    };
+    assert_eq!(
+        named, &folder,
+        "the refusal names the folder as it was given"
+    );
+    assert_eq!(
+        held,
+        &resolved(&denied),
+        "the refusal names the denied folder"
+    );
 }
 
 /// The second line, on every folder an allow could name through a link
