@@ -446,7 +446,7 @@ async fn connect(door: &Door) -> io::Result<Conn> {
     let Some(path) = door.socket() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "{door} names no Unix socket",
+            format!("{door} names no Unix socket"),
         ));
     };
     Conn::connect(path).await
@@ -458,7 +458,7 @@ async fn connect(door: &Door) -> io::Result<Conn> {
     let Some(address) = door.tcp() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "{door} names no address",
+            format!("{door} names no address"),
         ));
     };
     Conn::connect(address).await
