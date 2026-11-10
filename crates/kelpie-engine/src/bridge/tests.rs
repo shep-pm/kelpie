@@ -553,7 +553,7 @@ fn with_no_file_the_pin_is_in_use_and_a_save_reads_back() {
         versions
     );
     assert_eq!(
-        entries(&versions_file(&dir).parent().unwrap().to_path_buf()),
+        entries(versions_file(&dir).parent().unwrap()),
         ["versions.json"],
         "the temporary file was left behind"
     );
@@ -651,7 +651,7 @@ fn a_newer_version_is_installed_probed_and_ready() {
         .join(CMD);
     assert_eq!(
         *probed.borrow(),
-        [installed.clone()],
+        std::slice::from_ref(&installed),
         "the new version was probed once"
     );
     assert_eq!(fs::read_to_string(&installed).unwrap(), COMMAND_TEXT);
