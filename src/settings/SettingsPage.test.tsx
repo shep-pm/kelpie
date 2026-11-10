@@ -144,6 +144,7 @@ function bridge(over: Partial<BridgeStatus> = {}): BridgeStatus {
     in_use: "0.101.1",
     source: "kelpies-pin",
     ready: null,
+    approved: null,
     held_back: [],
     bad: [],
     ...over,
@@ -414,7 +415,10 @@ describe("the bridge row", () => {
     settingsGet.mockResolvedValue(
       ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
     );
-    bridgeStatus.mockResolvedValue(ok(bridge({ ready: "0.102.0" })));
+    bridgeStatus.mockResolvedValueOnce(ok(bridge({ ready: "0.102.0" })));
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.102.0", approved: "0.102.0" })),
+    );
     bridgeApprove.mockResolvedValue(ok("0.102.0"));
     await openPage();
 
@@ -429,6 +433,34 @@ describe("the bridge row", () => {
       await within(row).findByText(/used at your next message/),
     ).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("an approved version stays approved when the row is read again", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
+    );
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.102.0", approved: "0.102.0" })),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText(/used at your next message/)).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
+  });
+
+  it("an approval for a version no longer ready asks again", async () => {
+    settingsGet.mockResolvedValue(
+      ok(withPolicy({ "claude-acp": "registry-ask-first" }, "global")),
+    );
+    bridgeStatus.mockResolvedValue(
+      ok(bridge({ ready: "0.103.0", approved: "0.102.0" })),
+    );
+    await openPage();
+
+    const row = await bridgeRow();
+    expect(within(row).getByText("0.103.0")).toBeTruthy();
+    expect(within(row).getByRole("button", { name: "Update" })).toBeTruthy();
   });
 
   it("kelpie's pin shows no ready version", async () => {

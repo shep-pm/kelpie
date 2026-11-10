@@ -54,6 +54,9 @@ pub struct BridgeStatus {
     /// A newer version that is installed and passed the probe, `None` when none waits
     pub ready: Option<String>,
 
+    /// The ready version the maintainer said yes to, `None` when none waits approved
+    pub approved: Option<String>,
+
     /// Versions that failed the probe, each with its reason
     pub held_back: Vec<RejectedView>,
 
@@ -99,6 +102,11 @@ pub fn bridge_status(id: String, state: State<'_, AppState>) -> Result<BridgeSta
     // A pin that will not parse is kelpie's own bug, and says so rather than
     // guessing where the version in use came from
     let shipped = Version::parse(pin.version).map_err(|error| error.to_string())?;
+    let approved = versions
+        .approved
+        .clone()
+        .filter(|approved| versions.ready.as_ref() == Some(approved))
+        .map(|version| version.to_string());
     Ok(BridgeStatus {
         in_use: versions.in_use.to_string(),
         source: if versions.in_use == shipped {
@@ -107,6 +115,7 @@ pub fn bridge_status(id: String, state: State<'_, AppState>) -> Result<BridgeSta
             BridgeSource::Registry
         },
         ready: versions.ready.map(|version| version.to_string()),
+        approved,
         held_back: rejected(versions.held_back),
         bad: rejected(versions.bad),
     })
@@ -136,10 +145,7 @@ fn rejected(versions: Vec<Rejected>) -> Vec<RejectedView> {
 #[specta::specta]
 pub fn bridge_approve(id: String, state: State<'_, AppState>) -> Result<Option<String>, String> {
     let pin = pin_of(&id)?;
-    let mut versions = Versions::load(state.data_dir(), pin).map_err(|error| error.to_string())?;
-    let approved = versions.approve();
-    versions
-        .save(state.data_dir(), pin.id)
+    let approved = Versions::update(state.data_dir(), pin, |versions| versions.approve())
         .map_err(|error| error.to_string())?;
     Ok(approved.map(|version| version.to_string()))
 }
@@ -198,16 +204,25 @@ mod tests {
         assert_eq!(fresh.in_use, claude::pin().version);
         assert_eq!(fresh.source, BridgeSource::KelpiesPin);
         assert_eq!(fresh.ready, None);
+        assert_eq!(fresh.approved, None);
         assert!(fresh.held_back.is_empty() && fresh.bad.is_empty());
 
         write_versions(
             &dir,
-            r#"{"in_use":"0.102.0","previous":"0.101.1","ready":"0.103.0"}"#,
+            r#"{"in_use":"0.102.0","previous":"0.101.1","ready":"0.103.0","approved":"0.102.0"}"#,
         );
         let swapped = bridge_status(claude::pin().id.into(), state.clone()).unwrap();
         assert_eq!(swapped.in_use, "0.102.0");
         assert_eq!(swapped.source, BridgeSource::Registry);
         assert_eq!(swapped.ready.as_deref(), Some("0.103.0"));
+        assert_eq!(swapped.approved, None);
+
+        write_versions(
+            &dir,
+            r#"{"in_use":"0.102.0","previous":"0.101.1","ready":"0.103.0","approved":"0.103.0"}"#,
+        );
+        let asked = bridge_status(claude::pin().id.into(), state.clone()).unwrap();
+        assert_eq!(asked.approved.as_deref(), Some("0.103.0"));
 
         let error = bridge_status("codex-acp".into(), state.clone()).unwrap_err();
         assert!(error.contains("codex-acp"), "{error}");
@@ -253,13 +268,12 @@ mod tests {
         )
         .unwrap();
         assert!(held.contains(r#""approved": "0.102.0""#), "{held}");
-        // The version in use only moves at a session's next idle point
-        assert_eq!(
-            bridge_status(claude::pin().id.into(), state.clone())
-                .unwrap()
-                .in_use,
-            claude::pin().version
-        );
+        // The version in use only moves at a session's next idle point, and the
+        // row reads the yes back out of the file rather than holding it itself
+        let seen = bridge_status(claude::pin().id.into(), state.clone()).unwrap();
+        assert_eq!(seen.in_use, claude::pin().version);
+        assert_eq!(seen.ready.as_deref(), Some("0.102.0"));
+        assert_eq!(seen.approved.as_deref(), Some("0.102.0"));
 
         // Nothing ready: the yes answers `None` rather than approving a guess
         write_versions(&dir, r#"{"in_use":"0.101.1"}"#);

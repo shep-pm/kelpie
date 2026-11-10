@@ -106,7 +106,7 @@ fn run(
     pin: &Pin<'_>,
     probe: &dyn Fn(&Harness) -> Result<(), ProbeError>,
 ) -> Result<CheckOutcome, String> {
-    let mut versions = Versions::load(data_dir, pin).map_err(|error| error.to_string())?;
+    let versions = Versions::load(data_dir, pin).map_err(|error| error.to_string())?;
     let index = registry::fetch(url).map_err(|error| error.to_string())?;
     let Some(stable) = index.bridge(pin.registry_id) else {
         return Ok(CheckOutcome::Unlisted {
@@ -130,28 +130,32 @@ fn run(
         ..stable
     };
     let command = ensure(data_dir, &stable).map_err(|error| error.to_string())?;
-    let outcome = match probe(&probe_harness(&stable, command)?) {
+    match probe(&probe_harness(&stable, command)?) {
         Ok(()) => {
-            versions.ready = Some(candidate.clone());
-            versions.held_back.clear();
-            CheckOutcome::Ready { version: candidate }
+            Versions::update(data_dir, pin, |fresh| {
+                if fresh.in_use != candidate && !fresh.is_bad(&candidate) {
+                    fresh.ready = Some(candidate.clone());
+                    fresh.held_back.clear();
+                }
+            })
+            .map_err(|error| error.to_string())?;
+            Ok(CheckOutcome::Ready { version: candidate })
         }
         Err(error) => {
             let reason = error.to_string();
-            versions.held_back = vec![Rejected {
-                version: candidate.clone(),
-                reason: reason.clone(),
-            }];
-            CheckOutcome::HeldBack {
+            Versions::update(data_dir, pin, |fresh| {
+                fresh.held_back = vec![Rejected {
+                    version: candidate.clone(),
+                    reason: reason.clone(),
+                }];
+            })
+            .map_err(|error| error.to_string())?;
+            Ok(CheckOutcome::HeldBack {
                 version: candidate,
                 reason,
-            }
+            })
         }
-    };
-    versions
-        .save(data_dir, pin.id)
-        .map_err(|error| error.to_string())?;
-    Ok(outcome)
+    }
 }
 
 /// The [`Harness`] that runs `pin`'s installed bridge at `command`

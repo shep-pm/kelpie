@@ -266,6 +266,8 @@ export type BridgeStatus = {
 	source: BridgeSource,
 	/**  A newer version that is installed and passed the probe, `None` when none waits */
 	ready: string | null,
+	/**  The ready version the maintainer said yes to, `None` when none waits approved */
+	approved: string | null,
 	/**  Versions that failed the probe, each with its reason */
 	held_back: RejectedView[],
 	/**  Versions that failed a session, each with its reason */

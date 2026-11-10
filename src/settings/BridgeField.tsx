@@ -67,8 +67,6 @@ export function BridgeField({
 }) {
   // `null` until the engine has answered what the bridge runs on
   const [status, setStatus] = useState<BridgeStatus | null>(null);
-  // The version the maintainer said yes to, which waits on the next message
-  const [approved, setApproved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const read = useCallback(async () => {
@@ -82,17 +80,16 @@ export function BridgeField({
 
   useEffect(() => {
     setStatus(null);
-    setApproved(null);
     void read();
   }, [read]);
 
   const chosen = policyOf(field, bridge.id);
   const askFirst = chosen.value === "registry-ask-first";
-  const ready = askFirst ? status?.ready : null;
+  const ready = askFirst ? (status?.ready ?? null) : null;
+  const approved = ready !== null && status?.approved === ready ? ready : null;
 
   /** Write this bridge's entry, keeping every other bridge's. */
   async function choose(value: string) {
-    setApproved(null);
     await useSettings.getState().set({ kind: "global" }, "bridge-updates", {
       ...held(field),
       [bridge.id]: value,
@@ -103,7 +100,6 @@ export function BridgeField({
   async function reset() {
     const map = held(field);
     delete map[bridge.id];
-    setApproved(null);
     await useSettings
       .getState()
       .set(
@@ -119,7 +115,6 @@ export function BridgeField({
       setError(done.error);
       return;
     }
-    setApproved(done.data);
     await read();
   }
 
@@ -174,7 +169,7 @@ export function BridgeField({
         {ready && (
           <div className="flex flex-wrap items-center gap-2 px-0.5">
             <span className="font-mono text-xs">{ready}</span>
-            {approved === ready ? (
+            {approved !== null ? (
               <span className="text-xs text-muted-foreground">
                 approved, used at your next message
               </span>
