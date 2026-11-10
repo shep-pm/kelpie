@@ -37,10 +37,15 @@ pub(super) fn failed(stderr: &str) -> ForgeError {
     let pick =
         |keep: fn(&str) -> bool| -> Vec<&str> { own.iter().copied().filter(|l| keep(l)).collect() };
     let (gh, status) = (pick(|l| l.starts_with("gh: ")), pick(is_status));
+    // A GraphQL call's query and variables are printed as plain lines, so its
+    // own error line is picked before the fallback keeps what is left.
+    let graphql = pick(|l| l.starts_with("GraphQL: "));
     let said = if !gh.is_empty() {
         gh
     } else if !status.is_empty() {
         status
+    } else if !graphql.is_empty() {
+        graphql
     } else if traffic {
         pick(|l| !l.trim_start().starts_with(['{', '[', '}', ']', '"']))
     } else {

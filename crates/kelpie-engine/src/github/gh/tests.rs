@@ -182,6 +182,22 @@ fn a_failure_with_no_gh_line_keeps_its_error_and_none_of_the_bodies_around_it() 
 }
 
 #[test]
+fn a_graphql_failure_keeps_its_error_line_and_not_the_query_or_its_variables() {
+    let stderr = "* Request to https://api.github.com/graphql\n> POST /graphql HTTP/1.1\n>\n\
+                  GraphQL query:\nmutation($body: String!) { addComment(body: $body) }\n\
+                  GraphQL variables: {\"body\":\"API rate limit exceeded\"}\n\
+                  < HTTP/2.0 200 OK\n<\n\
+                  GraphQL: Could not resolve to a node with the global id of 'X'. (node)\n";
+
+    assert_eq!(
+        failed(stderr),
+        ForgeError::Failed(
+            "GraphQL: Could not resolve to a node with the global id of 'X'. (node)".into()
+        )
+    );
+}
+
+#[test]
 fn a_failure_that_printed_a_page_keeps_only_ghs_status_line() {
     let line = "HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)";
 
