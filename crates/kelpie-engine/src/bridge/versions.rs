@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::settings::BridgeUpdates;
+
 use super::{BRIDGES_FOLDER, Pin, is_name, token};
 
 /// The file one bridge's versions are kept in, beside its installed versions
@@ -42,6 +44,10 @@ pub struct Versions {
     /// A newer version that is installed and passed the probe, and no session has swapped to
     #[serde(default)]
     pub ready: Option<Version>,
+
+    /// The version the maintainer said yes to, under *Registry, ask first*
+    #[serde(default)]
+    pub approved: Option<Version>,
 
     /// Versions that failed the probe, kept to show why
     #[serde(default)]
@@ -147,6 +153,7 @@ impl Versions {
                 in_use: parse(pin.version)?,
                 previous: None,
                 ready: None,
+                approved: None,
                 held_back: Vec::new(),
                 bad: Vec::new(),
             }),
@@ -196,6 +203,121 @@ impl Versions {
     #[must_use]
     pub fn is_bad(&self, version: &Version) -> bool {
         self.bad.iter().any(|rejected| &rejected.version == version)
+    }
+
+    /// The version the next session starts on under `policy`
+    ///
+    /// Under *Registry, automatic* that is the ready version when there is one,
+    /// and under *Registry, ask first* only once it has been approved. Taking a
+    /// ready version into use moves the one in use to `previous`
+    /// (`docs/design/bridge-updates.md`, Swapping).
+    #[must_use]
+    pub fn current(&mut self, policy: BridgeUpdates) -> Version {
+        let Some(ready) = self.ready.clone() else {
+            return self.in_use.clone();
+        };
+        let asked = match policy {
+            BridgeUpdates::RegistryAutomatic => true,
+            BridgeUpdates::RegistryAskFirst => self.approved.as_ref() == Some(&ready),
+            BridgeUpdates::KelpiesPin => false,
+        };
+        if !asked {
+            return self.in_use.clone();
+        }
+        self.previous = Some(std::mem::replace(&mut self.in_use, ready.clone()));
+        self.ready = None;
+        self.approved = None;
+        ready
+    }
+
+    /// Say the ready version may be used, for *Registry, ask first*
+    ///
+    /// A newer version is not approved by this: only the one ready when it is called.
+    pub fn approve(&mut self) -> Option<Version> {
+        self.approved = self.ready.clone();
+        self.approved.clone()
+    }
+
+    /// Say `version` failed a session with `reason`: it is marked bad, and the
+    /// version before it is in use again
+    ///
+    /// Returns the version to go back to, `None` when there is none
+    /// (`docs/design/bridge-updates.md`, Flow).
+    #[must_use]
+    pub fn failed(&mut self, version: &Version, reason: impl Into<String>) -> Option<Version> {
+        self.bad.push(Rejected {
+            version: version.clone(),
+            reason: reason.into(),
+        });
+        if self.ready.as_ref() == Some(version) {
+            self.ready = None;
+        }
+        if self.approved.as_ref() == Some(version) {
+            self.approved = None;
+        }
+        if self.in_use != *version {
+            return None;
+        }
+        let back = self.previous.take()?;
+        self.in_use = back.clone();
+        Some(back)
+    }
+
+    /// Remove every installed version of `pin`'s bridge that nothing needs
+    ///
+    /// Keeps the version in use, the one before it, the ready one, kelpie's pin,
+    /// and each version in `running`, which a session's process is on. A version
+    /// is dropped only once no session runs on it
+    /// (`docs/design/bridge-updates.md`, Swapping).
+    ///
+    /// # Errors
+    ///
+    /// [`VersionsError::Name`] when the bridge's id is not one folder name,
+    /// [`VersionsError::NotAVersion`] when kelpie's pin is not a semantic
+    /// version, [`VersionsError::Read`] when the bridge's folder cannot be read,
+    /// and [`VersionsError::Write`] when a version folder cannot be removed.
+    pub fn prune(
+        &self,
+        data_dir: &Path,
+        pin: &Pin<'_>,
+        running: &[Version],
+    ) -> Result<(), VersionsError> {
+        let shipped = parse(pin.version)?;
+        let versions = file(data_dir, pin.id)?;
+        let dir = versions.parent().unwrap_or(data_dir);
+        let read = |source: io::Error| VersionsError::Read {
+            file: dir.to_path_buf(),
+            source,
+        };
+        let entries = fs::read_dir(dir).map_err(read)?;
+        for entry in entries {
+            let entry = entry.map_err(read)?;
+            let Ok(version) = parse(&entry.file_name().to_string_lossy()) else {
+                continue;
+            };
+            let is_folder = entry
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or(false);
+            if !is_folder || self.kept(&version, &shipped, running) {
+                continue;
+            }
+            let path = entry.path();
+            fs::remove_dir_all(&path).map_err(|source| VersionsError::Write {
+                file: path,
+                source,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Whether `version` is one kelpie still needs on disk
+    fn kept(&self, version: &Version, shipped: &Version, running: &[Version]) -> bool {
+        self.in_use == *version
+            || self.previous.as_ref() == Some(version)
+            || self.ready.as_ref() == Some(version)
+            || shipped == version
+            || running.contains(version)
     }
 }
 
