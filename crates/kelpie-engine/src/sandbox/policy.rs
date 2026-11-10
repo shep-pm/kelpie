@@ -4,11 +4,13 @@
 //! builds from the session's harness, its project and its state folder (ADR 0005).
 //! Reads are wide and writes narrow:
 //!
-//! - **Reads:** [`Reads::Project`], the default, is the project, the folders beside
-//!   it, the session's state folder and the harness's own install, with the rest of
-//!   the home folder closed. [`Reads::Anywhere`], which the project's *Read anywhere
-//!   by default* setting asks for, closes nothing but the logins, the secrets and
-//!   every other session's state.
+//! - **Reads:** crabpot allows every read the policy does not deny, so a policy
+//!   sets its reads by its deny list. [`Reads::Project`], the default, closes the
+//!   home folder whole and the folder holding every session's state, and opens
+//!   back inside them the project, the folders beside it, the session's own state
+//!   folder and the harness's own install. Every other folder on the machine is
+//!   read at either setting. [`Reads::Anywhere`], which the project's *Read
+//!   anywhere by default* setting asks for, leaves the home folder open.
 //! - **Writes:** the state folder alone, with the log folders crabpot would
 //!   otherwise make writable under the home folder denied back.
 //! - **Network:** the harness's model hosts plus the project's allowlist, and

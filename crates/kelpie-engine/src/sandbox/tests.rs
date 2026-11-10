@@ -195,6 +195,32 @@ fn read_anywhere_reads_outside_the_project() {
     );
 }
 
+/// The only folders a policy close reads are the home folder and the folder
+/// holding every session's state
+///
+/// crabpot allows every read the policy does not deny, so every other folder on
+/// the machine is read at either setting. A test that wants a real read to
+/// follow the setting has to put its file inside one of these two.
+#[test]
+fn nothing_but_the_home_folder_and_the_sessions_root_is_closed_to_reads() {
+    for reads in [Reads::Project, Reads::Anywhere] {
+        let config = built(&on(&[]), &[], reads);
+
+        let mut closed: Vec<String> = denied().into_iter().map(str::to_owned).collect();
+        closed.push(format!("{SESSIONS}/**"));
+        if reads == Reads::Project {
+            closed.push("~".to_owned());
+        }
+        let closed = closed.iter().map(String::as_str).collect::<Vec<_>>();
+
+        assert_eq!(
+            config.filesystem.deny_read,
+            entries(&closed).filesystem.deny_read,
+            "the closed area is more than the home folder and the sessions root with {reads:?}"
+        );
+    }
+}
+
 #[test]
 fn every_other_sessions_state_stays_out_of_reach() {
     for reads in [Reads::Project, Reads::Anywhere] {

@@ -238,6 +238,39 @@ impl Drop for Scratch {
     }
 }
 
+/// A folder under the home folder, removed when it drops
+///
+/// The home folder is the area `Reads::Project` closes whole and `Reads::Anywhere`
+/// opens, so a file outside the project only follows the setting when it sits
+/// inside it. kelpie's own name and this process's id keep the folder from
+/// meeting another run's.
+struct HomeFolder {
+    folder: PathBuf,
+}
+
+impl HomeFolder {
+    fn new(test: &str) -> Self {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .expect("the OS names a home folder");
+        let folder =
+            PathBuf::from(home).join(format!(".kelpie-sandbox-{test}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder).expect("the home folder takes a scratch folder for the test");
+        Self { folder }
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        self.folder.join(name)
+    }
+}
+
+impl Drop for HomeFolder {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.folder);
+    }
+}
+
 /// `script` run by `sh` inside the sandbox
 fn sh(sandbox: &Sandbox, script: &str) -> Output {
     let mut command = Command::new("sh");
@@ -375,13 +408,20 @@ fn cat(sandbox: &Sandbox, path: &Path) -> Option<String> {
         .then(|| String::from_utf8_lossy(&run.stdout).into_owned())
 }
 
+/// A real read outside the project follows the setting
+///
+/// The area `Reads::Project` closes is the home folder and the folder holding
+/// every session's state. crabpot allows every read the policy does not deny
+/// (ADR 0005's reads wide), so a file in some other folder is read at either
+/// setting and proves nothing: the file outside the project has to be one the
+/// policy closes.
 fn a_real_read_outside_the_project_follows_the_setting() {
     let name = "a_real_read_outside_the_project_follows_the_setting";
-    let scratch = Scratch::new("read-anywhere");
-    let (project, outside) = (
-        scratch.project().join("notes.md"),
-        scratch.outside().join("notes.md"),
+    let (scratch, home) = (
+        Scratch::new("read-anywhere"),
+        HomeFolder::new("read-anywhere"),
     );
+    let (project, outside) = (scratch.project().join("notes.md"), home.file("notes.md"));
     let (other, own) = (scratch.other().join("log"), scratch.state().join("log"));
     for (file, text) in [
         (&project, "in the project"),
@@ -396,10 +436,15 @@ fn a_real_read_outside_the_project_follows_the_setting() {
         return;
     };
     assert_eq!(cat(&closed, &project).as_deref(), Some("in the project"));
+    assert_eq!(
+        cat(&closed, &own).as_deref(),
+        Some("this session's own state"),
+        "the session cannot read its own state folder with Read anywhere off"
+    );
     let refused = cat(&closed, &outside);
     assert!(
         refused.is_none(),
-        "a file outside the project was read: {refused:?}"
+        "a file in the home folder was read with Read anywhere off: {refused:?}"
     );
     drop(closed);
 
