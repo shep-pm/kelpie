@@ -8,9 +8,11 @@
 //!   sets its reads by its deny list. [`Reads::Project`], the default, closes the
 //!   home folder whole and the folder holding every session's state, and opens
 //!   back inside them the project, the folders beside it, the session's own state
-//!   folder and the harness's own install. Every other folder on the machine is
-//!   read at either setting. [`Reads::Anywhere`], which the project's *Read
-//!   anywhere by default* setting asks for, leaves the home folder open.
+//!   folder and the harness's own install. At either setting an allow is kept
+//!   off every folder at or inside a login or a secret, which would open it.
+//!   Every other folder on the machine is read at either setting.
+//!   [`Reads::Anywhere`], which the project's *Read anywhere by default* setting
+//!   asks for, leaves the home folder open.
 //! - **Writes:** the state folder alone, with the log folders crabpot would
 //!   otherwise make writable under the home folder denied back.
 //! - **Network:** the harness's model hosts plus the project's allowlist, and
@@ -23,10 +25,11 @@
 //! The logins and secrets are closed whatever else is read, and every
 //! harness's login is closed to every other harness's session (ADR 0006). A
 //! project whose folder is the home folder or a folder above it holds them all,
-//! so [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses it before the
-//! session starts. Folders are compared as crabpot matches them, with their
-//! links resolved: a project reaches the home folder through a link as surely
-//! as by name.
+//! and one at or inside a login or a secret folder is that folder to its own
+//! sandbox, so [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses both
+//! before the session starts. Folders are compared as crabpot matches them,
+//! with their links resolved: a project reaches the home folder through a link
+//! as surely as by name.
 
 use std::collections::HashSet;
 use std::env;
@@ -153,6 +156,37 @@ pub fn denied() -> Vec<&'static str> {
         .collect()
 }
 
+/// Each entry of [`denied`] as the folder or file it really names
+///
+/// `~` is the person's home folder, a trailing `/**` is dropped as crabpot drops
+/// it, and each path is resolved the way a folder is compared here. An allow at
+/// or inside one of these opens it, so no allow lands on one and a project
+/// inside one is refused.
+#[must_use]
+pub fn denied_folders() -> Vec<PathBuf> {
+    let Some(home) = home() else {
+        return Vec::new();
+    };
+    denied()
+        .into_iter()
+        .filter_map(|entry| denied_path(entry, &home))
+        .map(|path| real(&path))
+        .collect()
+}
+
+/// The entry `entry` of [`denied`] as a path under `home`
+///
+/// None when it names nothing: an empty `home` makes `~/.ssh` the relative
+/// `.ssh`, which is a folder of wherever the session was started.
+fn denied_path(entry: &str, home: &Path) -> Option<PathBuf> {
+    let entry = entry.strip_suffix("/**").unwrap_or(entry);
+    let path = match entry.strip_prefix('~') {
+        Some(tail) => home.join(tail.strip_prefix('/').unwrap_or(tail)),
+        None => PathBuf::from(entry),
+    };
+    path.is_absolute().then_some(path)
+}
+
 /// The settings a session on `harness` runs under, in `project`, keeping its
 /// files in `state_dir`
 ///
@@ -251,17 +285,39 @@ pub fn holds_home(project: &Project<'_>) -> Option<PathBuf> {
         .map(|_| project.folder.to_path_buf())
 }
 
+/// The project folder and the denied folder it is at or inside, when it is
+///
+/// A project at `~/.codex/skills/<name>` has Codex's own folder as the folder
+/// beside it, so its sandbox would be asked to read the login whole.
+/// [`Sandbox::start`](crate::sandbox::Sandbox::start) refuses it before the
+/// session starts, and the guard in `reads` keeps any other allow off it. The
+/// refusal names the folder as the person chose it, and both compare the folder
+/// it really names, as crabpot matches it.
+#[must_use]
+pub fn in_denied(project: &Project<'_>) -> Option<(PathBuf, PathBuf)> {
+    let reached = real(project.folder);
+    denied_folders()
+        .into_iter()
+        .find(|held| reached.starts_with(held))
+        .map(|held| (project.folder.to_path_buf(), held))
+}
+
 /// The folders opened back inside what the session's reads close
 ///
-/// crabpot lands every allow after every deny, so a folder at or above a closed
-/// one would open what it hides: the logins under the home folder, or the state
-/// of every other session. This is the second line: [`holds_home`] refuses the
-/// project folder itself when it holds the home folder.
+/// crabpot masks a denied path again when an allowed folder sits above it, but
+/// an allow at or inside a denied folder opens it: a deny whose spelling ends in
+/// `/**` is the folder itself, and only a deny strictly under an allow is landed
+/// after it. So an allow is kept off every folder at or inside a login or a
+/// secret, and off every one at or above a closed folder, which would open what
+/// it hides: the logins under the home folder, or the state of every other
+/// session. This is the second line: [`holds_home`] and [`in_denied`] refuse the
+/// project folder itself.
 ///
 /// An allow is kept off a closed folder by the folder it really names, since
 /// crabpot matches real paths, and is named as the session was given it.
 pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let closed = closed(project);
+    let denied = denied_folders();
     let mut folders = vec![project.folder];
     // The folders beside the project: its sibling repos and worktrees. Named
     // only where the reads are closed to the project, and never when they are
@@ -279,7 +335,9 @@ pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) 
         .into_iter()
         .filter(|folder| {
             let reached = real(folder);
-            !closed.iter().any(|held| held.starts_with(&reached)) && seen.insert(reached)
+            !closed.iter().any(|held| held.starts_with(&reached))
+                && !denied.iter().any(|held| reached.starts_with(held))
+                && seen.insert(reached)
         })
         .map(text)
         .collect()
