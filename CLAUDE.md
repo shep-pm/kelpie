@@ -51,6 +51,8 @@ The Rust workspace is `crates/*` plus `src-tauri`, with `kelpie-engine` and `kel
 - `cargo test --workspace --locked`
 - `cargo doc --workspace --no-deps --locked`, with `RUSTDOCFLAGS=-D warnings`
 
+Run `scripts/check.sh` from the repo root before a push. It runs what CI runs, in CI's order, and stops at the first failure with the step's name: `scripts/build-reaper.sh --debug` first, so a fresh worktree builds, then the four commands above (`cargo test` covers doctests), `python3 -I scripts/file-size.py` (the 1000-line cap on `.rs` files, also run by `.github/workflows/file-size.yml`), `cargo +1.93 check`, and `pnpm typecheck`, `pnpm lint` and `pnpm test`. `--rust` runs everything but the pnpm steps and `--web` runs only them. It skips the 1.93 check with a printed line when `rustup` has no 1.93 toolchain, and leaves `pnpm tauri build --no-bundle` to CI.
+
 Iterate with `cargo test --workspace --lib --bins`.
 
 The web frontend is at the repo root, and `src-tauri` loads it in the Tauri window. pnpm 12 is pinned in `packageManager`.
