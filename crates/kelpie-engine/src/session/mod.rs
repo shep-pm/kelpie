@@ -57,6 +57,7 @@ pub mod fake;
 pub mod log;
 pub mod options;
 mod raw;
+pub mod seed;
 mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
