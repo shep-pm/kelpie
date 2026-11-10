@@ -55,7 +55,8 @@ pub use network::Reach;
 pub use relay::{DOOR_VAR, TOKEN_VAR, run_from_args};
 use tokio_util::sync::CancellationToken;
 
-mod door;
+// `pub(crate)` for the lease socket, which binds and accepts on the same door
+pub(crate) mod door;
 mod network;
 mod relay;
 #[cfg(test)]
