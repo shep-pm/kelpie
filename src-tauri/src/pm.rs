@@ -10,7 +10,9 @@
 //!
 //! The PM runs inside a crabpot sandbox: it reads the project and the folders
 //! beside it, writes its state folder alone, and reaches its model's host
-//! (ADR 0005). The project's network allowlist is not passed to it yet.
+//! (ADR 0005), plus the domains the project's `network-allowlist` names. The
+//! `read-anywhere` setting opens its reads to the whole disk but its logins and
+//! secrets.
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -75,6 +77,13 @@ pub struct PmPlan {
 
     /// The host the provider runs on
     pub host: Option<String>,
+
+    /// Domains the sandbox lets the PM reach besides its model's host
+    /// (`network-allowlist`)
+    pub network_allowlist: Vec<String>,
+
+    /// Whether the PM reads anywhere but its logins and secrets (`read-anywhere`)
+    pub read_anywhere: bool,
 }
 
 /// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
@@ -158,6 +167,8 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         instructions: (!instructions.trim().is_empty()).then_some(instructions),
         provider: settings.provider.value,
         host: settings.host.value,
+        network_allowlist: settings.network_allowlist.value,
+        read_anywhere: settings.read_anywhere.value,
     })
 }
 
@@ -196,8 +207,8 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         &harness,
         &sandbox::Project {
             folder: &project.path,
-            network_allowlist: &[],
-            read_anywhere: false,
+            network_allowlist: &pm.network_allowlist,
+            read_anywhere: pm.read_anywhere,
         },
         state_dir,
     )
@@ -636,6 +647,44 @@ mod tests {
 
         assert_eq!(plan.harness, Harness::Goose);
         assert_eq!(plan.choice, Choice::default());
+    }
+
+    #[test]
+    fn with_nothing_set_the_sandbox_has_no_extra_domain_and_reads_the_project_alone() {
+        let chat = Chat::on(&FakeAgent::new());
+        let project = chat.state().project_id(None).unwrap();
+
+        let plan = plan(chat.state().config(), &project).unwrap();
+
+        assert!(plan.network_allowlist.is_empty());
+        assert!(!plan.read_anywhere);
+    }
+
+    #[test]
+    fn the_projects_allowlist_and_read_anywhere_settings_reach_the_plan() {
+        let chat = Chat::on(&FakeAgent::new());
+        let project = chat.state().project_id(None).unwrap();
+        let set = |key: &str, value: serde_json::Value| {
+            settings_set(
+                chat.state(),
+                Target::Project {
+                    id: project.clone(),
+                },
+                key.to_owned(),
+                value,
+            )
+            .unwrap();
+        };
+        set(
+            "network-allowlist",
+            serde_json::json!(["docs.rs", "crates.io"]),
+        );
+        set("read-anywhere", serde_json::json!(true));
+
+        let plan = plan(chat.state().config(), &project).unwrap();
+
+        assert_eq!(plan.network_allowlist, ["docs.rs", "crates.io"]);
+        assert!(plan.read_anywhere);
     }
 
     #[test]
