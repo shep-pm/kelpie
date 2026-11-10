@@ -95,10 +95,12 @@ impl Field {
             | Self::PmEffort
             | Self::WorkerHarness
             | Self::WorkerModel
-            | Self::WorkerEffort => PROJECT,
+            | Self::WorkerEffort
+            | Self::WorkerSlots => PROJECT,
             Self::Provider | Self::Host | Self::ReplyStyle => GLOBAL_AND_PROJECT,
             Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
-            Self::BridgeUpdates => GLOBAL,
+            // A lease is the machine's, so its capacity is one value for every project
+            Self::BridgeUpdates | Self::LeaseCapacity => GLOBAL,
         }
     }
 }
@@ -138,6 +140,7 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             project,
             BUILT_IN.worker_effort.map(str::to_string),
         )?,
+        worker_slots: Field::WorkerSlots.resolve(global, project, BUILT_IN.worker_slots)?,
         provider: Field::Provider.resolve(
             global,
             project,
@@ -161,6 +164,15 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             BUILT_IN.harness_global_folder,
         )?,
         bridge_updates: Field::BridgeUpdates.resolve(global, project, BTreeMap::new())?,
+        lease_capacity: Field::LeaseCapacity.resolve(
+            global,
+            project,
+            BUILT_IN
+                .lease_capacity
+                .iter()
+                .map(|(name, capacity)| ((*name).to_string(), *capacity))
+                .collect(),
+        )?,
     })
 }
 

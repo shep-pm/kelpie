@@ -138,6 +138,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: None,
                 from: Layer::BuiltIn,
             },
+            worker_slots: Layered {
+                value: TWO_WORKERS,
+                from: Layer::BuiltIn,
+            },
             provider: Layered {
                 value: None,
                 from: Layer::BuiltIn,
@@ -166,10 +170,98 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: BTreeMap::new(),
                 from: Layer::BuiltIn,
             },
+            lease_capacity: Layered {
+                value: BTreeMap::from([(CARGO_TEST.to_string(), CARGO_TEST_CAPACITY)]),
+                from: Layer::BuiltIn,
+            },
         }
     );
     assert_eq!(BUILT_IN.reply_style, ReplyStyle::ConcisePlus);
     assert_eq!(BUILT_IN.network_allowlist, &[] as &[&str]);
+}
+
+#[test]
+fn worker_slots_default_to_two_and_cargo_test_capacity_to_three() {
+    let dir = Dir::new();
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        settings.worker_slots,
+        Layered {
+            value: Capacity(2),
+            from: Layer::BuiltIn
+        }
+    );
+    assert_eq!(settings.lease_capacity_for(CARGO_TEST), Capacity(3));
+    assert_eq!(
+        settings.lease_capacity_for("e2e"),
+        Capacity(1),
+        "a lease kelpie names no capacity for holds one command at a time"
+    );
+
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::WorkerSlots,
+        &json!(5),
+    )
+    .unwrap();
+    Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::LeaseCapacity,
+        &json!({ "cargo-test": 1, "e2e": 2 }),
+    )
+    .unwrap();
+
+    let raised = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        raised.worker_slots,
+        Layered {
+            value: Capacity(5),
+            from: Layer::Project
+        }
+    );
+    assert_eq!(raised.lease_capacity_for(CARGO_TEST), Capacity(1));
+    assert_eq!(raised.lease_capacity_for("e2e"), Capacity(2));
+
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+    assert_eq!(
+        other.worker_slots,
+        Layered {
+            value: Capacity(2),
+            from: Layer::BuiltIn
+        },
+        "the cap is one project's own"
+    );
+    assert_eq!(other.lease_capacity_for(CARGO_TEST), Capacity(1));
+
+    for value in [
+        json!("3"),
+        json!(-1),
+        json!(MAX_COUNT + 1),
+        json!({ "cargo-test": "3" }),
+    ] {
+        let field = if value.is_object() {
+            Field::LeaseCapacity
+        } else {
+            Field::WorkerSlots
+        };
+        let layer = if field == Field::LeaseCapacity {
+            LayerFile::Global
+        } else {
+            LayerFile::Project("web")
+        };
+        let error = Settings::set(&dir.config(), layer, field, &value)
+            .expect_err("the schema refuses this");
+        assert!(
+            matches!(error, SettingsError::ValueRefused { .. }),
+            "{error}"
+        );
+    }
+    let kept = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(kept.worker_slots.value, Capacity(5));
+    assert_eq!(kept.lease_capacity_for(CARGO_TEST), Capacity(1));
 }
 
 #[test]

@@ -24,6 +24,7 @@
 //! # Ok::<(), kelpie_engine::settings::SettingsError>(())
 //! ```
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -31,7 +32,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -266,17 +267,24 @@ pub enum Field {
 
     /// Where each bridge's new versions come from
     BridgeUpdates,
+
+    /// How many of a project's workers may run at once
+    WorkerSlots,
+
+    /// How many commands may hold each lease at once
+    LeaseCapacity,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 13] = [
+    pub const ALL: [Field; 15] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
         Field::WorkerHarness,
         Field::WorkerModel,
         Field::WorkerEffort,
+        Field::WorkerSlots,
         Field::Provider,
         Field::Host,
         Field::ReplyStyle,
@@ -284,6 +292,7 @@ impl Field {
         Field::ReadAnywhere,
         Field::HarnessGlobalFolder,
         Field::BridgeUpdates,
+        Field::LeaseCapacity,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -296,6 +305,7 @@ impl Field {
             Self::WorkerHarness => "worker-harness",
             Self::WorkerModel => "worker-model",
             Self::WorkerEffort => "worker-effort",
+            Self::WorkerSlots => "worker-slots",
             Self::Provider => "provider",
             Self::Host => "host",
             Self::ReplyStyle => "reply-style",
@@ -303,9 +313,61 @@ impl Field {
             Self::ReadAnywhere => "read-anywhere",
             Self::HarnessGlobalFolder => "harness-global-folder",
             Self::BridgeUpdates => "bridge-updates",
+            Self::LeaseCapacity => "lease-capacity",
         }
     }
 }
+
+/// How many may hold something at once
+// wire format: a settings file holds it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Capacity(u32);
+
+impl Capacity {
+    /// How many places there are, as a count kelpie can index with
+    #[must_use]
+    pub fn places(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
+/// The most a settings file may name, past which it is a typo
+///
+/// A count this large names more agents or commands than a machine can run at
+/// once. Naming it in the schema is what keeps a write from landing a file kelpie
+/// then cannot read back.
+const MAX_COUNT: u32 = 64;
+
+impl JsonSchema for Capacity {
+    fn schema_name() -> Cow<'static, str> {
+        "Capacity".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": 0,
+            "maximum": MAX_COUNT,
+        })
+    }
+}
+
+/// The lease every worker's `cargo test` run queues behind
+pub const CARGO_TEST: &str = "cargo-test";
+
+/// How many commands hold [`CARGO_TEST`] at once when no layer names it
+pub const CARGO_TEST_CAPACITY: Capacity = Capacity(3);
+
+/// How many commands hold a lease no layer names a capacity for
+const ONE_AT_A_TIME: Capacity = Capacity(1);
+
+/// How many of a project's workers run at once when no layer names a cap
+const TWO_WORKERS: Capacity = Capacity(2);
 
 /// The settings of one layer file, holding only the fields that file sets
 ///
@@ -337,6 +399,9 @@ pub struct Settings {
     /// How much effort a worker puts in, named as the harness names it. Empty leaves the effort to the harness.
     pub worker_effort: Option<String>,
 
+    /// How many of this project's workers run at once. A worker that is Paused or waiting on the maintainer holds no slot.
+    pub worker_slots: Option<Capacity>,
+
     /// Where a harness's model runs, for a harness that reaches a model through a server
     pub provider: Option<String>,
 
@@ -357,6 +422,9 @@ pub struct Settings {
 
     /// Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.
     pub bridge_updates: Option<BTreeMap<String, BridgeUpdates>>,
+
+    /// How many commands hold each lease at once, keyed by the lease's name such as `cargo-test`. A lease the map does not name takes kelpie's own capacity for it.
+    pub lease_capacity: Option<BTreeMap<String, Capacity>>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -383,6 +451,9 @@ pub struct Defaults {
     /// The built-in worker effort
     pub worker_effort: Option<&'static str>,
 
+    /// How many of a project's workers run at once when no layer caps them
+    pub worker_slots: Capacity,
+
     /// The built-in provider
     pub provider: Option<&'static str>,
 
@@ -400,6 +471,9 @@ pub struct Defaults {
 
     /// The built-in rule for a harness's own global folder
     pub harness_global_folder: bool,
+
+    /// The capacity kelpie gives each lease it names, by name
+    pub lease_capacity: &'static [(&'static str, Capacity)],
 }
 
 /// kelpie's built-in layer, in code rather than a shipped file
@@ -413,12 +487,14 @@ pub const BUILT_IN: Defaults = Defaults {
     worker_harness: None,
     worker_model: None,
     worker_effort: None,
+    worker_slots: TWO_WORKERS,
     provider: None,
     host: None,
     reply_style: ReplyStyle::ConcisePlus,
     network_allowlist: &[],
     read_anywhere: false,
     harness_global_folder: false,
+    lease_capacity: &[(CARGO_TEST, CARGO_TEST_CAPACITY)],
 };
 
 /// Every setting's value, each with the layer kelpie took it from
@@ -442,6 +518,9 @@ pub struct Resolved {
     /// A worker's effort
     pub worker_effort: Layered<Option<String>>,
 
+    /// How many of the project's workers run at once
+    pub worker_slots: Layered<Capacity>,
+
     /// Where a harness's model runs
     pub provider: Layered<Option<String>>,
 
@@ -462,6 +541,9 @@ pub struct Resolved {
 
     /// Where each bridge's new versions come from, for the bridges a file names
     pub bridge_updates: Layered<BTreeMap<String, BridgeUpdates>>,
+
+    /// How many commands hold each lease at once, for the leases a file names
+    pub lease_capacity: Layered<BTreeMap<String, Capacity>>,
 }
 
 impl Resolved {
@@ -473,6 +555,24 @@ impl Resolved {
             .get(bridge)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// How many commands hold `lease` at once: what the settings name for it,
+    /// kelpie's own capacity for it, or one at a time
+    #[must_use]
+    pub fn lease_capacity_for(&self, lease: &str) -> Capacity {
+        self.lease_capacity
+            .value
+            .get(lease)
+            .copied()
+            .or_else(|| {
+                BUILT_IN
+                    .lease_capacity
+                    .iter()
+                    .find(|(name, _)| *name == lease)
+                    .map(|(_, capacity)| *capacity)
+            })
+            .unwrap_or(ONE_AT_A_TIME)
     }
 }
 
