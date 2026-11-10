@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use kelpie_engine::login::Store;
-use kelpie_engine::settings::ConfigDir;
+use kelpie_engine::settings::{ConfigDir, Settings};
 
 use tauri::{Manager as _, RunEvent, Runtime};
 use tauri_plugin_dialog::DialogExt as _;
@@ -30,6 +30,7 @@ pub mod bridges;
 pub mod pm;
 pub mod settings;
 pub mod state;
+pub mod theme;
 
 use state::AppState;
 
@@ -51,8 +52,9 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::login_clear,
             settings::harness_options,
             settings::settings_get,
-            settings::settings_set,
-            settings::settings_reset,
+            // The two writes reach the window, so they are generic over the runtime
+            settings::settings_set::<tauri::Wry>,
+            settings::settings_reset::<tauri::Wry>,
             settings::settings_schema,
             bridges::bridge_status,
             bridges::bridge_approve,
@@ -135,6 +137,11 @@ pub fn builder_in<R: Runtime>(
                     .map(|folder| folder.into_path().map_err(|error| error.to_string()))
                     .transpose()
             });
+            // A file kelpie cannot read leaves the window with the OS, and the
+            // settings page names the failure
+            let theme = Settings::load_global(&config)
+                .map(|settings| settings.theme.value)
+                .unwrap_or_default();
             let state = AppState::open(
                 data_dir,
                 config,
@@ -145,6 +152,16 @@ pub fn builder_in<R: Runtime>(
             )?;
             state.start_bridge_checks();
             app.manage(state);
+            // The window is hidden in `tauri.conf.json` until its theme is on it,
+            // so a launch paints once with the theme already chosen
+            if let Some(window) = app.get_webview_window(theme::MAIN) {
+                if let Err(error) = theme::apply(&window, theme) {
+                    eprintln!("kelpie: could not set the window's theme: {error}");
+                }
+                window
+                    .show()
+                    .map_err(|error| format!("kelpie could not show its window: {error}"))?;
+            }
             Ok(())
         })
 }
@@ -180,14 +197,20 @@ pub fn run() -> Result<(), tauri::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BINDINGS, builder_with, export_bindings};
+    use super::{BINDINGS, builder_in, export_bindings};
     use kelpie_engine::login::Store;
+    use kelpie_engine::settings::ConfigDir;
     use tauri::Manager as _;
     use tauri::test::{mock_builder, mock_context, noop_assets};
 
     #[test]
     fn the_app_builds_on_a_mock_runtime() {
-        let app = builder_with(mock_builder(), Store::memory(), None)
+        // A config folder of its own, so setup reads no person's settings
+        let config = ConfigDir::at(std::env::temp_dir().join(format!(
+            "kelpie-app-{}",
+            kelpie_engine::run::RunId::new().unwrap()
+        )));
+        let app = builder_in(mock_builder(), Store::memory(), Some(config), None)
             .build(mock_context(noop_assets()))
             .expect("kelpie's app should build on the mock runtime");
         assert!(

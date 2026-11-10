@@ -28,10 +28,11 @@ use kelpie_engine::settings::{ConfigDir, Field, Layer, LayerFile, Resolved, Sett
 use kelpie_protocol::Options;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 use crate::pm::{self, Defaulted};
 use crate::state::AppState;
+use crate::theme;
 
 /// The folder under the data folder a harness is asked in
 const ASKS_FOLDER: &str = "asks";
@@ -276,6 +277,7 @@ fn fields(
                 &resolved.reply_style.value,
                 resolved.reply_style.from,
             ),
+            Field::Theme => layered(field, &resolved.theme.value, resolved.theme.from),
             Field::NetworkAllowlist => layered(
                 field,
                 &resolved.network_allowlist.value,
@@ -313,8 +315,9 @@ fn json_of<T: Serialize>(value: &T) -> Value {
 /// Read every field of both tabs, each with the layer it came from
 ///
 /// The Global tab shows what the global layer and the global `pm` agent say. The
-/// Project tab shows what the project sees: its own file over those. `project`
-/// is a project's id, and `None` is the first project, since Phase 1 has one.
+/// Project tab shows the fields its layer may set, over what the layers below it
+/// say for each. `project` is a project's id, and `None` is the first project,
+/// since Phase 1 has one.
 ///
 /// # Errors
 ///
@@ -361,7 +364,7 @@ pub fn settings_get(
                     &settings,
                     &pm::with_defaults(&binding),
                     Some(&worker),
-                    |_| true,
+                    |field| field.layers().contains(&Layer::Project) || is_pm(field),
                 ),
             })
         }
@@ -407,14 +410,16 @@ fn layer_file(state: &AppState, target: &Target) -> Result<Option<String>, Strin
 /// `null` and a blank string clear the field, which is what an empty form field
 /// means. On the Global tab the PM's harness, model and effort are written to the
 /// global `pm` agent's file, and everything else to `settings.json`. The PM's
-/// next message uses the result.
+/// next message uses the result, and a theme shows on the window at once.
 ///
 /// # Errors
 ///
-/// The text of why the value was refused, or the file could not be written.
+/// The text of why the value was refused, the file could not be written, or the
+/// window could not be themed.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn settings_set(
+pub fn settings_set<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     layer: Target,
     path: String,
@@ -426,7 +431,13 @@ pub fn settings_set(
         Value::String(text) if text.trim().is_empty() => Value::Null,
         other => other,
     };
-    write(state.config(), field, project.as_deref(), Some(&value))
+    write(
+        &app,
+        state.config(),
+        field,
+        project.as_deref(),
+        Some(&value),
+    )
 }
 
 /// Clear one field of one layer, so its value falls back to the layer below
@@ -436,18 +447,24 @@ pub fn settings_set(
 /// The text of why the file could not be written.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn settings_reset(
+pub fn settings_reset<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     layer: Target,
     path: String,
 ) -> Result<(), String> {
     let field = field_named(&path)?;
     let project = layer_file(&state, &layer)?;
-    write(state.config(), field, project.as_deref(), None)
+    write(&app, state.config(), field, project.as_deref(), None)
 }
 
 /// Set, or with `None` reset, `field` in the layer file of `project`, or the global one
-fn write(
+///
+/// A theme the write lands is read back from the layers and set on the window, so
+/// the change shows without a restart (`docs/design/settings.md`, When a change
+/// applies).
+fn write<R: Runtime>(
+    app: &AppHandle<R>,
     config: &ConfigDir,
     field: Field,
     project: Option<&str>,
@@ -471,7 +488,14 @@ fn write(
         Some(value) => Settings::set(config, at, field, value),
         None => Settings::reset(config, at, field),
     }
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    if field == Field::Theme {
+        let theme = Settings::load_global(config)
+            .map(|settings| settings.theme.value)
+            .map_err(|error| error.to_string())?;
+        theme::apply_to_main(app, theme)?;
+    }
+    Ok(())
 }
 
 /// The JSON Schema every settings file satisfies, from the Rust types
@@ -497,7 +521,7 @@ mod tests {
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
     use tauri::webview::InvokeRequest;
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use tauri::{Manager as _, WebviewUrl, WebviewWindowBuilder};
 
     /// The login every call sends, which no response may repeat
     const SECRET: &str = "sk-ant-oat01-the-secret";
@@ -692,9 +716,32 @@ mod tests {
         dir
     }
 
+    /// A write through `app`, which is where its handle and its state are
+    fn set(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        layer: Target,
+        path: String,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        settings_set(
+            app.handle().clone(),
+            app.state::<AppState>(),
+            layer,
+            path,
+            value,
+        )
+    }
+
+    fn reset(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        layer: Target,
+        path: String,
+    ) -> Result<(), String> {
+        settings_reset(app.handle().clone(), app.state::<AppState>(), layer, path)
+    }
+
     #[test]
     fn a_field_says_which_layer_its_value_came_from() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
@@ -703,20 +750,8 @@ mod tests {
             id: project.clone(),
         };
 
-        settings_set(
-            state.clone(),
-            Target::Global,
-            "host".into(),
-            "http://one".into(),
-        )
-        .unwrap();
-        settings_set(
-            state.clone(),
-            on(),
-            "reply-style".into(),
-            "harness-default".into(),
-        )
-        .unwrap();
+        set(&app, Target::Global, "host".into(), "http://one".into()).unwrap();
+        set(&app, on(), "reply-style".into(), "harness-default".into()).unwrap();
         let seen = settings_get(state.clone(), None).unwrap();
 
         let project_fields = seen.project.unwrap().fields;
@@ -732,7 +767,6 @@ mod tests {
 
     #[test]
     fn the_worker_fields_on_the_project_tab_are_what_a_worker_runs_as() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
@@ -756,8 +790,8 @@ mod tests {
         assert_eq!(field(&fields, "worker-effort").from, "global");
 
         // The project's own setting wins, and says so
-        settings_set(
-            state.clone(),
+        set(
+            &app,
             Target::Project { id: project },
             "worker-model".into(),
             "project-model".into(),
@@ -773,7 +807,6 @@ mod tests {
 
     #[test]
     fn the_pm_fields_on_the_global_tab_are_the_global_pm_agents_keys() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
@@ -783,13 +816,7 @@ mod tests {
         assert_eq!(field(&before.global, "pm-model").from, "kelpie");
         assert_eq!(field(&before.global, "pm-harness").value, "claude-code");
 
-        settings_set(
-            state.clone(),
-            Target::Global,
-            "pm-model".into(),
-            "sonnet".into(),
-        )
-        .unwrap();
+        set(&app, Target::Global, "pm-model".into(), "sonnet".into()).unwrap();
         let after = settings_get(state.clone(), None).unwrap();
 
         assert_eq!(field(&after.global, "pm-model").value, "sonnet");
@@ -805,7 +832,6 @@ mod tests {
 
     #[test]
     fn reset_falls_back_to_the_layer_below() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
@@ -813,22 +839,16 @@ mod tests {
         let on = || Target::Project {
             id: project.clone(),
         };
-        settings_set(
-            state.clone(),
+        set(
+            &app,
             Target::Global,
             "pm-model".into(),
             "global-model".into(),
         )
         .unwrap();
-        settings_set(
-            state.clone(),
-            on(),
-            "pm-model".into(),
-            "project-model".into(),
-        )
-        .unwrap();
+        set(&app, on(), "pm-model".into(), "project-model".into()).unwrap();
 
-        settings_reset(state.clone(), on(), "pm-model".into()).unwrap();
+        reset(&app, on(), "pm-model".into()).unwrap();
         let seen = settings_get(state.clone(), None)
             .unwrap()
             .project
@@ -837,7 +857,7 @@ mod tests {
         assert_eq!(field(&seen, "pm-model").value, "global-model");
         assert_eq!(field(&seen, "pm-model").from, "global");
 
-        settings_reset(state.clone(), Target::Global, "pm-model".into()).unwrap();
+        reset(&app, Target::Global, "pm-model".into()).unwrap();
         let seen = settings_get(state.clone(), None)
             .unwrap()
             .project
@@ -850,43 +870,28 @@ mod tests {
 
     #[test]
     fn a_blank_value_clears_the_field_and_a_bad_one_is_refused() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
-        settings_set(
-            state.clone(),
-            Target::Global,
-            "host".into(),
-            "http://one".into(),
-        )
-        .unwrap();
-
-        settings_set(state.clone(), Target::Global, "host".into(), "  ".into()).unwrap();
+        set(&app, Target::Global, "host".into(), "http://one".into()).unwrap();
+        set(&app, Target::Global, "host".into(), "  ".into()).unwrap();
         let seen = settings_get(state.clone(), None).unwrap().global;
         assert_eq!(field(&seen, "host").from, "kelpie");
 
-        let error = settings_set(
-            state.clone(),
-            Target::Global,
-            "reply-style".into(),
-            "loud".into(),
-        )
-        .unwrap_err();
+        let error = set(&app, Target::Global, "reply-style".into(), "loud".into()).unwrap_err();
         assert!(error.contains("reply-style"), "{error}");
-        let error =
-            settings_set(state.clone(), Target::Global, "nope".into(), 1.into()).unwrap_err();
+        let error = set(&app, Target::Global, "nope".into(), 1.into()).unwrap_err();
         assert!(error.contains("nope"), "{error}");
-        let error = settings_set(
-            state.clone(),
+        let error = set(
+            &app,
             Target::Global,
             "network-allowlist".into(),
             serde_json::json!(["a.example"]),
         )
         .unwrap_err();
         assert!(error.contains("network-allowlist"), "{error}");
-        let error = settings_set(
-            state.clone(),
+        let error = set(
+            &app,
             Target::Project { id: "../x".into() },
             "host".into(),
             "h".into(),
@@ -898,7 +903,6 @@ mod tests {
 
     #[test]
     fn before_a_project_is_picked_the_global_tab_still_reads() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let state = AppState::open(
             dir.clone(),
@@ -923,27 +927,24 @@ mod tests {
 
     #[test]
     fn each_bridge_has_its_own_entry_in_the_update_setting() {
-        use tauri::Manager as _;
         let dir = fresh_dir();
         let app = app_with_project(&dir);
         let state = app.state::<AppState>();
-        let set = |map: serde_json::Value| {
-            settings_set(state.clone(), Target::Global, "bridge-updates".into(), map)
-        };
+        let policy = |map| set(&app, Target::Global, "bridge-updates".into(), map);
 
         // The bridge row writes one entry, and the field says where it came from
-        set(serde_json::json!({"claude-acp": "registry-ask-first"})).unwrap();
+        policy(serde_json::json!({"claude-acp": "registry-ask-first"})).unwrap();
         let seen = settings_get(state.clone(), None).unwrap().global;
         let held = field(&seen, "bridge-updates");
         assert_eq!(held.value["claude-acp"], "registry-ask-first");
         assert_eq!(held.from, "global");
 
         // A value kelpie does not offer is refused, and names the field
-        let error = set(serde_json::json!({"claude-acp": "whenever"})).unwrap_err();
+        let error = policy(serde_json::json!({"claude-acp": "whenever"})).unwrap_err();
         assert!(error.contains("bridge-updates"), "{error}");
 
         // The row's last entry dropped: the field falls back to kelpie
-        set(serde_json::Value::Null).unwrap();
+        policy(serde_json::Value::Null).unwrap();
         let seen = settings_get(state.clone(), None).unwrap().global;
         assert_eq!(field(&seen, "bridge-updates").from, "kelpie");
         fs::remove_dir_all(dir).unwrap();
