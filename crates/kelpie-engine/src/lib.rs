@@ -11,8 +11,10 @@
 //! the Markdown files that say what a session runs as and what it is told.
 //! [`harness`] builds what one harness runs on: its bridge, the session's own
 //! state folder, and the person's own login, which [`login`] keeps in the OS
-//! keychain and never shows. [`worktree`] reads a ticket's worktree, in this
-//! process where it can and through [`tree`] where it cannot. The crate
+//! keychain and never shows. [`guard`] reads a command a worker runs the way a
+//! shell would, and [`local_paths`] finds what a text names of this machine.
+//! [`worktree`] reads a ticket's worktree, in this process where it can and
+//! through [`tree`] where it cannot. The crate
 //! has no Tauri dependency, so the app crate hosts it and the IPC stays outside
 //! the engine (ADR 0002).
 //!
@@ -32,13 +34,17 @@
 //! fields and the layers they resolve through; [`bridge`] installs a pinned
 //! bridge once and checks it before it is used; [`agents`] loads the agent files
 //! and the PM's binding; [`harness`] names the bridge and the login each harness
-//! runs on; [`login`] holds those logins; [`worktree`] reads a ticket's worktree.
+//! runs on; [`login`] holds those logins; [`guard`] splits a command, takes off
+//! its wrappers and reads its scripts; [`local_paths`] is the one check for what
+//! must not leave this machine; [`worktree`] reads a ticket's worktree.
 
 #![doc(test(attr(deny(warnings))))]
 
 pub mod agents;
 pub mod bridge;
+pub mod guard;
 pub mod harness;
+pub mod local_paths;
 pub mod login;
 #[cfg(test)]
 mod parity;
