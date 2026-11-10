@@ -9,10 +9,15 @@
 //! already running is never interrupted: [`seat`] bounds which workers may start
 //! the next one.
 
+use serde::{Deserialize, Serialize};
+
 use super::Worker;
 
 /// One worker's standing in its project's slots
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// wire format: `workers.json` holds these standings
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // kelpie grows these standings as its workers do
 pub enum Seat {
     /// It holds one of the project's slots
     Held,
