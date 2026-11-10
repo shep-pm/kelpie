@@ -8,7 +8,7 @@
 //! parent's, a file with no body takes its parent's, and `body: append` adds
 //! to it.
 //!
-//! The keys are `role` (`pm` is the only one so far), `harness`, `model`,
+//! The keys are `role` (`pm` or `worker`), `harness`, `model`,
 //! `effort`, `extends` and `body`. A file with any other key is refused naming
 //! the file and the key. A file whose name starts with `_` is ignored, as if it
 //! were not there, so a draft can sit beside the real ones.
@@ -64,8 +64,14 @@ const IGNORED: char = '_';
 /// The PM's name: kelpie's own `kelpie:pm`, and the global `pm.md` that layers over it
 pub const PM: &str = "pm";
 
+/// The worker's name: kelpie's own `kelpie:worker`, and the global `worker.md` that layers over it
+pub const WORKER: &str = "worker";
+
 /// Kelpie's own agents, by name: what `extends: kelpie:<name>` reaches
-const BUILT_IN: [(&str, &str); 1] = [(PM, include_str!("builtin/pm.md"))];
+const BUILT_IN: [(&str, &str); 2] = [
+    (PM, include_str!("builtin/pm.md")),
+    (WORKER, include_str!("builtin/worker.md")),
+];
 
 /// What an agent is for
 // wire format: an agent file holds these strings
@@ -75,6 +81,9 @@ const BUILT_IN: [(&str, &str); 1] = [(PM, include_str!("builtin/pm.md"))];
 pub enum Role {
     /// The maintainer's one conversation: the PM
     Pm,
+
+    /// An agent that builds one ticket in its own worktree
+    Worker,
 }
 
 /// The layer a value came from
@@ -137,21 +146,23 @@ pub struct Agent {
     pub body: Sourced<Option<String>>,
 }
 
-/// What the PM runs as: kelpie's `pm`, the global `pm.md`, then the project's setting
+/// What an agent runs as: kelpie's own, the global file of its name, then the project's setting
+///
+/// [`Agents::pm_binding`] and [`Agents::worker_binding`] make one.
 ///
 /// Each value is the nearest of the three layers that sets it, with that layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
-    /// The harness the PM runs on
+    /// The harness it runs on
     pub harness: Sourced<Option<Harness>>,
 
-    /// The model the PM runs on
+    /// The model it runs on
     pub model: Sourced<Option<String>>,
 
-    /// How much effort the PM puts in
+    /// How much effort it puts in
     pub effort: Sourced<Option<String>>,
 
-    /// The PM's instructions, which a session takes as its system prompt
+    /// The instructions, which a session takes as its system prompt
     pub body: Sourced<Option<String>>,
 }
 
@@ -332,14 +343,28 @@ impl Agents {
     ///
     /// [`AgentsError::File`] naming `pm.md` when it cannot be used.
     pub fn pm(&self) -> Result<Agent, AgentsError> {
-        if let Some(error) = self.broken.get(PM) {
+        self.of_kelpie(PM)
+    }
+
+    /// The worker as the files define it: the global `worker.md` over `kelpie:worker`, or `kelpie:worker` alone
+    ///
+    /// # Errors
+    ///
+    /// [`AgentsError::File`] naming `worker.md` when it cannot be used.
+    pub fn worker(&self) -> Result<Agent, AgentsError> {
+        self.of_kelpie(WORKER)
+    }
+
+    /// The agent of kelpie's own `name` as the files define it
+    fn of_kelpie(&self, name: &str) -> Result<Agent, AgentsError> {
+        if let Some(error) = self.broken.get(name) {
             return Err(error.clone());
         }
-        match self.agents.get(PM) {
+        match self.agents.get(name) {
             Some(agent) => Ok(agent.clone()),
-            None => Self::built_in(PM).ok_or_else(|| AgentsError::File {
-                path: PathBuf::from(format!("{}{PM}", extends::SHIPPED)),
-                message: "kelpie's own pm cannot be read".to_owned(),
+            None => Self::built_in(name).ok_or_else(|| AgentsError::File {
+                path: PathBuf::from(format!("{}{name}", extends::SHIPPED)),
+                message: format!("kelpie's own {name} cannot be read"),
             }),
         }
     }
@@ -359,6 +384,24 @@ impl Agents {
             model: project_over(pm.model, &settings.pm_model),
             effort: project_over(pm.effort, &settings.pm_effort),
             body: pm.body,
+        })
+    }
+
+    /// What a worker runs as for a project: `kelpie:worker`, then the global `worker.md`, then the project's setting
+    ///
+    /// The project's harness, model and effort are the fields `settings` holds
+    /// for it. Where it sets none, the agent's own stand.
+    ///
+    /// # Errors
+    ///
+    /// As [`Agents::worker`].
+    pub fn worker_binding(&self, settings: &Resolved) -> Result<Binding, AgentsError> {
+        let worker = self.worker()?;
+        Ok(Binding {
+            harness: project_over(worker.harness, &settings.worker_harness),
+            model: project_over(worker.model, &settings.worker_model),
+            effort: project_over(worker.effort, &settings.worker_effort),
+            body: worker.body,
         })
     }
 }

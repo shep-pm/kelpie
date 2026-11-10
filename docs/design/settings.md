@@ -48,6 +48,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 |---|---|---|
 | PM harness | Global, project | Claude Code or goose |
 | PM model, effort | Global, project | Listed from the harness's own config options (ACP), so kelpie names no model outside the default. Kelpie starts the harness briefly to ask, sending no prompt, and keeps the list until a refresh |
+| Worker harness, model, effort | Project | Empty by default: kelpie names none (ADR 0006). The global value is the global `worker.md`'s own keys over `kelpie:worker`, as the PM's is `pm.md`'s (`workers.md`, Starting one) |
 | Provider and host | Global, project | For a harness that runs a model on a server, such as goose on Ollama |
 | Login | Global | Per harness, in the keychain. The field says *set* or *not set* and never shows the value. For Claude Code it is pasted, beside the command that makes it (`claude setup-token`). Kelpie running that command itself waits for the drawer's terminal |
 | Reply style | Global, project | Kelpie's Concise-plus style by default (`ux.md`, item 4) |

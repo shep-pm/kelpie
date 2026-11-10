@@ -237,6 +237,15 @@ pub enum Field {
     /// How much effort the PM puts in
     PmEffort,
 
+    /// Which harness a worker runs on
+    WorkerHarness,
+
+    /// Which model a worker runs on
+    WorkerModel,
+
+    /// How much effort a worker puts in
+    WorkerEffort,
+
     /// Where a harness's model runs, such as a local server
     Provider,
 
@@ -261,10 +270,13 @@ pub enum Field {
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 10] = [
+    pub const ALL: [Field; 13] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
+        Field::WorkerHarness,
+        Field::WorkerModel,
+        Field::WorkerEffort,
         Field::Provider,
         Field::Host,
         Field::ReplyStyle,
@@ -281,6 +293,9 @@ impl Field {
             Self::PmHarness => "pm-harness",
             Self::PmModel => "pm-model",
             Self::PmEffort => "pm-effort",
+            Self::WorkerHarness => "worker-harness",
+            Self::WorkerModel => "worker-model",
+            Self::WorkerEffort => "worker-effort",
             Self::Provider => "provider",
             Self::Host => "host",
             Self::ReplyStyle => "reply-style",
@@ -312,6 +327,15 @@ pub struct Settings {
 
     /// How much effort the PM puts in, named as the harness names it. Empty leaves the effort to the harness.
     pub pm_effort: Option<String>,
+
+    /// Which harness a worker runs on. Where it is empty, the `worker` agent's own harness decides.
+    pub worker_harness: Option<Harness>,
+
+    /// Which model a worker runs on, named as the harness names it. Empty leaves the model to the harness.
+    pub worker_model: Option<String>,
+
+    /// How much effort a worker puts in, named as the harness names it. Empty leaves the effort to the harness.
+    pub worker_effort: Option<String>,
 
     /// Where a harness's model runs, for a harness that reaches a model through a server
     pub provider: Option<String>,
@@ -350,6 +374,15 @@ pub struct Defaults {
     /// The built-in PM effort
     pub pm_effort: Option<&'static str>,
 
+    /// The built-in worker harness
+    pub worker_harness: Option<Harness>,
+
+    /// The built-in worker model
+    pub worker_model: Option<&'static str>,
+
+    /// The built-in worker effort
+    pub worker_effort: Option<&'static str>,
+
     /// The built-in provider
     pub provider: Option<&'static str>,
 
@@ -377,6 +410,9 @@ pub const BUILT_IN: Defaults = Defaults {
     pm_harness: None,
     pm_model: None,
     pm_effort: None,
+    worker_harness: None,
+    worker_model: None,
+    worker_effort: None,
     provider: None,
     host: None,
     reply_style: ReplyStyle::ConcisePlus,
@@ -396,6 +432,15 @@ pub struct Resolved {
 
     /// The PM's effort
     pub pm_effort: Layered<Option<String>>,
+
+    /// A worker's harness
+    pub worker_harness: Layered<Option<Harness>>,
+
+    /// A worker's model
+    pub worker_model: Layered<Option<String>>,
+
+    /// A worker's effort
+    pub worker_effort: Layered<Option<String>>,
 
     /// Where a harness's model runs
     pub provider: Layered<Option<String>>,

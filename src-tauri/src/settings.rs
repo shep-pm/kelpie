@@ -191,6 +191,21 @@ fn fields(resolved: &Resolved, pm: &Defaulted, only: impl Fn(Field) -> bool) -> 
             Field::PmHarness => sourced(field, json_of(&Some(pm.harness.value)), &pm.harness.from),
             Field::PmModel => sourced(field, json_of(&pm.model.value), &pm.model.from),
             Field::PmEffort => sourced(field, json_of(&pm.effort.value), &pm.effort.from),
+            Field::WorkerHarness => layered(
+                field,
+                &resolved.worker_harness.value,
+                resolved.worker_harness.from,
+            ),
+            Field::WorkerModel => layered(
+                field,
+                &resolved.worker_model.value,
+                resolved.worker_model.from,
+            ),
+            Field::WorkerEffort => layered(
+                field,
+                &resolved.worker_effort.value,
+                resolved.worker_effort.from,
+            ),
             Field::Provider => layered(field, &resolved.provider.value, resolved.provider.from),
             Field::Host => layered(field, &resolved.host.value, resolved.host.from),
             Field::ReplyStyle => layered(
