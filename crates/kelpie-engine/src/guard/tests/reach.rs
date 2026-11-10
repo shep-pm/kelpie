@@ -2,6 +2,7 @@
 // wrapper, from a shell's stdin, by a built name, or run by git itself.
 
 use super::*;
+use std::panic::AssertUnwindSafe;
 
 // A worktree whose one unpushed commit adds the home folder's path.
 fn unpushed() -> WorkerTree {
@@ -22,16 +23,51 @@ fn sends_notes(tree: &WorkerTree, commands: &[&str]) {
 
 fn refused(commands: &[&str]) {
     for command in commands {
+        let verdict = bash(command);
         assert!(
-            matches!(bash(command), Verdict::Refuse(_)),
-            "{command} was let through"
+            matches!(verdict, Verdict::Refuse(_)),
+            "{command} was let through\nthe guard read it as: {}\nit gave: {verdict:?}",
+            read_as(command)
         );
     }
 }
 
 fn allowed(commands: &[&str]) {
     for command in commands {
-        assert_eq!(bash(command), Verdict::Allow, "{command}");
+        let verdict = bash(command);
+        assert_eq!(
+            verdict,
+            Verdict::Allow,
+            "{command} was refused\nthe guard read it as: {}\nit gave: {verdict:?}",
+            read_as(command)
+        );
+    }
+}
+
+// How the guard's own reader splits `command`, one command per line, or the
+// reason it will not read the line at all.
+fn read_as(command: &str) -> String {
+    match shell::commands(command) {
+        Ok(all) => all
+            .iter()
+            .map(|one| format!("{:?}", one.words))
+            .collect::<Vec<String>>()
+            .join("\n"),
+        Err(why) => why.to_string(),
+    }
+}
+
+// The message `check` panics with, which the default hook also prints.
+// `check` must panic.
+#[track_caller]
+fn panicked(check: impl FnOnce()) -> String {
+    match std::panic::catch_unwind(AssertUnwindSafe(check)) {
+        Ok(()) => panic!("the check passed, so it named no message"),
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_else(|| String::from("the check panicked with no message")),
     }
 }
 
@@ -326,4 +362,29 @@ fn git_config_written_to_name_a_program_is_refused() {
         "git config --get core.pager",
         "git config --list",
     ]);
+}
+
+// A red check says what the guard read, not only which command it judged.
+#[test]
+fn refused_says_how_the_guard_read_a_command_it_let_through() {
+    let message = panicked(|| refused(&["ls -l"]));
+    assert!(message.contains(r#"["ls", "-l"]"#), "{message}");
+    assert!(message.contains("Allow"), "{message}");
+}
+
+#[test]
+fn allowed_says_how_the_guard_read_a_command_it_refused() {
+    let message = panicked(|| allowed(&["pkill node"]));
+    assert!(message.contains(r#"["pkill", "node"]"#), "{message}");
+    assert!(message.contains("Refuse"), "{message}");
+}
+
+#[test]
+fn a_line_the_reader_refuses_is_named_in_the_message() {
+    let deep = format!("{}git push{}", "echo $(".repeat(40), ")".repeat(40));
+    let read = read_as(&deep);
+    assert_eq!(read, "it nests quotes and substitutions too deep to read");
+    let named = format!("the guard read it as: {read}");
+    let message = panicked(|| allowed(&[deep.as_str()]));
+    assert!(message.contains(named.as_str()), "{message}");
 }
