@@ -25,6 +25,9 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
+use agent_client_protocol::v1::schema::ToolCallUpdate;
+
+use crate::permission::{Call, ReadCall, read_acp};
 use crate::sandbox::fence::OwnFiles;
 use crate::session::Harness;
 
@@ -48,6 +51,23 @@ const PROVIDER_ENV: &str = "GOOSE_PROVIDER";
 /// The goose `mode` that approves every tool call, which a sandboxed session
 /// sets: the sandbox is what confines it
 const UNPROMPTED: &str = "auto";
+
+/// The goose `mode` that asks before each tool call, which a judged session
+/// sets so every call reaches the permission handler
+const PROMPTING: &str = "approve";
+
+/// The field of goose's tool input that names the file it writes
+const PATH_FIELDS: [&str; 1] = ["path"];
+
+/// What a permission request's tool call does, in goose's words
+///
+/// goose's file tool takes the file as `path`, and its shell tool a `command`.
+/// goose also gives each call's locations, which this falls back on.
+#[must_use]
+pub fn read_call(tool_call: &ToolCallUpdate) -> Call {
+    // parity: harness.permission
+    read_acp(tool_call, &PATH_FIELDS)
+}
 
 /// The folder inside a session's state dir that goose keeps its files in
 const CONFIG_FOLDER: &str = "goose";
@@ -134,6 +154,8 @@ pub(super) fn harness_on_path(
         hosts: hosts_of(provider),
         installs,
         unprompted: Some(UNPROMPTED.to_owned()),
+        prompting: Some(PROMPTING.to_owned()),
+        read_call: ReadCall::new(read_call),
         // goose speaks ACP itself, so no bridge says anything about its version
         outdated: None,
     })
