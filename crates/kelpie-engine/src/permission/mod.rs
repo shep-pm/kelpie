@@ -8,6 +8,10 @@
 //! command it runs in its own words, so each adapter reads its own tool input
 //! ([`crate::harness`], `read_call`).
 //!
+//! A shell call goes to [`crate::guard::judge`], which reads the command and
+//! judges its git calls against the [`Project`] the judge was given. A judge
+//! with no project runs no command.
+//!
 //! A harness only asks when it is not set to stop asking, so a judged session
 //! runs the harness in its prompting mode ([`crate::session::Harness::prompting`]).
 //!
@@ -25,16 +29,21 @@
 //! let write = Call::Write { path: "src/lib.rs".into() };
 //! assert_eq!(judge.judge(&write), Verdict::Allow);
 //!
+//! // With no project to judge its git against, no command runs.
 //! let shell = Call::Shell { command: "ls".to_owned() };
 //! assert!(matches!(judge.judge(&shell), Verdict::Refuse(_)));
 //! ```
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use agent_client_protocol::v1::schema::{ToolCallUpdate, ToolKind};
 
 use crate::confine::{self, Verdict};
+use crate::guard::{self, Checkout};
+use crate::local_paths::LocalPaths;
+use crate::tree::ProcessTree;
 
 /// What a tool call does, as far as the judge needs to know
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +177,59 @@ pub fn read_acp(tool_call: &ToolCallUpdate, path_fields: &[&str]) -> Call {
     }
 }
 
+/// What a worker's shell commands are judged against: its project's repo and base branch
+///
+/// Two projects are equal when they share one process tree and name the same
+/// repo, base, home folder and local paths.
+#[derive(Debug, Clone)]
+pub struct Project {
+    /// The tree every git kelpie starts to read the worktree goes through
+    tree: Arc<ProcessTree>,
+    /// The project's repo, whose git dirs the worktree's are checked against
+    repo: PathBuf,
+    /// The project's base branch, which only the project manager changes
+    base: String,
+    /// The home folder `~` names, if there is one
+    home: Option<PathBuf>,
+    /// What the project keeps off the forge, besides the home folder
+    local: LocalPaths,
+}
+
+impl Project {
+    /// A project at `repo` whose base branch is `base`
+    ///
+    /// `home` is the folder `~` names in a command, and `local` is what a
+    /// commit or a push must not carry of this machine's.
+    #[must_use]
+    pub fn new(
+        tree: Arc<ProcessTree>,
+        repo: impl Into<PathBuf>,
+        base: impl Into<String>,
+        home: Option<PathBuf>,
+        local: LocalPaths,
+    ) -> Self {
+        Self {
+            tree,
+            repo: repo.into(),
+            base: base.into(),
+            home,
+            local,
+        }
+    }
+}
+
+impl PartialEq for Project {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tree, &other.tree)
+            && self.repo == other.repo
+            && self.base == other.base
+            && self.home == other.home
+            && self.local == other.local
+    }
+}
+
+impl Eq for Project {}
+
 /// What judges a worker's tool calls: the folder it works in, and the folders it may write
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judge {
@@ -175,6 +237,8 @@ pub struct Judge {
     cwd: PathBuf,
     /// The folders a write must stay in
     folders: Vec<PathBuf>,
+    /// What a shell command is judged against, `None` to refuse every command
+    project: Option<Project>,
 }
 
 impl Judge {
@@ -186,7 +250,18 @@ impl Judge {
         Self {
             cwd: cwd.as_ref().to_owned(),
             folders,
+            project: None,
         }
+    }
+
+    /// The same judge, judging a worker's shell commands against `project`
+    ///
+    /// Without one, a shell call is refused: guard needs the project's repo to
+    /// read a worker's git.
+    #[must_use]
+    pub fn with_project(mut self, project: Project) -> Self {
+        self.project = Some(project);
+        self
     }
 
     /// Whether `call` goes ahead, and if not, why
@@ -199,13 +274,25 @@ impl Judge {
             Call::Write { path } => {
                 confine::judge(&self.cwd, std::slice::from_ref(path), &self.folders)
             }
-            // `guard` reads a command and judges its git calls. Until its issue
-            // lands in this handler, no command is run
-            Call::Shell { .. } => Verdict::Refuse(
-                "kelpie runs no shell command for a worker until guard judges it: \
-                 guard is not yet part of this check"
-                    .to_owned(),
-            ),
+            Call::Shell { command } => match &self.project {
+                Some(project) => guard::judge(
+                    command,
+                    &self.cwd,
+                    project.home.as_deref(),
+                    project.local.clone(),
+                    Checkout {
+                        tree: &project.tree,
+                        repo: &project.repo,
+                        worktree: &self.cwd,
+                        base: &project.base,
+                    },
+                ),
+                None => Verdict::Refuse(
+                    "kelpie runs no shell command for this worker: guard has no project \
+                     to judge its git against"
+                        .to_owned(),
+                ),
+            },
             Call::Other => Verdict::Allow,
         }
     }
