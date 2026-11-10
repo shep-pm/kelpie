@@ -105,6 +105,21 @@ fn pid_in(file: &Path) -> u32 {
     }
 }
 
+/// Wait for kelpie to let `name`'s place go, which it does on its own task
+///
+/// A run gives the place back by closing its connection and returns at once, so
+/// kelpie hears the end a moment later than the run does.
+fn given_back(leases: &Leases, name: &str) {
+    let deadline = Instant::now() + WAIT;
+    while held(leases, name) != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "{name} is still held, though its command ended"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Wait until none of `pids` runs
 fn assert_gone(pids: &[u32]) {
     let deadline = Instant::now() + WAIT;
@@ -137,11 +152,7 @@ async fn the_lease_is_let_go_when_the_command_ends() {
         .await,
         3
     );
-    assert_eq!(
-        held(&leases, CARGO_TEST),
-        0,
-        "the command ended, so the lease is let go"
-    );
+    given_back(&leases, CARGO_TEST);
     // The next command is granted at once, with no kelpie in the way
     assert_eq!(
         run(
@@ -185,7 +196,7 @@ async fn a_command_past_its_bound_is_ended_with_its_children_and_exits_124() {
         "it waited for the sleep instead of ending it"
     );
     assert_gone(&[pid_in(&pidfile)]);
-    assert_eq!(held(&leases, CARGO_TEST), 0, "its place came back with it");
+    given_back(&leases, CARGO_TEST);
     let _ = tree.stop_all(KILL_AFTER);
 }
 
@@ -209,7 +220,7 @@ async fn a_command_that_cannot_start_gives_the_lease_back() {
         .await,
         NOT_RUN
     );
-    assert_eq!(held(&leases, CARGO_TEST), 0);
+    given_back(&leases, CARGO_TEST);
     let _ = tree.stop_all(KILL_AFTER);
 }
 
