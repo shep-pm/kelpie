@@ -5,6 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::session::Harness;
+use crate::tools::Door;
 
 const PROJECT: &str = "/work/kelpie";
 const STATE: &str = "/state/pm";
@@ -310,5 +311,99 @@ fn a_domain_crabpot_cannot_read_is_refused_naming_its_place() {
     assert!(
         error.to_string().contains("allowedDomains.0"),
         "the refusal names the entry's place: {error}"
+    );
+}
+
+/// The settings with `door` named, as crabpot reads them
+fn with_door(door: &Door, read_anywhere: bool) -> Config {
+    policy_with_door(
+        &on(&["api.anthropic.com"]),
+        &project(&[], read_anywhere),
+        Path::new(STATE),
+        Some(door),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_socket_door_is_the_one_unix_socket_the_policy_allows() {
+    let door = Door::parse("/data/kelpie/0123.sock").unwrap();
+
+    let config = with_door(&door, false);
+
+    let wanted = read(json!({
+        "network": {
+            "allowedDomains": [], "deniedDomains": [],
+            "allowUnixSockets": ["/data/kelpie/0123.sock"],
+        },
+        "filesystem": {"denyRead": [], "allowWrite": [], "denyWrite": []},
+    }));
+    assert_eq!(
+        config.network.allow_unix_sockets,
+        wanted.network.allow_unix_sockets
+    );
+    assert_eq!(config.network.allow_tcp, None, "no TCP grant beside it");
+}
+
+/// Crabpot refuses `allowTcp` where Seatbelt cannot narrow it to one host
+#[cfg(target_os = "linux")]
+#[test]
+fn a_tcp_door_is_the_one_address_the_policy_allows() {
+    let door = Door::parse("127.0.0.1:41999").unwrap();
+
+    let config = with_door(&door, false);
+
+    let wanted = read(json!({
+        "network": {
+            "allowedDomains": [], "deniedDomains": [],
+            "allowTcp": ["127.0.0.1:41999"],
+        },
+        "filesystem": {"denyRead": [], "allowWrite": [], "denyWrite": []},
+    }));
+    assert_eq!(config.network.allow_tcp, wanted.network.allow_tcp);
+    assert_eq!(config.network.allow_unix_sockets, None);
+}
+
+#[test]
+fn a_door_does_not_open_local_binding() {
+    let door = if cfg!(target_os = "linux") {
+        "127.0.0.1:41999"
+    } else {
+        "/data/kelpie/0123.sock"
+    };
+
+    let config = with_door(&Door::parse(door).unwrap(), false);
+
+    assert_eq!(config.network.allow_local_binding, None);
+}
+
+#[test]
+fn no_door_grants_no_socket_and_no_address() {
+    let config = built(&on(&[]), &[], false);
+
+    assert_eq!(config.network.allow_unix_sockets, None);
+    assert_eq!(config.network.allow_tcp, None);
+}
+
+#[test]
+fn the_relay_binary_is_readable_when_the_home_folder_is_closed() {
+    let door = Door::parse(if cfg!(target_os = "linux") {
+        "127.0.0.1:41999"
+    } else {
+        "/data/kelpie/0123.sock"
+    })
+    .unwrap();
+    let exe = std::env::current_exe().unwrap();
+
+    let config = with_door(&door, false);
+
+    assert!(
+        config.filesystem.allow_read.unwrap().contains(
+            &entries(&[&exe.to_string_lossy()])
+                .filesystem
+                .allow_read
+                .unwrap()[0]
+        ),
+        "the harness starts it inside the sandbox"
     );
 }

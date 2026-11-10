@@ -46,11 +46,12 @@ use std::process::Command;
 use crabpot::{ConfigError, StartError, WrapError};
 
 use crate::session::Harness;
+use crate::tools::Door;
 
 pub mod fence;
 mod policy;
 
-pub use policy::{Project, denied, policy};
+pub use policy::{Project, denied, policy, policy_with_door};
 
 /// Takes over the process when crabpot ran it again as its helper
 ///
@@ -136,7 +137,23 @@ impl Sandbox {
         project: &Project<'_>,
         state_dir: &Path,
     ) -> Result<Self, SandboxError> {
-        let config = policy(harness, project, state_dir).map_err(SandboxError::Policy)?;
+        Self::start_with_door(harness, project, state_dir, None)
+    }
+
+    /// [`Sandbox::start`] for a session that reaches kelpie's tools through
+    /// `door`, the one extra route out the policy names
+    ///
+    /// # Errors
+    ///
+    /// As [`Sandbox::start`], and `door` is one this platform cannot grant.
+    pub fn start_with_door(
+        harness: &Harness,
+        project: &Project<'_>,
+        state_dir: &Path,
+        door: Option<&Door>,
+    ) -> Result<Self, SandboxError> {
+        let config =
+            policy_with_door(harness, project, state_dir, door).map_err(SandboxError::Policy)?;
         fs::create_dir_all(state_dir).map_err(SandboxError::StateDir)?;
         let inner = crabpot::Sandbox::start(&config).map_err(SandboxError::Start)?;
         Ok(Self { inner })

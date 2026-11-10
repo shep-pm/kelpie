@@ -38,6 +38,7 @@ use kelpie_engine::session::{
     Bridge, Choice, LogEntry, Session, SessionEvent, Started, Swap, log, sandboxed_launcher,
 };
 use kelpie_engine::settings::{BridgeUpdates, ConfigDir, Harness, Settings};
+use kelpie_engine::tools::{SessionTools, Tools};
 use semver::Version;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -223,6 +224,8 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         pm,
         ..
     } = *opening;
+    // One token for the session, shared by its sandbox's door and its harness's server
+    let tools = opening.tools.map(Tools::session);
     // parity: harness.pm
     let session = match pm.harness {
         Harness::ClaudeCode => {
@@ -231,7 +234,7 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
             // kelpie's own pin is always there to fall back to
             bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
             Session::on_bridge(
-                claude_bridge(opening),
+                claude_bridge(opening, tools.clone()),
                 project.path.clone(),
                 project.pm_session.clone(),
                 pm.choice.clone(),
@@ -239,6 +242,10 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         }
         // `Harness` grows with each harness's slice, and none but Claude Code is built here
         other => return Err(format!("{other:?} is not wired to the PM yet")),
+    };
+    let session = match tools {
+        Some(tools) => session.with_tools(tools),
+        None => session,
     };
     Ok(match &pm.instructions {
         Some(instructions) => session.with_instructions(instructions.clone()),
@@ -255,7 +262,7 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
 /// there and the one before it is used again (`docs/design/bridge-updates.md`,
 /// Swapping). Each version's harness starts inside a sandbox of its own, as the
 /// first one's does (ADR 0005), so no version runs outside crabpot.
-fn claude_bridge(opening: &Opening<'_>) -> Bridge {
+fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
     let Opening {
         tree,
         data_dir,
@@ -264,6 +271,7 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
         logins,
         pm,
         config,
+        ..
     } = *opening;
     let pin = claude::pin();
     let (config, project_id, state_dir, folder) = (
@@ -305,7 +313,7 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
             let harness = claude::harness(cmd, &state_dir, &logins, harness_global_folder)
                 .map_err(|error| error.to_string())?;
-            let sandbox = Sandbox::start(
+            let sandbox = Sandbox::start_with_door(
                 &harness,
                 &sandbox::Project {
                     folder: &folder,
@@ -313,6 +321,7 @@ fn claude_bridge(opening: &Opening<'_>) -> Bridge {
                     read_anywhere,
                 },
                 &state_dir,
+                tools.as_ref().map(SessionTools::door),
             )
             .map_err(|error| format!("could not start the PM's sandbox: {error}"))?;
             Ok(Started {

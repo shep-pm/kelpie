@@ -11,10 +11,14 @@
 )]
 
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,7 +26,9 @@ use kelpie_engine::harness::global;
 use kelpie_engine::run::RunId;
 use kelpie_engine::sandbox::{Project, Sandbox, run_from_args};
 use kelpie_engine::session::Harness;
+use kelpie_engine::tools::{self, DOOR_VAR, Door, SessionKey, SessionTools, TOKEN_VAR, Tools};
 use kelpie_engine::tree::{ProcessTree, sweep_marked};
+use serde_json::{Value, json};
 
 // SK's sandbox escapes, tried against the PM's policy. Their own file, and run
 // here, since a sandboxed test needs this binary's `main` on Linux
@@ -31,6 +37,9 @@ mod escapes;
 
 /// The argument that makes this binary the sandboxed process the sweep looks for
 const SLEEP: &str = "--sleep-in-the-sandbox";
+
+/// The argument that makes this binary dial an address and say whether it got through
+const DIAL: &str = "--dial";
 
 /// The argument that makes this binary run the global folder checks with `HOME` moved
 /// into the scratch folder, which is how a test reaches a path the policy denies
@@ -44,12 +53,15 @@ const WAIT: Duration = Duration::from_secs(20);
 
 fn main() {
     run_from_args();
+    // The relay is this binary run as `kelpie tools`, as the app's `main` runs it
+    tools::run_from_args();
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some(SLEEP) => {
             sleep_in_the_sandbox(args.next().map(PathBuf::from));
             return;
         }
+        Some(DIAL) => std::process::exit(dial(&args.next().unwrap_or_default())),
         // One of the escapes, in the copy of this binary its test started
         Some(escapes::IN_OWN_HOME) => escapes::run_case(&args.next().expect("a case's tag")),
         _ => {}
@@ -176,6 +188,11 @@ const TESTS: &[(&str, fn())] = &[
         the_sweep_finds_a_sandboxed_process,
     ),
     (
+        "the_relay_reaches_kelpie_from_inside_the_sandbox",
+        the_relay_reaches_kelpie_from_inside_the_sandbox,
+    ),
+    ("the_door_opens_nothing_else", the_door_opens_nothing_else),
+    (
         "escapes::harness_files_are_refused_in_any_case_and_spelling",
         escapes::harness_files_are_refused_in_any_case_and_spelling,
     ),
@@ -202,6 +219,18 @@ const TESTS: &[(&str, fn())] = &[
         escapes::a_socket_the_policy_lists_is_still_refused_on_linux,
     ),
 ];
+
+/// Exit 0 when `address`, a socket's path or `host:port`, answers, and 1 when not
+fn dial(address: &str) -> i32 {
+    let reached = if Path::new(address).is_absolute() {
+        UnixStream::connect(address).is_ok()
+    } else {
+        address.parse::<SocketAddr>().is_ok_and(|address| {
+            TcpStream::connect_timeout(&address, Duration::from_secs(3)).is_ok()
+        })
+    };
+    i32::from(!reached)
+}
 
 /// Says it is up by writing a file, then waits to be stopped
 fn sleep_in_the_sandbox(ready: Option<PathBuf>) {
@@ -249,15 +278,10 @@ impl Scratch {
         path
     }
 
-    /// A sandbox for a session in the project, whose harness is `program`
-    fn sandbox(&self, program: &Path) -> Sandbox {
-        self.sandbox_for(program, &self.project(), &[])
-    }
-
-    /// A sandbox for a session in `project`, whose harness is `program` and reads
-    /// `global_reads` of the person's own global folder
-    fn sandbox_for(&self, program: &Path, project: &Path, global_reads: &[PathBuf]) -> Sandbox {
-        sandbox_in(program, project, &self.state(), global_reads)
+    /// A sandbox for a session in the project, whose harness is `program`, with
+    /// kelpie's tools `door` named in its policy when it has one
+    fn sandbox(&self, program: &Path, door: Option<&Door>) -> Sandbox {
+        sandbox_in(program, &self.project(), &self.state(), &[], door)
     }
 }
 
@@ -267,9 +291,16 @@ impl Drop for Scratch {
     }
 }
 
-/// A sandbox for a session whose harness is `program`, working in `project`, keeping its
-/// files in `state` and reading `global_reads` of the person's own global folder
-fn sandbox_in(program: &Path, project: &Path, state: &Path, global_reads: &[PathBuf]) -> Sandbox {
+/// A sandbox for a session whose harness is `program`, working in `project`, keeping
+/// its files in `state`, reading `global_reads` of the person's own global folder, and
+/// reaching kelpie's tools `door` when it has one
+fn sandbox_in(
+    program: &Path,
+    project: &Path,
+    state: &Path,
+    global_reads: &[PathBuf],
+    door: Option<&Door>,
+) -> Sandbox {
     let mut harness = Harness::new(program);
     // The harness's own install is read, as a real one's is
     harness.installs = program
@@ -283,7 +314,7 @@ fn sandbox_in(program: &Path, project: &Path, state: &Path, global_reads: &[Path
         network_allowlist: &[],
         read_anywhere: false,
     };
-    Sandbox::start(&harness, &confined, state)
+    Sandbox::start_with_door(&harness, &confined, state, door)
         .unwrap_or_else(|error| panic!("the sandbox did not start: {error}"))
 }
 
@@ -323,11 +354,6 @@ fn host_refuses_sandboxes(stderr: &str) -> bool {
     cfg!(target_os = "linux") && stderr.starts_with("bwrap:")
 }
 
-/// shorthand for [`working`] with a sandbox for a session on `program` in the project
-fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
-    working(scratch.sandbox(program), test)
-}
-
 /// `sandbox`, once it is known to run commands, or `None` when this host cannot
 /// run one at all
 ///
@@ -338,6 +364,21 @@ fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sand
 /// `SKIPPED`, for a host known not to run one.
 fn working(sandbox: Sandbox, test: &str) -> Option<Sandbox> {
     host_can_run(test, &sh(&sandbox, "true")).then_some(sandbox)
+}
+
+/// [`working`], on a sandbox for a session in the scratch whose harness is `program`
+fn working_sandbox(scratch: &Scratch, test: &str, program: &Path) -> Option<Sandbox> {
+    working_sandbox_with_door(scratch, test, program, None)
+}
+
+/// [`working_sandbox`], with kelpie's tools `door` named in the policy
+fn working_sandbox_with_door(
+    scratch: &Scratch,
+    test: &str,
+    program: &Path,
+    door: Option<&Door>,
+) -> Option<Sandbox> {
+    working(scratch.sandbox(program, door), test)
 }
 
 /// Whether `probe`, `true` run in a sandbox, shows this host runs one
@@ -477,7 +518,7 @@ fn in_the_persons_home(root: &Path) -> i32 {
     });
 
     let Some(on) = working(
-        sandbox_in(Path::new("/bin/sh"), &project, &state, &reads),
+        sandbox_in(Path::new("/bin/sh"), &project, &state, &reads, None),
         "the_global_folder_is_read_only_when_on",
     ) else {
         return CHILD_SKIPPED;
@@ -519,7 +560,7 @@ fn in_the_persons_home(root: &Path) -> i32 {
     assert!(!through.exists(), "the link stayed in the session's folder");
 
     let Some(off) = working(
-        sandbox_in(Path::new("/bin/sh"), &project, &state, &[]),
+        sandbox_in(Path::new("/bin/sh"), &project, &state, &[], None),
         "the_global_folder_is_read_only_when_on",
     ) else {
         return CHILD_SKIPPED;
@@ -602,4 +643,145 @@ fn the_value_of_a_libtest_option_is_not_a_filter() {
 
     let exact = Selection::of(&words(&["--exact", "refused"]));
     assert!(!exact.runs("a_write_outside_the_state_dir_is_refused"));
+}
+
+/// The agent's end of an MCP conversation with the relay running in a sandbox
+///
+/// Returns what the server said, and the sessions kelpie was serving while the
+/// relay was still up: once the relay is stopped its connection ends, so that
+/// is read before.
+fn mcp_through_the_sandbox(
+    sandbox: &Sandbox,
+    exe: &Path,
+    tools: &Tools,
+    session: &SessionTools,
+) -> (Vec<Value>, Vec<SessionKey>) {
+    let (door, token) = (session.door(), session.token());
+    let mut relay = Command::new(exe);
+    relay
+        .arg("tools")
+        .env(DOOR_VAR, door.to_string())
+        .env(TOKEN_VAR, token);
+    let mut child = sandbox
+        .command(&relay)
+        .expect("the relay goes in the sandbox")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the sandbox runs the relay");
+    let mut to_relay = child.stdin.take().unwrap();
+    let from_relay = child.stdout.take().unwrap();
+    let (sender, lines) = channel();
+    thread::spawn(move || {
+        for line in BufReader::new(from_relay).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let hear = || {
+        let line = lines
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("the relay carried nothing back from inside the sandbox"));
+        serde_json::from_str::<Value>(&line).unwrap_or_else(|error| panic!("{error}: {line}"))
+    };
+    let mut say = |message: Value| writeln!(to_relay, "{message}").unwrap();
+    say(json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    }));
+    let initialized = hear();
+    say(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    say(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let listed = hear();
+    let connected = tools.connected();
+    drop(to_relay);
+    let _ = child.kill();
+    let _ = child.wait();
+    (vec![initialized, listed], connected)
+}
+
+fn the_relay_reaches_kelpie_from_inside_the_sandbox() {
+    let scratch = Scratch::new("relay");
+    let exe = std::env::current_exe().unwrap();
+    let tools = Tools::start(&scratch.outside()).expect("the door opens");
+    let session = tools.session();
+    let Some(sandbox) = working_sandbox_with_door(
+        &scratch,
+        "the_relay_reaches_kelpie_from_inside_the_sandbox",
+        &exe,
+        Some(session.door()),
+    ) else {
+        return;
+    };
+
+    let (heard, connected) = mcp_through_the_sandbox(&sandbox, &exe, &tools, &session);
+
+    assert_eq!(heard[0]["id"], 1, "{}", heard[0]);
+    assert!(heard[0]["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(heard[1]["id"], 2);
+    assert_eq!(heard[1]["result"]["tools"], json!([]), "{}", heard[1]);
+    assert_eq!(
+        connected,
+        [session.key()],
+        "the connection is the session's, by its token"
+    );
+}
+
+fn the_door_opens_nothing_else() {
+    let scratch = Scratch::new("door");
+    let exe = std::env::current_exe().unwrap();
+    let tools = Tools::start(&scratch.outside()).expect("the door opens");
+    let session = tools.session();
+    let Some(sandbox) = working_sandbox_with_door(
+        &scratch,
+        "the_door_opens_nothing_else",
+        &exe,
+        Some(session.door()),
+    ) else {
+        return;
+    };
+    let dial_in_sandbox = |address: &str| {
+        let mut command = Command::new(&exe);
+        command.args([DIAL, address]);
+        sandbox
+            .command(&command)
+            .expect("the dial goes in the sandbox")
+            .output()
+            .expect("the sandbox runs the dial")
+    };
+    // The control: the door answers, so the refusals below are the policy's and
+    // not a sandbox that dials nothing
+    let control = dial_in_sandbox(&session.door().to_string());
+    assert!(
+        control.status.success(),
+        "the door was not reached: {control:?}"
+    );
+    // Anything else on the loopback, which accepts if it is let through
+    let other_port = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let other_port_address = other_port.local_addr().unwrap().to_string();
+    let mut others = vec![("another loopback port", other_port_address)];
+    // macOS names the door as a socket, so another socket is a test of its own
+    let other_socket = scratch.outside().join("other.sock");
+    let _listener = if session.door().socket().is_some() {
+        let listener = UnixListener::bind(&other_socket).unwrap();
+        others.push(("another socket", other_socket.display().to_string()));
+        Some(listener)
+    } else {
+        None
+    };
+
+    for (what, address) in others {
+        let refused = dial_in_sandbox(&address);
+
+        assert!(
+            !refused.status.success(),
+            "{what} ({address}) was let through: {refused:?}"
+        );
+    }
 }

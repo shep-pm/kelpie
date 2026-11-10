@@ -26,6 +26,7 @@ use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness, Settings};
+use kelpie_engine::tools::Tools;
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -245,6 +246,10 @@ pub struct Opening<'a> {
 
     /// What the PM runs on, resolved from the settings when this send began
     pub pm: &'a PmPlan,
+
+    /// kelpie's tools server, whose door each session's sandbox names and whose
+    /// token each session's harness brings. `None` where the door could not open.
+    pub tools: Option<&'a Tools>,
 }
 
 /// Builds the PM's session for a project
@@ -286,6 +291,9 @@ pub struct AppState {
     opening: Mutex<()>,
     opener: Opener,
     picker: Picker,
+    /// kelpie's tools server, with its door open for the whole run. `None` when
+    /// the door could not open, which leaves the sessions without it.
+    tools: Option<Tools>,
     /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
     bridge_checks: Mutex<Option<Sender<()>>>,
 }
@@ -338,6 +346,10 @@ impl AppState {
         };
         let tree = Arc::new(tree);
         let projects = Projects::load(data_dir.join(PROJECTS_FILE))?;
+        // A door that will not open costs the sessions kelpie's tools, not the app
+        let tools = Tools::start(&data_dir)
+            .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
+            .ok();
         Ok(Self {
             data_dir,
             tree,
@@ -348,6 +360,7 @@ impl AppState {
             opening: Mutex::new(()),
             opener,
             picker,
+            tools,
             bridge_checks: Mutex::new(None),
         })
     }
@@ -550,6 +563,7 @@ impl AppState {
             logins: &self.logins,
             config: &self.config,
             pm: &plan,
+            tools: self.tools.as_ref(),
         })?
         .with_log(log.clone());
         // Kept before the old session stops, so a failed write leaves it running
