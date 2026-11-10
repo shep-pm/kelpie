@@ -2,7 +2,7 @@
 
 Some machines need a one-time change before any sandbox can start on them. On Ubuntu 24.04 and later, AppArmor strips the capabilities from bwrap's user namespace, and every session fails with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` (crabpot's README, Linux setup). This note covers how kelpie finds that out, how it makes the change, and what runs when the person declines. It places itself in `docs/design/ux.md` (Sandbox, Attention) and amends ADR 0005. Terms are in `GLOSSARY.md`.
 
-**Status:** draft. Running without a sandbox (option B: opt in per project, the PM only) was confirmed by the maintainer on 2026-11-10. The rest awaits confirmation.
+**Status:** draft. Running without a sandbox (option B: opt in per project, the PM only) was confirmed by the maintainer on 2026-11-10, and so was the profile scoped to kelpie in place of a bwrap of its own. The rest awaits confirmation.
 
 ## Use case
 
@@ -39,16 +39,54 @@ Kelpie checks when a session's sandbox starts, as crabpot reports it, and does n
 
 1. The package ships the profile root-owned, in its own data folder. The button runs one `pkexec` command, spawned through the process tree (ADR 0001), that copies it into `/etc/apparmor.d/` and loads it with `apparmor_parser -r`. Nothing is copied from a folder the person can write, so the prompt cannot be turned into root for another file.
 2. One password prompt. With no polkit agent running, which a minimal window manager may lack, the item shows the two commands to run in a terminal instead.
-3. The profile names two binaries: kelpie's own, since crabpot runs it again as the helper (ADR 0005), and the bwrap kelpie ships (below). `kernel.apparmor_restrict_unprivileged_userns` stays at 1, and kelpie never turns it off: that opens user namespaces to every process on the machine.
+3. The profile names kelpie's own binary, and lets the system's bwrap make namespaces only when kelpie starts it (below). `kernel.apparmor_restrict_unprivileged_userns` stays at 1, and kelpie never turns it off: that opens user namespaces to every process on the machine.
 4. Kelpie retries the session once the profile is loaded. An install that fails names `pkexec`'s or `apparmor_parser`'s error in the item.
 
-### A bwrap of kelpie's own
+### The profile
 
-crabpot's README grants `userns` to `/usr/bin/bwrap` and disables Ubuntu's `bwrap-userns-restrict`. That lifts the restriction for every program that calls the system bwrap, which is what Ubuntu's profile is there to stop.
+crabpot's README grants `userns` to `/usr/bin/bwrap` and disables Ubuntu's `bwrap-userns-restrict`. That lifts the restriction for every program that calls the system bwrap, which is what Ubuntu's profile is there to stop. Kelpie's profile scopes it to kelpie instead, and ships nothing of bwrap's: it uses the system's `bubblewrap` package.
 
-Kelpie ships its own bwrap, root-owned beside its binary under a name of its own (`kelpie-bwrap`, so the package never collides with the `bubblewrap` package's `bwrap`), and the profile names that copy alone. The system bwrap stays restricted, and Ubuntu's profile stays on. bubblewrap is LGPL-2.0-or-later, shipped unchanged with its notice.
+It is three profiles in one file:
 
-This needs crabpot to take a bwrap path. crabpot is public, so its issue names no kelpie.
+1. Kelpie's binary, which starts `/usr/bin/bwrap` into the second and runs everything else as itself.
+2. bwrap as kelpie started it, with `userns`. crabpot's helper, kelpie's binary run again inside, stays in it. Anything else it runs is stacked under the third: bwrap sets `no_new_privs`, and AppArmor then allows a stack and no other change.
+3. The sandboxed command, with no `userns`, `capability` or `mount`.
+
+```text
+abi <abi/4.0>,
+include <tunables/global>
+
+profile kelpie <kelpie> {
+  file, network, capability, signal, ptrace, unix, dbus, mount, umount, pivot_root,
+  /** ix,
+  /usr/bin/bwrap Px -> kelpie_bwrap,
+}
+
+profile kelpie_bwrap flags=(attach_disconnected,mediate_deleted) {
+  /{,**} rwlkm, network, capability, signal, ptrace, unix, dbus, mount, umount, pivot_root, userns,
+  <kelpie> ix,
+  /** Pix -> &kelpie_sandboxed,
+}
+
+profile kelpie_sandboxed flags=(attach_disconnected,mediate_deleted) {
+  file, network, signal, ptrace, unix, dbus,
+  /** ix,
+}
+```
+
+`<kelpie>` is the binary's installed path. `kelpie_bwrap` spells out its file rules, since `file,` grants `ix` on every path and AppArmor refuses it beside `/** Pix`.
+
+Tested on Ubuntu 24.04.3 (kernel 6.8, restriction at 1) with crabpot 0.10.8 on 2026-11-10, as an unprivileged user:
+
+| | No profile | This profile |
+|---|---|---|
+| A session's sandbox | `RTM_NEWADDR` | Starts: writes its folder, not the home folder, `~/.ssh` hidden, allowed domain 200, another refused |
+| `unshare` and a nested bwrap inside | | Refused |
+| bwrap started by anything else, or a copy of bwrap | Refused | Still refused |
+
+An agent inside cannot reach the second profile: by its rules, kelpie's binary run from inside the sandbox stays in the third. The README's profile, by contrast, grants `userns` to the helper's path wherever it is run from.
+
+Open: a host where Ubuntu's own `bwrap-userns-restrict` is loaded, which stock 24.04 does not load. Kelpie's switch names its profile, which should win over that one's path, but no such host has tried it.
 
 ### The AppImage
 
@@ -75,7 +113,7 @@ Windows has a one-time install of the same shape (`crabpot windows-install`). On
 | The process tree (ADR 0001) | `pkexec` is spawned through it like any command |
 | Attention (`ux.md`) | One item per affected host, with Install and Run without a sandbox |
 | Settings (`settings.md`) | One project field, Run without a sandbox |
-| Packaging | `kelpie-bwrap` ships as a sidecar the way `kelpie-reaper` does (`bundle.externalBin`), and the profile as a package resource |
+| Packaging | The profile ships as a package resource naming the binary's installed path, and the `.deb` and `.rpm` depend on `bubblewrap` |
 | Workers (`workers.md`) | A worker refused for no sandbox waits, holding no slot, like a Paused one |
 
 What it would duplicate: nothing. The home-folder refusal stays its own check.
