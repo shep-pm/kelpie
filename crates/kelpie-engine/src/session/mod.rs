@@ -14,7 +14,11 @@
 //! - When the harness exits, the turn in flight ends with a
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
+//! - With a [`log::Log`], every message and event is also kept in kelpie's own
+//!   log, which [`log::read`] gives back with no harness running.
 //! - Notes mid-turn and fork are not here yet.
+//! - [`options`] asks a harness what it offers, on a start that sends no prompt
+//!   and stops the harness again.
 //!
 //! # Quick start
 //!
@@ -45,7 +49,7 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
-pub use kelpie_protocol::{SessionEvent, SessionId};
+pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
 use crate::sandbox::Sandbox;
 use crate::tree::{Child, ProcessTree};
@@ -53,11 +57,16 @@ use crate::tree::{Child, ProcessTree};
 mod acp;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
+pub mod log;
+pub mod options;
 mod raw;
 mod stderr;
 
 /// How long a harness that closed its pipes is given to show its exit status
 const EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// How long a stopped harness's stderr is given to be read to its end
+const TAIL_SETTLE: Duration = Duration::from_millis(200);
 const EXIT_POLL: Duration = Duration::from_millis(10);
 
 /// What starts a harness's ACP agent
@@ -157,6 +166,94 @@ pub struct Choice {
     pub effort: Option<String>,
 }
 
+/// Why kelpie could not learn what a harness offers
+// kelpie-engine is a library: an out-of-tree match would break on a new variant
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SessionError {
+    /// The harness process could not be started
+    Start(io::Error),
+    /// The harness ended the connection before it listed its options, with what it left behind
+    Ended {
+        /// The harness's own end, as the tree and its stderr can say it
+        message: String,
+    },
+    /// The harness did not answer within the time kelpie waits, and was stopped
+    TimedOut {
+        /// How long kelpie waited
+        after: Duration,
+        /// How the harness ended once it was stopped, with what it last wrote
+        message: String,
+    },
+    /// The harness answered with an error instead of its options
+    Refused {
+        /// The error the harness answered with
+        message: String,
+    },
+    /// The harness id is not one file name, so no answer can be kept under it
+    Name {
+        /// The harness id kelpie was asked about
+        name: String,
+    },
+    /// The answer could not be written to the data folder
+    Cache {
+        /// The file kelpie could not write
+        path: PathBuf,
+        /// What the OS said
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for SessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start(error) => write!(f, "kelpie could not start the harness: {error}"),
+            Self::Ended { message } => {
+                write!(
+                    f,
+                    "the harness ended the connection before it answered: {message}"
+                )
+            }
+            Self::TimedOut { after, message } => {
+                write!(
+                    f,
+                    "the harness did not answer within {} s and was stopped",
+                    after.as_secs_f32().ceil()
+                )?;
+                if message.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, ": {message}")
+                }
+            }
+            Self::Refused { message } => {
+                write!(f, "the harness would not list its options: {message}")
+            }
+            Self::Name { name } => {
+                write!(
+                    f,
+                    "{name} is not a name kelpie can keep a harness's answers under"
+                )
+            }
+            Self::Cache { path, source } => {
+                write!(f, "kelpie could not read or write {path:?}: {source}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for SessionError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Start(error) | Self::Cache { source: error, .. } => Some(error),
+            Self::Ended { .. }
+            | Self::TimedOut { .. }
+            | Self::Refused { .. }
+            | Self::Name { .. } => None,
+        }
+    }
+}
+
 /// Where a turn's events go
 type Sink = Box<dyn FnMut(SessionEvent) + Send>;
 
@@ -173,6 +270,9 @@ pub(crate) struct Link {
     pub(crate) transport: DynConnectTo<Client>,
     /// What the harness left behind when it ended, if it can be known
     pub(crate) explain: Box<dyn FnMut() -> Option<String> + Send>,
+    /// Stop the harness for certain, waiting `grace` for it to exit on its own,
+    /// and say how it ended
+    pub(crate) stop: Box<dyn FnOnce(Duration) -> Option<String> + Send>,
 }
 
 /// How a session gets an agent to talk to
@@ -190,6 +290,8 @@ struct Setup {
     project: PathBuf,
     resume: Option<SessionId>,
     choice: Choice,
+    /// What [`Session::choose`] last set, read before each turn
+    wanted: Arc<Mutex<Choice>>,
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
@@ -203,12 +305,14 @@ struct Setup {
 pub struct Session {
     launcher: Arc<Mutex<Box<dyn Launch>>>,
     project: PathBuf,
-    choice: Choice,
+    /// The choice the next message runs on, which [`Session::choose`] changes
+    choice: Arc<Mutex<Choice>>,
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
     /// The value of the harness's `mode` option to set, `None` to leave it
     mode: Option<String>,
+    log: Option<log::Log>,
     id: Arc<Mutex<Option<SessionId>>>,
     /// The running worker's inbox, `None` before the first send
     worker: Mutex<Option<UnboundedSender<Command>>>,
@@ -218,7 +322,7 @@ impl fmt::Debug for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Session")
             .field("project", &self.project)
-            .field("choice", &self.choice)
+            .field("choice", &*lock(&self.choice))
             .field("id", &*lock(&self.id))
             .finish_non_exhaustive()
     }
@@ -299,11 +403,12 @@ impl Session {
         Self {
             launcher: Arc::new(Mutex::new(launcher)),
             project,
-            choice,
+            choice: Arc::new(Mutex::new(choice)),
             meta,
             extensions,
             instructions: None,
             mode: None,
+            log: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
         }
@@ -330,6 +435,40 @@ impl Session {
         self
     }
 
+    /// Keep every message sent and every event streamed in `log`
+    ///
+    /// The log is what shows the history again on a later launch, on any
+    /// harness and with no process started (`docs/design/pm-chat.md`, History).
+    /// A write that fails does not stop a turn: the turn says so with a
+    /// `Failed`. Call this before the first send.
+    #[must_use]
+    pub fn with_log(mut self, log: log::Log) -> Self {
+        self.log = Some(log);
+        self
+    }
+
+    /// Stop writing to the session's log, for good
+    ///
+    /// For a quit: stopping the harness ends the turn in flight with a
+    /// `Failed`, which is not something the maintainer saw. Left out of the log,
+    /// the turn has no end there and shows as interrupted on the next launch.
+    /// Does nothing without a log.
+    pub fn close_log(&self) {
+        if let Some(log) = &self.log {
+            log.close();
+        }
+    }
+
+    /// Change the model and effort the next message runs on
+    ///
+    /// The same session carries on: the harness is asked to set each option
+    /// that differs from what it last set, before the next prompt. A turn in
+    /// flight keeps what it started with. A field left empty is not asked, so
+    /// clearing one leaves the harness on the value it last took.
+    pub fn choose(&self, choice: Choice) {
+        *lock(&self.choice) = choice;
+    }
+
     /// The session's id: the one to resume, then the one the harness gave
     #[must_use]
     pub fn session_id(&self) -> Option<SessionId> {
@@ -345,10 +484,12 @@ impl Session {
     /// taken. Those come before the turn's own `TurnEnded`. `sink` runs on the
     /// session's own thread and must not block for long.
     pub fn send(&self, text: impl Into<String>, sink: impl FnMut(SessionEvent) + Send + 'static) {
-        let mut command = Command::Send {
-            text: text.into(),
-            sink: Box::new(sink),
+        let text = text.into();
+        let sink: Sink = match &self.log {
+            Some(log) => log::logged(log, &text, sink),
+            None => Box::new(sink),
         };
+        let mut command = Command::Send { text, sink };
         let mut worker = lock(&self.worker);
         if let Some(inbox) = worker.as_ref() {
             match inbox.unbounded_send(command) {
@@ -361,7 +502,8 @@ impl Session {
         let setup = Setup {
             project: self.project.clone(),
             resume: lock(&self.id).clone(),
-            choice: self.choice.clone(),
+            choice: lock(&self.choice).clone(),
+            wanted: Arc::clone(&self.choice),
             meta: self.meta.clone(),
             extensions: self.extensions.clone(),
             instructions: self.instructions.clone(),
@@ -371,7 +513,9 @@ impl Session {
         let id = Arc::clone(&self.id);
         let started = thread::Builder::new()
             .name("kelpie-session".to_owned())
-            .spawn(move || futures::executor::block_on(acp::run(launcher, setup, commands, id)));
+            .spawn(move || {
+                futures::executor::block_on(acp::run(launcher, setup, commands, id));
+            });
         match started {
             Ok(_) => {
                 // The thread holds the receiver, so this cannot fail
@@ -440,10 +584,42 @@ impl Launch for ProcessLauncher {
             blocking::Unblock::new(stdin),
             blocking::Unblock::new(stdout),
         );
+        // Both closures reach the same child: a session only asks how it ended,
+        // an ask only stops it
+        let ended = Arc::new(Mutex::new(Ended { child, tail }));
+        let shared = Arc::clone(&ended);
         Ok(Link {
             transport: DynConnectTo::new(transport),
-            explain: Box::new(move || explain_exit(&mut child, &tail)),
+            explain: Box::new(move || lock(&shared).explain()),
+            stop: Box::new(move |grace| lock(&ended).stop(grace)),
         })
+    }
+}
+
+/// The harness process kelpie started, and what it wrote to stderr
+struct Ended {
+    child: Child,
+    tail: stderr::Tail,
+}
+
+impl Ended {
+    /// How the harness ended, if it can be known
+    fn explain(&mut self) -> Option<String> {
+        explain_exit(&mut self.child, &self.tail)
+    }
+
+    /// Stop the harness's group, and say how it ended and what it last wrote
+    fn stop(&mut self, grace: Duration) -> Option<String> {
+        match self.child.stop(grace) {
+            Ok(status) => {
+                self.tail.settle(TAIL_SETTLE);
+                Some(with_stderr(
+                    format!("the harness exited with {status}"),
+                    &self.tail,
+                ))
+            }
+            Err(error) => Some(format!("kelpie could not stop the harness: {error}")),
+        }
     }
 }
 
@@ -461,16 +637,21 @@ fn explain_exit(child: &mut Child, tail: &stderr::Tail) -> Option<String> {
             Ok(None) | Err(_) => break None,
         }
     };
-    let lines = tail.lines();
-    let mut text = match status {
+    let text = match status {
         Some(status) => format!("the harness exited with {status}"),
         None => "the harness closed its output but is still running".to_owned(),
     };
+    Some(with_stderr(text, tail))
+}
+
+/// `text`, followed by the last of what the harness wrote to stderr, if it wrote any
+fn with_stderr(mut text: String, tail: &stderr::Tail) -> String {
+    let lines = tail.lines();
     if !lines.is_empty() {
         text.push_str("; it last wrote: ");
         text.push_str(&lines);
     }
-    Some(text)
+    text
 }
 
 #[cfg(test)]

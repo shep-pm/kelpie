@@ -448,6 +448,15 @@ fn an_unlisted_model_fails_and_keeps_the_default() {
     assert!(agent.params("session/set_config_option").is_empty());
 }
 
+/// A folder of this test's own, for what kelpie keeps of a harness's answers
+fn data_folder() -> PathBuf {
+    use crate::run::RunId;
+
+    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 #[test]
 fn cancel_ends_the_turn_cancelled() {
     let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
@@ -815,6 +824,7 @@ impl Launch for DeadOnWrite {
                 agent_client_protocol::ByteStreams::new(Broken, Broken),
             ),
             explain: Box::new(|| Some(EXPLANATION.to_owned())),
+            stop: Box::new(|_| Some(EXPLANATION.to_owned())),
         })
     }
 }
@@ -839,127 +849,155 @@ fn a_harness_gone_before_the_first_write_is_explained() {
     assert!(message.contains(EXPLANATION), "{message}");
 }
 
-const INSTRUCTIONS: &str = "You are the project manager.";
+mod choose;
+mod instructions;
+mod offered_options;
 
-fn system_prompt(text: &str) -> serde_json::Value {
-    json!({ "mode": "append", "content": [{ "type": "text", "text": text }] })
-}
-
-fn prompt_texts(agent: &FakeAgent) -> Vec<String> {
-    agent
-        .params("session/prompt")
-        .iter()
-        .map(|params| params["prompt"][0]["text"].as_str().unwrap().to_owned())
-        .collect()
+/// A log file's path in a folder of this test's own
+fn log_path() -> PathBuf {
+    let dir = data_folder();
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("log.jsonl")
 }
 
 #[test]
-fn instructions_go_in_the_system_prompt_when_offered() {
-    let agent = FakeAgent::new().accepts_system_prompt();
+fn the_log_round_trips_user_messages_and_events() {
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Hel").text("lo"))
+        .turn(Turn::new().text("Again"));
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
 
-    say(&session(&agent).with_instructions(INSTRUCTIONS), "Hi");
+    let first = say(&session, "Hi");
+    let second = say(&session, "More");
 
+    let mut expected = vec![LogEntry::User {
+        text: "Hi".to_owned(),
+    }];
+    expected.extend(first.into_iter().map(LogEntry::Event));
+    expected.push(LogEntry::User {
+        text: "More".to_owned(),
+    });
+    expected.extend(second.into_iter().map(LogEntry::Event));
+    assert_eq!(log::read(&path).unwrap(), expected);
+}
+
+#[test]
+fn a_missing_log_is_an_empty_history() {
+    let path = log_path();
+
+    assert_eq!(log::read(&path).unwrap(), []);
+}
+
+#[test]
+fn a_torn_last_line_is_dropped() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    let whole = serde_json::to_string(&hi).unwrap();
+    // A crash cut the second line short, in the middle of a character
+    let mut bytes = format!("{whole}\n{{\"entry\":\"user\",\"text\":\"h").into_bytes();
+    bytes.push(0xE2);
+    std::fs::write(&path, bytes).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi]);
+}
+
+#[test]
+fn a_log_reopened_after_a_torn_write_carries_on_from_the_last_whole_line() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    std::fs::write(
+        &path,
+        format!("{}\n{{\"entry\":\"us", serde_json::to_string(&hi).unwrap()),
+    )
+    .unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi, more]);
+}
+
+#[test]
+fn a_line_that_is_not_the_last_and_not_an_entry_is_named() {
+    let path = log_path();
+    std::fs::write(&path, "nonsense\n{\"entry\":\"user\",\"text\":\"Hi\"}\n").unwrap();
+
+    let error = log::read(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("line 1"), "{error}");
+}
+
+#[test]
+fn reading_history_starts_no_process() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+    let path = log_path();
+    let first = session(&agent).with_log(log::Log::open(&path).unwrap());
+    say(&first, "Hi");
+    drop(first);
+    let launched = agent.launches();
+
+    // A later launch: a session over the same log, and the history read before any send
+    let relaunched = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let history = log::read(&path).unwrap();
+
+    assert!(history.contains(&LogEntry::User {
+        text: "Hi".to_owned()
+    }));
+    assert_eq!(agent.launches(), launched);
+    drop(relaunched);
+}
+
+#[test]
+fn a_closed_log_keeps_what_comes_after_out_of_it() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let (sink, heard) = events();
+    session.send("Go", sink);
+    while !matches!(next(&heard), SessionEvent::Text { .. }) {}
+
+    // The app is quitting: what the stop does to the session is not the maintainer's turn
+    session.close_log();
+    session.cancel();
+    until_turn_ends(&heard);
+
+    let history = log::read(&path).unwrap();
+    assert!(
+        history
+            .iter()
+            .all(|entry| !matches!(entry, LogEntry::Event(SessionEvent::TurnEnded { .. }))),
+        "{history:?}"
+    );
+    assert!(history.contains(&LogEntry::User {
+        text: "Go".to_owned()
+    }));
+}
+
+#[test]
+fn a_log_with_a_bad_line_in_the_middle_still_opens_and_appends() {
+    let path = log_path();
+    let hi = r#"{"entry":"user","text":"Hi"}"#;
+    std::fs::write(&path, format!("nonsense\n{hi}\n")).unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    let held = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
-        agent.params("session/new")[0]["systemPrompt"],
-        system_prompt(INSTRUCTIONS)
+        held,
+        format!(
+            "nonsense\n{hi}\n{}\n",
+            serde_json::to_string(&more).unwrap()
+        )
     );
-    assert_eq!(prompt_texts(&agent), ["Hi"]);
-}
-
-#[test]
-fn instructions_lead_the_first_message_otherwise() {
-    let agent = FakeAgent::new();
-    let session = session(&agent).with_instructions(INSTRUCTIONS);
-
-    say(&session, "Hi");
-    say(&session, "Again");
-
-    assert!(agent.params("session/new")[0].get("systemPrompt").is_none());
-    assert_eq!(
-        prompt_texts(&agent),
-        [format!("{INSTRUCTIONS}\n\nHi"), "Again".to_owned()]
-    );
-}
-
-#[test]
-fn instructions_go_in_the_system_prompt_on_resume_and_on_load() {
-    let resumes = FakeAgent::new()
-        .accepts_system_prompt()
-        .can_resume()
-        .knows("old");
-    let loads = FakeAgent::new()
-        .accepts_system_prompt()
-        .can_load()
-        .knows("old");
-
-    for agent in [&resumes, &loads] {
-        let session = agent
-            .session(
-                PathBuf::from("/project"),
-                Some("old".into()),
-                Choice::default(),
-            )
-            .with_instructions(INSTRUCTIONS);
-        say(&session, "Back again");
-    }
-
-    assert_eq!(
-        resumes.params("session/resume")[0]["systemPrompt"],
-        system_prompt(INSTRUCTIONS)
-    );
-    assert_eq!(
-        loads.params("session/load")[0]["systemPrompt"],
-        system_prompt(INSTRUCTIONS)
-    );
-    assert_eq!(prompt_texts(&resumes), ["Back again"]);
-}
-
-#[test]
-fn a_resumed_session_without_a_system_prompt_does_not_get_the_instructions_again() {
-    let agent = FakeAgent::new().can_resume().knows("old");
-
-    say(
-        &agent
-            .session(
-                PathBuf::from("/project"),
-                Some("old".into()),
-                Choice::default(),
-            )
-            .with_instructions(INSTRUCTIONS),
-        "Back again",
-    );
-
-    assert_eq!(prompt_texts(&agent), ["Back again"]);
-}
-
-#[test]
-fn a_resume_that_starts_a_new_session_gives_it_the_instructions() {
-    let agent = FakeAgent::new().can_resume();
-
-    let heard = say(
-        &agent
-            .session(
-                PathBuf::from("/project"),
-                Some("gone".into()),
-                Choice::default(),
-            )
-            .with_instructions(INSTRUCTIONS),
-        "Back again",
-    );
-
-    assert!(matches!(heard[0], SessionEvent::Failed { .. }));
-    assert_eq!(
-        prompt_texts(&agent),
-        [format!("{INSTRUCTIONS}\n\nBack again")]
-    );
-}
-
-#[test]
-fn blank_instructions_change_nothing() {
-    let agent = FakeAgent::new().accepts_system_prompt();
-
-    say(&session(&agent).with_instructions("  \n"), "Hi");
-
-    assert!(agent.params("session/new")[0].get("systemPrompt").is_none());
-    assert_eq!(prompt_texts(&agent), ["Hi"]);
 }

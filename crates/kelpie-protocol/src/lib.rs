@@ -8,6 +8,9 @@
 //! The `specta` feature derives `specta::Type` on every type, which the app
 //! turns into TypeScript. The engine leaves it off.
 //!
+//! What a harness offers ([`Options`]) is listed by the harness itself, which is
+//! how kelpie names no model outside the default (ADR 0006).
+//!
 //! # Quick start
 //!
 //! ```
@@ -113,6 +116,27 @@ pub enum SessionEvent {
     },
 }
 
+/// One line of a session's log: a message the maintainer sent, or an event the session streamed
+///
+/// Kelpie keeps its own log of every session, so history shows on any harness
+/// without starting one. The log holds what a harness's own transcript does
+/// not: what kelpie sent and what it saw.
+// wire format: the session log holds one of these per line, so changing this
+// is a breaking change
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "entry", rename_all = "snake_case")]
+#[non_exhaustive] // dividers and notes arrive with their own slices
+pub enum LogEntry {
+    /// A message the maintainer sent, which starts a turn
+    User {
+        /// What they wrote
+        text: String,
+    },
+    /// An event the session streamed
+    Event(SessionEvent),
+}
+
 /// How far a tool call got
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +205,33 @@ pub enum CacheLifetime {
     OneHour,
 }
 
+/// What a harness says it offers, listed by the harness itself
+///
+/// A harness names its own models and efforts, so kelpie holds no model list of
+/// its own (ADR 0006). A harness that offers no effort leaves `efforts` empty.
+// wire format: changing this is a breaking change
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct Options {
+    /// The models the harness lists, in the order it lists them
+    pub models: Vec<Choice>,
+    /// The efforts the harness lists, empty when it offers none
+    pub efforts: Vec<Choice>,
+}
+
+/// One model or effort a harness lists
+// wire format: changing this is a breaking change
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct Choice {
+    /// The value kelpie sends back to the harness to pick this one
+    pub id: String,
+    /// The label the harness gives it
+    pub name: String,
+    /// What the harness says about it, `None` when it says nothing
+    pub description: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +281,50 @@ mod tests {
             assert_eq!(serde_json::to_string(&event).unwrap(), json);
             assert_eq!(serde_json::from_str::<SessionEvent>(json).unwrap(), event);
         }
+    }
+
+    #[test]
+    fn a_log_entry_is_one_json_object_tagged_with_its_entry() {
+        let entries = [
+            (
+                LogEntry::User {
+                    text: "Hi".to_owned(),
+                },
+                r#"{"entry":"user","text":"Hi"}"#,
+            ),
+            (
+                LogEntry::Event(SessionEvent::Text {
+                    delta: "Hello".to_owned(),
+                }),
+                r#"{"entry":"event","kind":"text","delta":"Hello"}"#,
+            ),
+        ];
+        for (entry, json) in entries {
+            assert_eq!(serde_json::to_string(&entry).unwrap(), json);
+            assert_eq!(serde_json::from_str::<LogEntry>(json).unwrap(), entry);
+        }
+    }
+
+    #[test]
+    fn a_choice_keeps_the_id_the_harness_picks_it_with() {
+        let options = Options {
+            models: vec![Choice {
+                id: "claude-opus".to_owned(),
+                name: "Opus".to_owned(),
+                description: Some("the deepest reply".to_owned()),
+            }],
+            efforts: Vec::new(),
+        };
+        let json = concat!(
+            r#"{"models":[{"id":"claude-opus","name":"Opus","#,
+            r#""description":"the deepest reply"}],"efforts":[]}"#
+        );
+
+        assert_eq!(serde_json::to_string(&options).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Options>(json).unwrap(), options);
+        assert_eq!(
+            serde_json::from_str::<Options>(r#"{"models":[],"efforts":[]}"#).unwrap(),
+            Options::default()
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 How an agent inside its sandbox calls tools that kelpie itself serves, and the first of them, the sandbox request. It follows `docs/design/ux.md` (Sandbox) and ADR 0005, where the PM changes everything outside its own folder through kelpie's tools. Terms are in `GLOSSARY.md`.
 
-**Status:** draft, for the maintainer to confirm.
+**Status:** confirmed by the maintainer on 2026-11-09.
 
 ## Use case
 

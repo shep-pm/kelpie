@@ -2,7 +2,9 @@
 //!
 //! [`AppState`] is what Tauri manages. It opens the run file in the app's data
 //! folder, sweeping what the previous run left behind before anything starts
-//! (ADR 0001), and reads `projects.json` from the same folder.
+//! (ADR 0001), reads `projects.json` from the same folder, and hands the tree
+//! the reaper beside the app's executable, which the engine starts as the run's
+//! first process so a crash or a `SIGKILL` still stops what the run started.
 //!
 //! `projects.json` is a list from the start, each entry
 //! `{ "id", "path", "pm_session" }`, so the rail can add projects later without
@@ -17,9 +19,13 @@ use std::time::Duration;
 
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
+use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{Session, SessionId};
+use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
+
+use crate::pm::{self, PmPlan};
 
 /// The run file's name in the data folder
 const RUN_FILE: &str = "run.json";
@@ -33,8 +39,42 @@ const PROJECTS_FOLDER: &str = "projects";
 /// The folder inside a project's folder that holds its PM's harness state
 const PM_FOLDER: &str = "pm";
 
+/// The PM's log, by name, in its state folder
+const PM_LOG_FILE: &str = "log.jsonl";
+
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// The reaper's name, as `bundle.externalBin` in `tauri.conf.json` names it
+///
+/// Tauri reads that as `src-tauri/binaries/kelpie-reaper-sidecar-<target triple>`,
+/// which `scripts/build-reaper.sh` writes, and copies it beside the app binary
+/// under this name, the triple dropped. It is not `kelpie-reaper`, the name of
+/// the cargo bin: `tauri-build` deletes whatever holds the name it copies to, so
+/// the sidecar would replace the file cargo built.
+const REAPER: &str = "kelpie-reaper-sidecar";
+
+/// The reaper beside this executable, where Tauri puts a sidecar
+///
+/// `tauri-build` copies each `bundle.externalBin` next to the app binary with the
+/// target triple it requires dropped from the file's name, and every OS bundle
+/// puts a sidecar beside the binary it bundles. So the name `tauri.conf.json`
+/// gives, beside this executable, is where a run finds its reaper.
+///
+/// The bare name when the OS cannot say where this executable is, which
+/// [`AppState::open`] then refuses while naming the path it looked at.
+#[must_use]
+pub fn reaper_path() -> PathBuf {
+    let name = if cfg!(windows) {
+        format!("{REAPER}.exe")
+    } else {
+        REAPER.to_owned()
+    };
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|folder| folder.join(&name)))
+        .unwrap_or_else(|| PathBuf::from(&name))
+}
 
 /// One project kelpie holds a PM for
 // wire format: `projects.json` holds these entries
@@ -155,6 +195,9 @@ pub struct Opening<'a> {
 
     /// Where the person's harness logins are kept
     pub logins: &'a Store,
+
+    /// What the PM runs on, resolved from the settings when this send began
+    pub pm: &'a PmPlan,
 }
 
 /// Builds the PM's session for a project
@@ -168,10 +211,11 @@ pub struct AppState {
     data_dir: PathBuf,
     tree: Arc<ProcessTree>,
     logins: Store,
+    config: ConfigDir,
     projects: Arc<Mutex<Projects>>,
-    /// The first project's PM, `None` until the first send. Held only for a
-    /// look or a swap, never while the opener runs.
-    session: Mutex<Option<Arc<Session>>>,
+    /// The first project's PM and the harness it was opened on, `None` until
+    /// the first send. Held only for a look or a swap, never while the opener runs.
+    session: Mutex<Option<(Harness, Arc<Session>)>>,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -190,32 +234,48 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-    /// Open the state in `data_dir`, with `opener` to build each PM session from
-    /// `logins`, and `picker` to ask for a folder
+    /// Open the state in `data_dir`, with settings and agent files read from
+    /// `config`, `opener` to build each PM session from `logins`, `picker` to
+    /// ask for a folder, and the reaper at `reaper`
     ///
     /// Sweeps what the previous run's file lists before the new tree starts
-    /// anything, then writes a run file of its own. Starts no process and no
-    /// reaper.
+    /// anything, then writes a run file of its own. The engine starts `reaper`
+    /// as the run's first process, so no session can be built before it runs.
+    /// `None` starts no reaper, which leaves a crash or a `SIGKILL` unguarded
+    /// and is what a test asks for.
     ///
     /// # Errors
     ///
-    /// The data folder or a file in it cannot be read or written, or the
-    /// previous run's file is not a run file.
+    /// The data folder or a file in it cannot be read or written, the previous
+    /// run's file is not a run file, or the reaper cannot be started.
     pub fn open(
         data_dir: PathBuf,
+        config: ConfigDir,
         logins: Store,
         opener: Opener,
         picker: Picker,
+        reaper: Option<&Path>,
     ) -> io::Result<Self> {
         fs::create_dir_all(&data_dir)?;
         let run_file = data_dir.join(RUN_FILE);
         sweep_leftovers(&run_file)?;
-        let tree = Arc::new(ProcessTree::new(RunId::new()?, run_file)?);
+        let run = RunId::new()?;
+        let tree = match reaper {
+            Some(path) => ProcessTree::with_reaper(path, run, run_file).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not start the reaper at {}: {error}", path.display()),
+                )
+            })?,
+            None => ProcessTree::new(run, run_file)?,
+        };
+        let tree = Arc::new(tree);
         let projects = Projects::load(data_dir.join(PROJECTS_FILE))?;
         Ok(Self {
             data_dir,
             tree,
             logins,
+            config,
             projects: Arc::new(Mutex::new(projects)),
             session: Mutex::new(None),
             opening: Mutex::new(()),
@@ -228,6 +288,12 @@ impl AppState {
     #[must_use]
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// The folder settings and agent files are read from
+    #[must_use]
+    pub fn config(&self) -> &ConfigDir {
+        &self.config
     }
 
     /// The tree every process of this run starts in
@@ -260,6 +326,16 @@ impl AppState {
             .map(|project| project.path.clone())
     }
 
+    /// The folder of the project `id`, `None` when kelpie holds no such project
+    #[must_use]
+    pub fn project_path_of(&self, id: &str) -> Option<PathBuf> {
+        lock(&self.projects)
+            .list()
+            .iter()
+            .find(|project| project.id == id)
+            .map(|project| project.path.clone())
+    }
+
     /// Make `path` the project, with a state folder of its own, and drop the PM
     /// of the one before
     ///
@@ -280,10 +356,17 @@ impl AppState {
 
     /// The first project's PM session, built on the first call
     ///
+    /// What the PM runs on is resolved from the settings on every call, so a
+    /// model or effort changed since the last message applies to this one, on
+    /// the same session. A changed harness does not move a session that is
+    /// open: that is a session of its own (#31), and until then the new one is
+    /// used when the next one is opened.
+    ///
     /// # Errors
     ///
-    /// No project is picked yet, or the opener could not build the session. The
-    /// text is for the maintainer to read.
+    /// No project is picked yet, the settings or the PM's agent file cannot be
+    /// used, or the opener could not build the session. The text is for the
+    /// maintainer to read.
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle), String> {
         let _opening = lock(&self.opening);
         let project = lock(&self.projects)
@@ -294,23 +377,63 @@ impl AppState {
             id: project.id.clone(),
             projects: Arc::clone(&self.projects),
         };
-        if let Some(session) = self.held_session() {
-            return Ok((session, handle));
+        let plan = pm::plan(&self.config, &project.id)?;
+        if let Some((_, session)) = lock(&self.session).as_ref() {
+            session.choose(plan.choice.clone());
+            return Ok((Arc::clone(session), handle));
         }
-        let state_dir = self
-            .data_dir
-            .join(PROJECTS_FOLDER)
-            .join(&project.id)
-            .join(PM_FOLDER);
-        let session = Arc::new((self.opener)(&Opening {
-            tree: &self.tree,
-            data_dir: &self.data_dir,
-            project: &project,
-            state_dir: &state_dir,
-            logins: &self.logins,
-        })?);
-        *lock(&self.session) = Some(Arc::clone(&session));
+        let state_dir = self.pm_dir(&project.id);
+        let log = Log::open(state_dir.join(PM_LOG_FILE))
+            .map_err(|error| format!("could not open the PM's log: {error}"))?;
+        let session = Arc::new(
+            (self.opener)(&Opening {
+                tree: &self.tree,
+                data_dir: &self.data_dir,
+                project: &project,
+                state_dir: &state_dir,
+                logins: &self.logins,
+                pm: &plan,
+            })?
+            .with_log(log),
+        );
+        *lock(&self.session) = Some((plan.harness, Arc::clone(&session)));
         Ok((session, handle))
+    }
+
+    /// The folder of the PM's harness state and log for the project `id`
+    fn pm_dir(&self, id: &str) -> PathBuf {
+        self.data_dir.join(PROJECTS_FOLDER).join(id).join(PM_FOLDER)
+    }
+
+    /// Where the first project's PM log is, `None` before a project is picked
+    ///
+    /// The path only: it opens nothing, so reading history never builds a
+    /// session or starts a process.
+    #[must_use]
+    pub fn pm_log_path(&self) -> Option<PathBuf> {
+        let id = lock(&self.projects).first()?.id.clone();
+        Some(self.pm_dir(&id).join(PM_LOG_FILE))
+    }
+
+    /// The id of the project `id` names, or of the first when `None`
+    ///
+    /// # Errors
+    ///
+    /// No project is picked yet, or none has this id.
+    pub fn project_id(&self, id: Option<&str>) -> Result<String, String> {
+        let projects = lock(&self.projects);
+        match id {
+            Some(id) => projects
+                .list()
+                .iter()
+                .find(|project| project.id == id)
+                .map(|project| project.id.clone())
+                .ok_or_else(|| format!("kelpie has no project {id}")),
+            None => projects
+                .first()
+                .map(|project| project.id.clone())
+                .ok_or_else(|| "Pick the project's folder first.".to_owned()),
+        }
     }
 
     /// The PM session when one is open, `None` when none is
@@ -319,15 +442,22 @@ impl AppState {
     /// the main thread.
     #[must_use]
     pub fn held_session(&self) -> Option<Arc<Session>> {
-        lock(&self.session).as_ref().map(Arc::clone)
+        lock(&self.session)
+            .as_ref()
+            .map(|(_, session)| Arc::clone(session))
     }
 
-    /// Stop every process of this run
+    /// Stop every process of this run, and stop logging the PM
     ///
     /// # Errors
     ///
     /// The first process that could not be stopped, after the others were tried.
     pub fn stop_all(&self) -> io::Result<()> {
+        // First, so the `Failed` that stopping the harness gives the turn in
+        // flight stays out of the log, and the turn relaunches as interrupted
+        if let Some(session) = self.held_session() {
+            session.close_log();
+        }
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }
 }
@@ -455,9 +585,11 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
         state.set_project(PathBuf::from("/work/old")).unwrap();
@@ -483,9 +615,11 @@ mod tests {
         let dir = Dir::new();
         let state = AppState::open(
             dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
             Store::memory(),
             Box::new(|_| Err("never built".to_owned())),
             Box::new(|| Ok(None)),
+            None,
         )
         .unwrap();
         assert_eq!(state.project_path(), None);
@@ -494,6 +628,115 @@ mod tests {
         assert!(
             dir.0.join("run.json").exists(),
             "the tree wrote its run file"
+        );
+    }
+
+    #[test]
+    fn the_reaper_is_looked_for_beside_the_executable() {
+        assert_eq!(reaper_path().file_name().unwrap(), REAPER);
+        assert_eq!(
+            reaper_path().parent(),
+            std::env::current_exe().unwrap().parent(),
+            "the app looks for its reaper beside its own executable"
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_reaper_to_start_never_opens() {
+        let dir = Dir::new();
+        let missing = dir.0.join("not-a-reaper");
+        let error = AppState::open(
+            dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
+            Store::memory(),
+            Box::new(|_| Err("never built".to_owned())),
+            Box::new(|| Ok(None)),
+            Some(&missing),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("not-a-reaper"), "{error}");
+    }
+
+    /// A stand-in reaper: it blocks on its standard input and exits when it ends
+    ///
+    /// The reaper binary is `kelpie-reaper`'s, and `scripts/build-reaper.sh`
+    /// builds it into the sidecar folder. What these tests hold is the app's
+    /// half: the tree it opens has a reaper running before a session can be built.
+    #[cfg(unix)]
+    fn stand_in_reaper(dir: &Dir) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = dir.0.join("reaper");
+        fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// Whether the process table still lists `pid` as running
+    #[cfg(unix)]
+    fn running(pid: u32) -> bool {
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        system.process(pid).is_some_and(|process| {
+            !matches!(
+                process.status(),
+                ProcessStatus::Zombie | ProcessStatus::Dead
+            )
+        })
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_reaper_starts_before_the_pm() {
+        let dir = Dir::new();
+        let reaper = stand_in_reaper(&dir);
+        let state = AppState::open(
+            dir.0.clone(),
+            ConfigDir::at(dir.0.join("config")),
+            Store::memory(),
+            Box::new(|opening| {
+                let reaper = opening
+                    .tree
+                    .reaper_id()
+                    .expect("the tree should hold a reaper by the time a PM is built");
+                assert!(running(reaper), "the reaper runs while the PM is built");
+                Err("no session here".to_owned())
+            }),
+            Box::new(|| Ok(None)),
+            Some(&reaper),
+        )
+        .unwrap();
+
+        let reaper = state
+            .tree()
+            .reaper_id()
+            .expect("the run has a reaper of its own");
+        assert!(running(reaper), "the reaper runs before any session exists");
+        assert!(state.held_session().is_none(), "no session before a send");
+
+        state.set_project(PathBuf::from("/work/one")).unwrap();
+        // The opener runs on this thread, and asserts from inside the build
+        state.pm_session().map(|_| ()).unwrap_err();
+
+        // Dropping the state closes the reaper's pipe, and the stand-in exits on
+        // the end of it. Waiting for that keeps the folder it lives in until the
+        // shell has read it.
+        drop(state);
+        let deadline = std::time::Instant::now() + STOP_GRACE;
+        while running(reaper) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !running(reaper),
+            "the reaper exits when the tree is dropped"
         );
     }
 }

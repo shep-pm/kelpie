@@ -1,8 +1,9 @@
 //! Kelpie's window: the Tauri 2 app crate that hosts the engine and its IPC
 //!
 //! The crate is thin on purpose (ADR 0002): supervision and sessions live in
-//! `kelpie-engine`, and nothing here spawns a process, registers a shell plugin
-//! or carries a sidecar (ADR 0001).
+//! `kelpie-engine`, and nothing here spawns a process or registers a shell
+//! plugin (ADR 0001). The one process it bundles is the reaper sidecar, which
+//! the engine's tree starts, beside the app's own executable.
 //!
 //! # Quick start
 //!
@@ -15,9 +16,10 @@
 
 #![doc(test(attr(deny(warnings))))]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kelpie_engine::login::Store;
+use kelpie_engine::settings::ConfigDir;
 
 use tauri::{Manager as _, RunEvent, Runtime};
 use tauri_plugin_dialog::DialogExt as _;
@@ -40,9 +42,16 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             pm::project_pick,
             pm::pm_send,
             pm::pm_cancel,
+            pm::pm_history,
+            pm::pm_retry,
             settings::login_set,
             settings::login_status,
             settings::login_clear,
+            settings::harness_options,
+            settings::settings_get,
+            settings::settings_set,
+            settings::settings_reset,
+            settings::settings_schema,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
@@ -69,21 +78,45 @@ pub fn export_bindings(path: impl AsRef<Path>) -> Result<(), specta_typescript::
 /// wires the real `tauri::Wry` runtime.
 ///
 /// On setup the app opens its state in the app data folder, sweeping what the
-/// previous run left running before anything starts (ADR 0001). Logins are kept
-/// in the OS keychain.
+/// previous run left running before anything starts (ADR 0001), and hands the
+/// tree the reaper beside the app's executable, which the engine starts before
+/// any session can. Logins are kept in the OS keychain.
 pub fn builder<R: Runtime>(app: tauri::Builder<R>) -> tauri::Builder<R> {
-    builder_with(app, Store::keychain())
+    builder_with(app, Store::keychain(), Some(state::reaper_path()))
 }
 
-/// [`builder`], keeping logins in `logins` instead of the OS keychain
+/// [`builder`], keeping logins in `logins` instead of the OS keychain and
+/// starting the reaper at `reaper`
 ///
-/// A test passes `Store::memory()`, so it never touches the person's keychain.
-pub fn builder_with<R: Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri::Builder<R> {
+/// A test passes `Store::memory()` and `None`, so it never touches the person's
+/// keychain or needs the sidecar `scripts/build-reaper.sh` builds.
+pub fn builder_with<R: Runtime>(
+    app: tauri::Builder<R>,
+    logins: Store,
+    reaper: Option<PathBuf>,
+) -> tauri::Builder<R> {
+    builder_in(app, logins, None, reaper)
+}
+
+/// [`builder_with`], reading settings and agent files from `config` instead of
+/// `~/.config/kelpie` when it is given
+///
+/// A test passes a folder of its own, so it never reads or writes the person's.
+pub fn builder_in<R: Runtime>(
+    app: tauri::Builder<R>,
+    logins: Store,
+    config: Option<ConfigDir>,
+    reaper: Option<PathBuf>,
+) -> tauri::Builder<R> {
     app.manage(logins.clone())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(commands::<R>().invoke_handler())
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
+            let config = match &config {
+                Some(config) => config.clone(),
+                None => ConfigDir::from_env()?,
+            };
             let handle = app.handle().clone();
             let picker = Box::new(move || {
                 handle
@@ -95,9 +128,11 @@ pub fn builder_with<R: Runtime>(app: tauri::Builder<R>, logins: Store) -> tauri:
             });
             app.manage(AppState::open(
                 data_dir,
+                config,
                 logins,
                 Box::new(pm::open),
                 picker,
+                reaper.as_deref(),
             )?);
             Ok(())
         })
@@ -134,13 +169,14 @@ pub fn run() -> Result<(), tauri::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BINDINGS, builder, export_bindings};
+    use super::{BINDINGS, builder_with, export_bindings};
+    use kelpie_engine::login::Store;
     use tauri::Manager as _;
     use tauri::test::{mock_builder, mock_context, noop_assets};
 
     #[test]
     fn the_app_builds_on_a_mock_runtime() {
-        let app = builder(mock_builder())
+        let app = builder_with(mock_builder(), Store::memory(), None)
             .build(mock_context(noop_assets()))
             .expect("kelpie's app should build on the mock runtime");
         assert!(

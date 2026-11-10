@@ -40,6 +40,26 @@ export const commands = {
 	 */
 	pmCancel: () => __TAURI_INVOKE<void>("pm_cancel"),
 	/**
+	 *  The history kelpie logged for the PM, oldest first, empty before a project or a message
+	 * 
+	 *  Reads kelpie's own log and starts no process: the harness is not asked, and
+	 *  no session is built. A torn last line is dropped.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The log cannot be read, or a line of it before the last is not an entry. The
+	 *  text is for the maintainer to read.
+	 */
+	pmHistory: () => typedError<LogEntry[], string>(__TAURI_INVOKE("pm_history")),
+	/**
+	 *  Send the last message the maintainer sent again, and stream the reply into `on_event`
+	 * 
+	 *  For a turn a quit cut off. The message is read from kelpie's log and goes
+	 *  through the same path as [`pm_send`], so the log gets it again and the
+	 *  session resumes. Nothing in the log to send is a `Failed` on the channel.
+	 */
+	pmRetry: (onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<void>("pm_retry", { onEvent }),
+	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
 	 *  # Errors
@@ -63,6 +83,61 @@ export const commands = {
 	 *  The text of why the keychain refused it.
 	 */
 	loginClear: (harness: string) => typedError<null, string>(__TAURI_INVOKE("login_clear", { harness })),
+	/**
+	 *  What `harness` offers: the models and efforts it lists for itself
+	 * 
+	 *  Kelpie asks a harness once and keeps its answer in the data folder, so
+	 *  opening the settings page starts nothing. `refresh` asks it again. The list
+	 *  is the harness's own, so kelpie names no model outside the default
+	 *  (`docs/design/settings.md`).
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why kelpie could not ask: the harness has no harness in kelpie
+	 *  yet, its bridge could not be installed, it has no login, it could not be
+	 *  started, or it did not answer.
+	 */
+	harnessOptions: (harness: string, refresh: boolean) => typedError<Options, string>(__TAURI_INVOKE("harness_options", { harness, refresh })),
+	/**
+	 *  Read every field of both tabs, each with the layer it came from
+	 * 
+	 *  The Global tab shows what the global layer and the global `pm` agent say. The
+	 *  Project tab shows what the project sees: its own file over those. `project`
+	 *  is a project's id, and `None` is the first project, since Phase 1 has one.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of which settings or agent file cannot be used, and why.
+	 */
+	settingsGet: (project: string | null) => typedError<ResolvedView, string>(__TAURI_INVOKE("settings_get", { project })),
+	/**
+	 *  Write one field of one layer
+	 * 
+	 *  The value is checked against the settings schema before anything is written.
+	 *  `null` and a blank string clear the field, which is what an empty form field
+	 *  means. On the Global tab the PM's harness, model and effort are written to the
+	 *  global `pm` agent's file, and everything else to `settings.json`. The PM's
+	 *  next message uses the result.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the value was refused, or the file could not be written.
+	 */
+	settingsSet: (layer: Target, path: string, value: Value) => typedError<null, string>(__TAURI_INVOKE("settings_set", { layer, path, value })),
+	/**
+	 *  Clear one field of one layer, so its value falls back to the layer below
+	 * 
+	 *  # Errors
+	 * 
+	 *  The text of why the file could not be written.
+	 */
+	settingsReset: (layer: Target, path: string) => typedError<null, string>(__TAURI_INVOKE("settings_reset", { layer, path })),
+	/**
+	 *  The JSON Schema every settings file satisfies, from the Rust types
+	 * 
+	 *  The form is rendered from it, and a field's description is its help text.
+	 */
+	settingsSchema: () => __TAURI_INVOKE<Value>("settings_schema"),
 };
 
 /* Types */
@@ -72,6 +147,74 @@ export type CacheLifetime =
 "five_minutes" | 
 /**  One hour */
 "one_hour";
+
+/**  One model or effort a harness lists */
+export type Choice = {
+	/**  The value kelpie sends back to the harness to pick this one */
+	id: string,
+	/**  The label the harness gives it */
+	name: string,
+	/**  What the harness says about it, `None` when it says nothing */
+	description: string | null,
+};
+
+/**  One field of the form: its value, and the layer the value came from */
+export type FieldView = {
+	/**  The field's key in a settings file, such as `pm-model` */
+	key: string,
+	/**  The value as the file holds it, `null` where no layer sets one */
+	value: Value,
+	/**  Where it came from, as a person reads it: `kelpie`, `global`, `project`, or an agent such as `kelpie:pm` */
+	from: string,
+};
+
+/**
+ *  One line of a session's log: a message the maintainer sent, or an event the session streamed
+ * 
+ *  Kelpie keeps its own log of every session, so history shows on any harness
+ *  without starting one. The log holds what a harness's own transcript does
+ *  not: what kelpie sent and what it saw.
+ */
+export type LogEntry = 
+/**  A message the maintainer sent, which starts a turn */
+{ entry: "user"; 
+/**  What they wrote */
+text: string } | 
+/**  An event the session streamed */
+{
+	entry: "event",
+} & SessionEvent;
+
+/**
+ *  What a harness says it offers, listed by the harness itself
+ * 
+ *  A harness names its own models and efforts, so kelpie holds no model list of
+ *  its own (ADR 0006). A harness that offers no effort leaves `efforts` empty.
+ */
+export type Options = {
+	/**  The models the harness lists, in the order it lists them */
+	models: Choice[],
+	/**  The efforts the harness lists, empty when it offers none */
+	efforts: Choice[],
+};
+
+/**  The project tab: one project's fields over the global and built-in layers */
+export type ProjectView = {
+	/**  The project's id, which a write to its layer names */
+	id: string,
+	/**  The folder the maintainer picked */
+	path: string,
+	/**  Every field, in the order the form shows them */
+	fields: FieldView[],
+};
+
+/**  What the settings page shows: each tab's fields with the layer of each value */
+export type ResolvedView = {
+	/**  The fields the global layer can hold, resolved from it alone */
+	global: FieldView[],
+	/**  The project's fields, `None` before a project is picked */
+	project: ProjectView | null,
+};
 
 /**  One thing a session did, in the order it happened */
 export type SessionEvent = 
@@ -132,6 +275,15 @@ export type StopReason =
 /**  The turn was cancelled */
 "cancelled";
 
+/**  The layer a write goes to */
+export type Target = 
+/**  `settings.json`, and the global `pm` agent for the PM's harness, model and effort */
+{ kind: "global" } | 
+/**  One project's own settings */
+{ kind: "project"; 
+/**  The project's id, from [`ProjectView`] */
+id: string };
+
 /**  How far a tool call got */
 export type ToolStatus = 
 /**  Announced, not started */
@@ -158,6 +310,8 @@ export type Usage = {
 	/**  How long the written cache lasts, only from a harness that reports it */
 	cache_lifetime: CacheLifetime | null,
 };
+
+export type Value = null | boolean | number | string | Value[] | { [key in string]: Value };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

@@ -54,8 +54,9 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `pnpm typecheck`: `tsc -b`.
 - `pnpm lint`: `biome check .`.
 - `pnpm test`: `vitest run`.
-- `pnpm tauri dev`: the Tauri window on the Vite dev server. It runs `pnpm dev` first, then waits on `build.devUrl`.
-- `pnpm tauri build`: the release build, then the bundles. `cargo build --release` is not a release build: it leaves Tauri's `custom-protocol` feature off, so the binary loads `devUrl` instead of its own assets.
+- `pnpm build-reaper`: `scripts/build-reaper.sh`, which builds `kelpie-reaper` into `src-tauri/binaries/kelpie-reaper-sidecar-<target triple>`, the sidecar `bundle.externalBin` names. The sidecar's name differs from the cargo bin's, because `tauri-build` overwrites the file named like the sidecar in `target/<profile>/`. `src-tauri/build.rs` copies that file next to the app binary and stops when it is missing, so on a fresh clone run it before any cargo command that compiles `src-tauri`.
+- `pnpm tauri dev`: the Tauri window on the Vite dev server. It runs `pnpm build-reaper && pnpm dev` first, then waits on `build.devUrl`.
+- `pnpm tauri build`: the release build, then the bundles, with the reaper sidecar bundled beside the app binary. `cargo build --release` is not a release build: it leaves Tauri's `custom-protocol` feature off, so the binary loads `devUrl` instead of its own assets.
 - `pnpm tauri icon docs/design/system/assets/logos/kelpie-app-icon.svg`: regenerates `src-tauri/icons/` from the app icon.
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
@@ -72,6 +73,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `docs/adr/`: decisions. Read the ones touching your area first.
 - `docs/lessons/`: incidents from SK and its tools, and what kelpie does about each. Read the ones touching your area before designing it.
 - `.claude/skills/`: read `tauri` before touching `src-tauri/`, `tauri.conf.json`, capabilities or any `invoke` call, since Tauri 2 differs from Tauri 1 in ways models get wrong. Read `lift-from-sk` before bringing in any SK code, and `zustand-subscription-patterns` before wiring a component to a store.
+- `docs/lift-plan.md`: what kelpie lifts from SK, module by module. Read its row before writing or building an issue in an area SK covered: lifting is the default.
 - `docs/lifted.md`: every chunk lifted from SK, with what it handles and what was dropped.
 - `src-tauri/`: the `kelpie-app` crate, `tauri.conf.json`, `capabilities/` and `icons/`. `src-tauri/gen/` is the ACL schema `build.rs` writes, and is ignored.
 

@@ -2393,6 +2393,7 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2421,6 +2422,7 @@ dependencies = [
  "shep-tree",
  "sysinfo",
  "tar",
+ "toml 1.2.1+spec-1.1.0",
  "ureq",
  "zip",
 ]
@@ -4104,6 +4106,7 @@ checksum = "ed155e448f42fc4be7a5cbc12bd43f6c549981f7c32fcba429ff6bc57cc4f30c"
 dependencies = [
  "paste",
  "rustc_version",
+ "serde_json",
  "specta-macros",
 ]
 

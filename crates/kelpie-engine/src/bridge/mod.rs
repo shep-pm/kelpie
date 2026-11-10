@@ -180,7 +180,7 @@ impl Pin<'_> {
 }
 
 /// Whether a text names one folder or file, and not a path through them
-fn is_name(text: &str) -> bool {
+pub(crate) fn is_name(text: &str) -> bool {
     !text.is_empty() && text != "." && text != ".." && !text.contains('/') && !text.contains('\\')
 }
 

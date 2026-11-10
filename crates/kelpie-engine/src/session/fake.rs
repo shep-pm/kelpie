@@ -45,15 +45,15 @@ use std::thread;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    ReadTextFileRequest, RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse,
-    SessionCapabilities, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOption, SessionNotification, SessionResumeCapabilities,
-    SessionSystemPromptCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, Usage,
+    AgentCapabilities, CancelNotification, CloseSessionRequest, CloseSessionResponse, ContentBlock,
+    ContentChunk, InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
+    NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
+    PromptResponse, ReadTextFileRequest, RequestPermissionRequest, ResumeSessionRequest,
+    ResumeSessionResponse, SessionCapabilities, SessionCloseCapabilities, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelectOption, SessionNotification,
+    SessionResumeCapabilities, SessionSystemPromptCapabilities, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
+    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, Usage,
 };
 use agent_client_protocol::{Agent, Channel, Client, DynConnectTo, Error, UntypedMessage};
 use futures::channel::oneshot;
@@ -285,7 +285,9 @@ impl Offer {
 struct Script {
     can_resume: bool,
     can_load: bool,
+    can_close: bool,
     can_take_system_prompt: bool,
+    silent_on_new: bool,
     known: Vec<String>,
     history: Vec<String>,
     offers: Vec<Offer>,
@@ -298,6 +300,7 @@ struct Shared {
     turns: Mutex<VecDeque<Turn>>,
     launches: AtomicUsize,
     sessions: AtomicUsize,
+    stopped: AtomicUsize,
     /// The children a turn started in groups of their own, oldest first
     #[cfg(unix)]
     spawned: Mutex<Vec<Child>>,
@@ -334,10 +337,24 @@ impl FakeAgent {
         self
     }
 
+    /// Advertise `sessionCapabilities.close`
+    #[must_use]
+    pub fn can_close(mut self) -> Self {
+        self.script.can_close = true;
+        self
+    }
+
     /// Advertise `sessionCapabilities.systemPrompt`
     #[must_use]
     pub fn accepts_system_prompt(mut self) -> Self {
         self.script.can_take_system_prompt = true;
+        self
+    }
+
+    /// Take `session/new` and never answer it
+    #[must_use]
+    pub fn never_answers_session_new(mut self) -> Self {
+        self.script.silent_on_new = true;
         self
     }
 
@@ -448,6 +465,12 @@ impl FakeAgent {
         self.shared.launches.load(Ordering::SeqCst)
     }
 
+    /// How many times kelpie stopped one of the agent's connections
+    #[must_use]
+    pub fn stopped(&self) -> usize {
+        self.shared.stopped.load(Ordering::SeqCst)
+    }
+
     /// The pid of every child a turn started with [`Turn::command_in_a_group`],
     /// oldest first
     #[cfg(unix)]
@@ -525,6 +548,8 @@ impl Launch for FakeAgent {
             leave: Mutex::new(Some(leave)),
         });
         let agent = self.clone();
+        let shared = Arc::clone(&self.shared);
+        let gone = Arc::clone(&connection);
         thread::Builder::new()
             .name("kelpie-fake-agent".to_owned())
             .spawn(move || {
@@ -535,6 +560,13 @@ impl Launch for FakeAgent {
         Ok(Link {
             transport: DynConnectTo::new(client_side),
             explain: Box::new(|| Some(EXPLANATION.to_owned())),
+            stop: Box::new(move |_| {
+                if let Some(leave) = lock(&gone.leave).take() {
+                    let _ = leave.send(());
+                }
+                shared.stopped.fetch_add(1, Ordering::SeqCst);
+                Some(EXPLANATION.to_owned())
+            }),
         })
     }
 }
@@ -550,7 +582,8 @@ struct Connection {
 impl FakeAgent {
     async fn serve(self, channel: Channel, connection: Arc<Connection>) -> Result<(), Error> {
         let (init, new, load, resume) = (self.clone(), self.clone(), self.clone(), self.clone());
-        let (config, prompt, cancel) = (self.clone(), self.clone(), self.clone());
+        let (config, prompt, cancel, close) =
+            (self.clone(), self.clone(), self.clone(), self.clone());
         let (on_cancel, on_prompt) = (Arc::clone(&connection), connection);
         Agent
             .v1()
@@ -565,6 +598,9 @@ impl FakeAgent {
                     if init.script.can_take_system_prompt {
                         offered = offered.system_prompt(SessionSystemPromptCapabilities::new());
                     }
+                    if init.script.can_close {
+                        offered = offered.close(SessionCloseCapabilities::new());
+                    }
                     let capabilities = AgentCapabilities::new()
                         .load_session(init.script.can_load)
                         .session_capabilities(offered);
@@ -576,8 +612,15 @@ impl FakeAgent {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |request: NewSessionRequest, responder, _cx| {
+                async move |request: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
                     new.record("session/new", &request);
+                    if new.script.silent_on_new {
+                        // Held, not dropped, so the client waits for an answer that never comes
+                        return cx.spawn(async move {
+                            let _held = responder;
+                            futures::future::pending::<Result<(), Error>>().await
+                        });
+                    }
                     let number = new.shared.sessions.fetch_add(1, Ordering::SeqCst) + 1;
                     responder.respond(
                         NewSessionResponse::new(format!("fake-{number}"))
@@ -613,6 +656,13 @@ impl FakeAgent {
                         }
                         Err(error) => responder.respond_with_error(error),
                     }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |request: CloseSessionRequest, responder, _cx| {
+                    close.record("session/close", &request);
+                    responder.respond(CloseSessionResponse::new())
                 },
                 agent_client_protocol::on_receive_request!(),
             )

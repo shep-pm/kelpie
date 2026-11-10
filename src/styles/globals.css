@@ -5,6 +5,12 @@
 @import "@fontsource-variable/atkinson-hyperlegible-next";
 @import "@fontsource-variable/atkinson-hyperlegible-mono";
 
+/* Streamdown renders the PM's Markdown with utility classes Tailwind must see. */
+@source "../../node_modules/streamdown/dist/*.js";
+
+/* The settings form is drawn by rjsf's shadcn theme, which carries its own classes. */
+@source "../../node_modules/@rjsf/shadcn/lib/**/*.js";
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {

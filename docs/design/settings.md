@@ -21,7 +21,7 @@ Kelpie ships defaults, never requirements (ADR 0006): every field works empty.
 | Folder | Holds | Synced |
 |---|---|---|
 | Config, `~/.config/kelpie` on every OS (ADR 0008) | `settings.json`, `agents/`, kelpie-global instructions, skills and MCP servers | Can be, by symlinking the folder |
-| Data, Tauri's app data folder | Session logs, bridges, each session's harness state (`projects/<id>/pm/`), `projects.json` | Never |
+| Data, Tauri's app data folder | Session logs, bridges, each session's harness state (`projects/<id>/pm/`), the harness state of a brief ask (`asks/<id>/`), what each harness was last asked (`options/<id>.json`), `projects.json` | Never |
 | OS keychain | Logins and other secrets | Never |
 
 Settings are JSON with a `$schema`, so an editor checks them too. A project's settings sit in the config folder under `projects/<id>/settings.json`, not in the repo, since allowlists and models are personal and a repo can be public.
@@ -39,6 +39,8 @@ The PM's harness, model and effort are kept once: their global value is the glob
 The settings types live in Rust, and `schemars` writes their JSON Schema. The form, the validation, the `$schema` file and the docs all come from it. A field's description in Rust is its help text in the form.
 
 The form is rendered by `@rjsf/shadcn`. The layered field is its first test: if showing the layer and its reset fights rjsf's templates, that one widget is kelpie's own, not the whole form.
+
+The layered field fit rjsf's `FieldTemplate`, so it is one template and no widget of kelpie's own (`src/settings/LayeredField.tsx`). rjsf's own selects and switch are replaced by kelpie's shadcn ones, and the schema is made drawable first (`src/settings/schema.ts`): nullable types collapse, `$ref`s resolve, and each `const` is titled. A choice and a switch are written as they change, a text field and a list when it is left.
 
 ### Phase 1's fields
 

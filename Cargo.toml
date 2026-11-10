@@ -58,6 +58,9 @@ sysinfo = { version = "0.38.4", default-features = false, features = ["system"] 
 # helper on Linux and Windows, so the app calls `run_from_args` first. `cli` is
 # the `crabpot` command, which kelpie does not install.
 crabpot = { version = "0.10.8", default-features = false }
+
+# Reads `docs/parity.toml` in the engine's tests (the harness parity matrix)
+toml = { version = "1.2", default-features = false, features = ["std", "parse", "serde"] }
 # Linux: the child-subreaper flag
 rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
@@ -94,7 +97,7 @@ tauri-build = { version = "2.7.4", default-features = false, features = ["config
 # tauri-specta is still a release candidate, so it and the `specta` it requires
 # are pinned exact; `specta-typescript` is the version rc.26 names.
 tauri-specta = { version = "=2.0.0-rc.26", default-features = false, features = ["typescript"] }
-specta = { version = "=2.0.0-rc.26", default-features = false, features = ["std", "derive"] }
+specta = { version = "=2.0.0-rc.26", default-features = false, features = ["std", "derive", "serde_json"] }
 specta-typescript = { version = "0.0.13", default-features = false }
 # The folder picker (`project_pick`). Its default `gtk3` is the Linux backend.
 tauri-plugin-dialog = "2.8.4"

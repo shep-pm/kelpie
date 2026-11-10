@@ -49,3 +49,7 @@ rustix.workspace = true
 name = "sandbox"
 path = "tests/sandbox.rs"
 harness = false
+
+[dev-dependencies]
+# The parity check reads `docs/parity.toml`
+toml.workspace = true
