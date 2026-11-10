@@ -5,6 +5,9 @@
 //! process: the engine's session does, through the process tree (ADR 0001), and
 //! the app only forwards what it says.
 //!
+//! [`pm_history`] reads kelpie's own log of the PM and starts nothing, and
+//! [`pm_retry`] sends the last message again after a quit cut a turn off.
+//!
 //! The PM runs on [`PM_DEFAULT`] until the settings page holds the choice
 //! (ADR 0006). Its bridge is installed on the first send, and whatever goes
 //! wrong before the session can start reaches the chat as a
@@ -16,7 +19,8 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Agents, PM};
 use kelpie_engine::bridge;
 use kelpie_engine::harness::claude;
-use kelpie_engine::session::{Choice, Session, SessionEvent};
+use kelpie_engine::session::log;
+use kelpie_engine::session::{Choice, LogEntry, Session, SessionEvent};
 use kelpie_engine::settings::Harness;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -128,6 +132,42 @@ pub fn project_pick(state: State<'_, AppState>) -> Result<Option<String>, String
 #[tauri::command(async)]
 #[specta::specta]
 pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<SessionEvent>) {
+    send(&state, text, on_event);
+}
+
+/// Send the last message the maintainer sent again, and stream the reply into `on_event`
+///
+/// For a turn a quit cut off. The message is read from kelpie's log and goes
+/// through the same path as [`pm_send`], so the log gets it again and the
+/// session resumes. Nothing in the log to send is a `Failed` on the channel.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) {
+    let last = state
+        .pm_log_path()
+        .map_or(Ok(Vec::new()), log::read)
+        .map(|entries| {
+            entries.into_iter().rev().find_map(|entry| match entry {
+                LogEntry::User { text } => Some(text),
+                _ => None,
+            })
+        });
+    match last {
+        Ok(Some(text)) => send(&state, text, on_event),
+        Ok(None) => {
+            let _ = on_event.send(SessionEvent::Failed {
+                message: "There is no message to send again.".to_owned(),
+            });
+        }
+        Err(error) => {
+            let _ = on_event.send(SessionEvent::Failed {
+                message: format!("could not read the PM's log: {error}"),
+            });
+        }
+    }
+}
+
+fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) {
     let (session, project) = match state.pm_session() {
         Ok(held) => held,
         Err(message) => {
@@ -146,6 +186,24 @@ pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<Sessi
         }
         let _ = on_event.send(event);
     });
+}
+
+/// The history kelpie logged for the PM, oldest first, empty before a project or a message
+///
+/// Reads kelpie's own log and starts no process: the harness is not asked, and
+/// no session is built. A torn last line is dropped.
+///
+/// # Errors
+///
+/// The log cannot be read, or a line of it before the last is not an entry. The
+/// text is for the maintainer to read.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn pm_history(state: State<'_, AppState>) -> Result<Vec<LogEntry>, String> {
+    let Some(path) = state.pm_log_path() else {
+        return Ok(Vec::new());
+    };
+    log::read(&path).map_err(|error| format!("could not read the PM's history: {error}"))
 }
 
 /// Stop the turn in flight
@@ -175,7 +233,7 @@ mod tests {
     use kelpie_engine::run::RunId;
     use kelpie_engine::session::SessionId;
     use kelpie_engine::session::fake::{FakeAgent, Turn};
-    use kelpie_protocol::{StopReason, ToolStatus};
+    use kelpie_protocol::{LogEntry, StopReason, ToolStatus};
     use tauri::ipc::InvokeResponseBody;
     use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
     use tauri::{App, Manager as _};
@@ -256,6 +314,13 @@ mod tests {
     }
 
     fn send_to(state: State<'_, AppState>, text: &str) -> Events {
+        let (events, channel) = listener();
+        pm_send(state, text.to_owned(), channel);
+        events
+    }
+
+    /// A channel, and the events it carries
+    fn listener() -> (Events, Channel<SessionEvent>) {
         let (events, heard) = channel();
         let channel = Channel::new(move |body| {
             let InvokeResponseBody::Json(json) = body else {
@@ -264,8 +329,7 @@ mod tests {
             let _ = events.send(serde_json::from_str::<SessionEvent>(&json).unwrap());
             Ok(())
         });
-        pm_send(state, text.to_owned(), channel);
-        Events(heard)
+        (Events(heard), channel)
     }
 
     /// The events a channel carried, in order
@@ -509,5 +573,100 @@ mod tests {
 
         assert_eq!(project_pick(chat.state()), Ok(None));
         assert_eq!(project_get(chat.state()), None);
+    }
+
+    fn user(text: &str) -> LogEntry {
+        LogEntry::User {
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn pm_history_shows_what_a_send_logged() {
+        let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+        let chat = Chat::on(&agent);
+        let events = chat.send("Hi").until_turn_ends();
+
+        let history = pm_history(chat.state()).unwrap();
+
+        let mut expected = vec![user("Hi")];
+        expected.extend(events.into_iter().map(LogEntry::Event));
+        assert_eq!(history, expected);
+    }
+
+    #[test]
+    fn pm_history_before_a_project_or_a_message_is_empty() {
+        let chat = Chat::with(Chat::opener(&FakeAgent::new()), Box::new(|| Ok(None)), None);
+        assert_eq!(pm_history(chat.state()).unwrap(), []);
+
+        chat.state().set_project(chat.dir.clone()).unwrap();
+        assert_eq!(pm_history(chat.state()).unwrap(), []);
+    }
+
+    #[test]
+    fn pm_history_starts_no_process_and_opens_no_session() {
+        let opened = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&opened);
+        let chat = Chat::with(
+            Box::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Err("not wanted".to_owned())
+            }),
+            Box::new(|| Ok(None)),
+            Some("s-saved"),
+        );
+        let log = chat.dir.join("projects/p1/pm/log.jsonl");
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, "{\"entry\":\"user\",\"text\":\"Before the quit\"}\n").unwrap();
+
+        let history = pm_history(chat.state()).unwrap();
+
+        assert_eq!(history, [user("Before the quit")]);
+        assert_eq!(opened.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn pm_retry_sends_the_last_user_message_again() {
+        let agent = FakeAgent::new()
+            .can_resume()
+            .knows("s-saved")
+            .turn(Turn::new().text("Again"));
+        let chat = Chat::resumed(&agent, "s-saved");
+        // The last launch quit mid-turn: its log has the message and no end
+        let log = chat.dir.join("projects/p1/pm/log.jsonl");
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(
+            &log,
+            concat!(
+                "{\"entry\":\"user\",\"text\":\"First\"}\n",
+                "{\"entry\":\"event\",\"kind\":\"turn_ended\",\"stop_reason\":\"end_turn\",\"usage\":null}\n",
+                "{\"entry\":\"user\",\"text\":\"Cut off\"}\n",
+                "{\"entry\":\"event\",\"kind\":\"text\",\"delta\":\"Par\"}\n",
+            ),
+        )
+        .unwrap();
+        let (events, channel) = listener();
+
+        pm_retry(chat.state(), channel);
+        events.until_turn_ends();
+
+        let prompts = agent.params("session/prompt");
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].to_string().contains("Cut off"), "{prompts:?}");
+        let history = pm_history(chat.state()).unwrap();
+        assert_eq!(history.iter().filter(|e| **e == user("Cut off")).count(), 2);
+    }
+
+    #[test]
+    fn pm_retry_with_nothing_sent_says_so_as_failed() {
+        let chat = Chat::on(&FakeAgent::new());
+        let (events, channel) = listener();
+
+        pm_retry(chat.state(), channel);
+
+        let SessionEvent::Failed { message } = events.next() else {
+            panic!("the chat should hear a Failed");
+        };
+        assert!(message.contains("no message"), "{message}");
     }
 }

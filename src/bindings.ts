@@ -40,6 +40,26 @@ export const commands = {
 	 */
 	pmCancel: () => __TAURI_INVOKE<void>("pm_cancel"),
 	/**
+	 *  The history kelpie logged for the PM, oldest first, empty before a project or a message
+	 * 
+	 *  Reads kelpie's own log and starts no process: the harness is not asked, and
+	 *  no session is built. A torn last line is dropped.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The log cannot be read, or a line of it before the last is not an entry. The
+	 *  text is for the maintainer to read.
+	 */
+	pmHistory: () => typedError<LogEntry[], string>(__TAURI_INVOKE("pm_history")),
+	/**
+	 *  Send the last message the maintainer sent again, and stream the reply into `on_event`
+	 * 
+	 *  For a turn a quit cut off. The message is read from kelpie's log and goes
+	 *  through the same path as [`pm_send`], so the log gets it again and the
+	 *  session resumes. Nothing in the log to send is a `Failed` on the channel.
+	 */
+	pmRetry: (onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<void>("pm_retry", { onEvent }),
+	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
 	 *  # Errors
@@ -97,6 +117,23 @@ export type Choice = {
 	/**  What the harness says about it, `None` when it says nothing */
 	description: string | null,
 };
+
+/**
+ *  One line of a session's log: a message the maintainer sent, or an event the session streamed
+ * 
+ *  Kelpie keeps its own log of every session, so history shows on any harness
+ *  without starting one. The log holds what a harness's own transcript does
+ *  not: what kelpie sent and what it saw.
+ */
+export type LogEntry = 
+/**  A message the maintainer sent, which starts a turn */
+{ entry: "user"; 
+/**  What they wrote */
+text: string } | 
+/**  An event the session streamed */
+{
+	entry: "event",
+} & SessionEvent;
 
 /**
  *  What a harness says it offers, listed by the harness itself

@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
+use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{Session, SessionId};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,9 @@ const PROJECTS_FOLDER: &str = "projects";
 
 /// The folder inside a project's folder that holds its PM's harness state
 const PM_FOLDER: &str = "pm";
+
+/// The PM's log, by name, in its state folder
+const PM_LOG_FILE: &str = "log.jsonl";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -297,20 +301,36 @@ impl AppState {
         if let Some(session) = self.held_session() {
             return Ok((session, handle));
         }
-        let state_dir = self
-            .data_dir
-            .join(PROJECTS_FOLDER)
-            .join(&project.id)
-            .join(PM_FOLDER);
-        let session = Arc::new((self.opener)(&Opening {
-            tree: &self.tree,
-            data_dir: &self.data_dir,
-            project: &project,
-            state_dir: &state_dir,
-            logins: &self.logins,
-        })?);
+        let state_dir = self.pm_dir(&project.id);
+        let log = Log::open(state_dir.join(PM_LOG_FILE))
+            .map_err(|error| format!("could not open the PM's log: {error}"))?;
+        let session = Arc::new(
+            (self.opener)(&Opening {
+                tree: &self.tree,
+                data_dir: &self.data_dir,
+                project: &project,
+                state_dir: &state_dir,
+                logins: &self.logins,
+            })?
+            .with_log(log),
+        );
         *lock(&self.session) = Some(Arc::clone(&session));
         Ok((session, handle))
+    }
+
+    /// The folder of the PM's harness state and log for the project `id`
+    fn pm_dir(&self, id: &str) -> PathBuf {
+        self.data_dir.join(PROJECTS_FOLDER).join(id).join(PM_FOLDER)
+    }
+
+    /// Where the first project's PM log is, `None` before a project is picked
+    ///
+    /// The path only: it opens nothing, so reading history never builds a
+    /// session or starts a process.
+    #[must_use]
+    pub fn pm_log_path(&self) -> Option<PathBuf> {
+        let id = lock(&self.projects).first()?.id.clone();
+        Some(self.pm_dir(&id).join(PM_LOG_FILE))
     }
 
     /// The PM session when one is open, `None` when none is

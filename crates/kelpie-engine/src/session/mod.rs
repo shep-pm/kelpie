@@ -12,6 +12,8 @@
 //! - When the harness exits, the turn in flight ends with a
 //!   [`SessionEvent::Failed`]. The next send starts it again and resumes the
 //!   session.
+//! - With a [`log::Log`], every message and event is also kept in kelpie's own
+//!   log, which [`log::read`] gives back with no harness running.
 //! - Notes mid-turn and fork are not here yet.
 //! - [`options`] asks a harness what it offers, on a start that sends no prompt
 //!   and stops the harness again.
@@ -45,13 +47,14 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::{Client, DynConnectTo};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 
-pub use kelpie_protocol::{SessionEvent, SessionId};
+pub use kelpie_protocol::{LogEntry, SessionEvent, SessionId};
 
 use crate::tree::{Child, ProcessTree};
 
 mod acp;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
+pub mod log;
 pub mod options;
 mod raw;
 mod stderr;
@@ -286,6 +289,7 @@ pub struct Session {
     meta: Option<serde_json::Value>,
     extensions: Vec<Extension>,
     instructions: Option<String>,
+    log: Option<log::Log>,
     id: Arc<Mutex<Option<SessionId>>>,
     /// The running worker's inbox, `None` before the first send
     worker: Mutex<Option<UnboundedSender<Command>>>,
@@ -345,6 +349,7 @@ impl Session {
             meta,
             extensions,
             instructions: None,
+            log: None,
             id: Arc::new(Mutex::new(resume)),
             worker: Mutex::new(None),
         }
@@ -364,6 +369,18 @@ impl Session {
         self
     }
 
+    /// Keep every message sent and every event streamed in `log`
+    ///
+    /// The log is what shows the history again on a later launch, on any
+    /// harness and with no process started (`docs/design/pm-chat.md`, History).
+    /// A write that fails does not stop a turn: the turn says so with a
+    /// `Failed`. Call this before the first send.
+    #[must_use]
+    pub fn with_log(mut self, log: log::Log) -> Self {
+        self.log = Some(log);
+        self
+    }
+
     /// The session's id: the one to resume, then the one the harness gave
     #[must_use]
     pub fn session_id(&self) -> Option<SessionId> {
@@ -379,10 +396,12 @@ impl Session {
     /// taken. Those come before the turn's own `TurnEnded`. `sink` runs on the
     /// session's own thread and must not block for long.
     pub fn send(&self, text: impl Into<String>, sink: impl FnMut(SessionEvent) + Send + 'static) {
-        let mut command = Command::Send {
-            text: text.into(),
-            sink: Box::new(sink),
+        let text = text.into();
+        let sink: Sink = match &self.log {
+            Some(log) => log::logged(log, &text, sink),
+            None => Box::new(sink),
         };
+        let mut command = Command::Send { text, sink };
         let mut worker = lock(&self.worker);
         if let Some(inbox) = worker.as_ref() {
             match inbox.unbounded_send(command) {

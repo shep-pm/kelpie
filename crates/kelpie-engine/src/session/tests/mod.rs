@@ -950,3 +950,105 @@ fn a_harness_gone_before_the_first_write_is_explained() {
 }
 
 mod instructions;
+
+/// A log file's path in a folder of this test's own
+fn log_path() -> PathBuf {
+    let dir = data_folder();
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("log.jsonl")
+}
+
+#[test]
+fn the_log_round_trips_user_messages_and_events() {
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Hel").text("lo"))
+        .turn(Turn::new().text("Again"));
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
+
+    let first = say(&session, "Hi");
+    let second = say(&session, "More");
+
+    let mut expected = vec![LogEntry::User {
+        text: "Hi".to_owned(),
+    }];
+    expected.extend(first.into_iter().map(LogEntry::Event));
+    expected.push(LogEntry::User {
+        text: "More".to_owned(),
+    });
+    expected.extend(second.into_iter().map(LogEntry::Event));
+    assert_eq!(log::read(&path).unwrap(), expected);
+}
+
+#[test]
+fn a_missing_log_is_an_empty_history() {
+    let path = log_path();
+
+    assert_eq!(log::read(&path).unwrap(), []);
+}
+
+#[test]
+fn a_torn_last_line_is_dropped() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    let whole = serde_json::to_string(&hi).unwrap();
+    // A crash cut the second line short, in the middle of a character
+    let mut bytes = format!("{whole}\n{{\"entry\":\"user\",\"text\":\"h").into_bytes();
+    bytes.push(0xE2);
+    std::fs::write(&path, bytes).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi]);
+}
+
+#[test]
+fn a_log_reopened_after_a_torn_write_carries_on_from_the_last_whole_line() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    std::fs::write(
+        &path,
+        format!("{}\n{{\"entry\":\"us", serde_json::to_string(&hi).unwrap()),
+    )
+    .unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi, more]);
+}
+
+#[test]
+fn a_line_that_is_not_the_last_and_not_an_entry_is_named() {
+    let path = log_path();
+    std::fs::write(&path, "nonsense\n{\"entry\":\"user\",\"text\":\"Hi\"}\n").unwrap();
+
+    let error = log::read(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("line 1"), "{error}");
+}
+
+#[test]
+fn reading_history_starts_no_process() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+    let path = log_path();
+    let first = session(&agent).with_log(log::Log::open(&path).unwrap());
+    say(&first, "Hi");
+    drop(first);
+    let launched = agent.launches();
+
+    // A later launch: a session over the same log, and the history read before any send
+    let relaunched = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let history = log::read(&path).unwrap();
+
+    assert!(history.contains(&LogEntry::User {
+        text: "Hi".to_owned()
+    }));
+    assert_eq!(agent.launches(), launched);
+    drop(relaunched);
+}
