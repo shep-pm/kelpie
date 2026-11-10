@@ -306,6 +306,136 @@ fn the_pin_holds_one_runnable_archive_per_platform() {
 
 use crate::bridge::Platform;
 
+/// A bridge that says the harness behind it is too old ends the session with
+/// [`HarnessError::TooOld`], which carries the harness's own update command
+///
+/// Kelpie never runs that command (`docs/design/bridge-updates.md`, Scope): the
+/// message is what the maintainer reads and runs themselves.
+#[test]
+fn a_harness_too_old_names_its_update_command() {
+    use crate::session::fake::{FakeAgent, HARNESS};
+
+    let agent = FakeAgent::new()
+        .fails_new("Claude Code 1.0.0 is too old: this bridge needs 2.0.0 or later")
+        .says_outdated(&["too old"], "claude update");
+    let session = agent.session(PathBuf::from("/project"), None, Choice::default());
+
+    let (sender, heard) = mpsc::channel();
+    session.send("Hello", move |event| {
+        let _ = sender.send(event);
+    });
+    let event = heard.recv_timeout(TURN).expect("no event from the session");
+    let SessionEvent::Failed { message } = event else {
+        panic!("a bridge that refused its harness did not end the send with Failed: {event:?}");
+    };
+    assert!(
+        message.contains(&format!("{HARNESS} is too old")),
+        "{message}"
+    );
+    assert!(message.contains("claude update"), "{message}");
+    assert!(
+        message.contains("too old: this bridge needs 2.0.0"),
+        "the bridge's own words are gone: {message}"
+    );
+}
+
+/// Runs a real Claude Code session across two bridge versions by hand.
+///
+/// Needs the person's own `claude` on `PATH`, `CLAUDE_CODE_OAUTH_TOKEN` in the
+/// environment, and two bridge downloads: kelpie's pin, then the registry's
+/// latest. It sends one message on Haiku on the pinned bridge, then resumes the
+/// same session id on the newer one, and checks the reply shows the session
+/// remembered what was said. Run it with:
+/// `cargo test -p kelpie-engine --lib a_real_claude_resumes_across_bridge_versions -- --ignored`
+#[ignore = "needs a Claude Code login, a model, and two bridge downloads"]
+#[test]
+fn a_real_claude_resumes_across_bridge_versions() {
+    use crate::bridge::{self, CheckOutcome};
+    use crate::settings::BridgeUpdates;
+    use crate::tree::ProcessTree;
+
+    let data = temp("harness-bridge-swap");
+    let project = data.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let logins = Store::memory();
+    logins
+        .set(
+            LOGIN,
+            &env::var(LOGIN_ENV).expect("CLAUDE_CODE_OAUTH_TOKEN is not set"),
+        )
+        .unwrap();
+    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), data.join("run.json")).unwrap());
+    let choice = Choice {
+        model: Some("haiku".to_owned()),
+        effort: None,
+    };
+
+    let pinned = bridge::ensure(&data, pin()).unwrap();
+    let first = Session::new(
+        Arc::clone(&tree),
+        claude::harness(pinned, &data.join("pm"), &logins).unwrap(),
+        project.clone(),
+        None,
+        choice.clone(),
+    );
+    let answer = ask(
+        &first,
+        "Remember the word kelpie. Reply with that one word.",
+    );
+    let id = first.session_id().expect("no session id from Claude Code");
+    drop(first);
+
+    // The registry's latest, installed and probed the way a bridge check does
+    let latest = match bridge::check(
+        &data,
+        &tree,
+        pin(),
+        BridgeUpdates::RegistryAutomatic,
+        claude::REQUIRES,
+    ) {
+        CheckOutcome::Ready { version } => version,
+        CheckOutcome::Current => {
+            panic!(
+                "the registry holds nothing newer than kelpie's pin, so there is no swap to make"
+            )
+        }
+        outcome => panic!("could not install the registry's latest: {outcome:?}"),
+    };
+    let newer = data
+        .join("bridges")
+        .join(pin().id)
+        .join(latest.to_string())
+        .join(claude::CMD);
+    assert!(newer.is_file(), "{newer:?} was not installed");
+
+    let second = Session::new(
+        Arc::clone(&tree),
+        claude::harness(newer, &data.join("pm"), &logins).unwrap(),
+        project,
+        Some(id),
+        choice,
+    );
+    let recall = ask(
+        &second,
+        "Which word did I ask you to remember? Reply with that one word.",
+    );
+    drop(second);
+
+    tree.stop_all(Duration::from_secs(10)).unwrap();
+    assert!(
+        said(&answer).to_lowercase().contains("kelpie"),
+        "the first answer: {:?}",
+        said(&answer)
+    );
+    assert!(
+        said(&recall).to_lowercase().contains("kelpie"),
+        "the session did not survive the swap to {}: {:?}",
+        latest,
+        said(&recall)
+    );
+    fs::remove_dir_all(data).unwrap();
+}
+
 /// Runs a real Claude Code session by hand.
 ///
 /// Needs the person's own `claude` on `PATH`, `CLAUDE_CODE_OAUTH_TOKEN` in the

@@ -295,18 +295,13 @@ impl Versions {
             let Ok(version) = parse(&entry.file_name().to_string_lossy()) else {
                 continue;
             };
-            let is_folder = entry
-                .file_type()
-                .map(|kind| kind.is_dir())
-                .unwrap_or(false);
+            let is_folder = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
             if !is_folder || self.kept(&version, &shipped, running) {
                 continue;
             }
             let path = entry.path();
-            fs::remove_dir_all(&path).map_err(|source| VersionsError::Write {
-                file: path,
-                source,
-            })?;
+            fs::remove_dir_all(&path)
+                .map_err(|source| VersionsError::Write { file: path, source })?;
         }
         Ok(())
     }
