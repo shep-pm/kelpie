@@ -20,7 +20,8 @@
 //! through [`tree`] where it cannot. [`worker_folder`] reads and writes the files in a
 //! folder a worker can write, and follows no link there. [`tools`] serves kelpie's
 //! own tools to each session over MCP, through a relay and the one door its
-//! sandbox leaves open. The crate has no Tauri dependency, so the app
+//! sandbox leaves open. [`ticket`] names a ticket and reads a project's tickets
+//! through the port its source answers. The crate has no Tauri dependency, so the app
 //! crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
@@ -45,7 +46,8 @@
 //! what must not leave this machine; [`pacer`] holds a turn while a limit's window
 //! is spent; [`worker`] counts how many of a project's workers may run at once;
 //! [`worktree`] reads a ticket's worktree; [`worker_folder`] reads and writes a
-//! worker's folder without following a link; [`tools`] opens the door each session's
+//! worker's folder without following a link; [`ticket`] holds a ticket's id and the
+//! port a project's tickets are read through; [`tools`] opens the door each session's
 //! `kelpie tools` relay reaches kelpie by.
 
 #![doc(test(attr(deny(warnings))))]
@@ -67,6 +69,7 @@ pub mod run;
 pub mod sandbox;
 pub mod session;
 pub mod settings;
+pub mod ticket;
 pub mod tools;
 pub mod tree;
 pub mod worker;
