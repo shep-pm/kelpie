@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write as _};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -318,17 +319,36 @@ impl Field {
     }
 }
 
-/// How many may hold something at once
+/// How many of a project's workers run at once
+///
+/// 0 is a project holding every worker out of its slots: no worker starts a turn.
 // wire format: a settings file holds it
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Capacity(u32);
+pub struct Slots(u32);
+
+impl Slots {
+    /// How many places there are, as a count kelpie can index with
+    #[must_use]
+    pub fn places(self) -> usize {
+        usize::try_from(self.0).unwrap_or(usize::MAX)
+    }
+}
+
+/// How many commands hold a lease at once
+///
+/// Never zero: a lease with no place can never be taken, and every command
+/// queued behind it then waits forever.
+// wire format: a settings file holds it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Capacity(NonZeroU32);
 
 impl Capacity {
     /// How many places there are, as a count kelpie can index with
     #[must_use]
     pub fn places(self) -> usize {
-        usize::try_from(self.0).unwrap_or(usize::MAX)
+        usize::try_from(self.0.get()).unwrap_or(usize::MAX)
     }
 }
 
@@ -339,9 +359,17 @@ impl Capacity {
 /// then cannot read back.
 const MAX_COUNT: u32 = 64;
 
-impl JsonSchema for Capacity {
+/// A count the schema bounds, as the nonzero one [`Capacity`] holds
+const fn nonzero(count: u32) -> NonZeroU32 {
+    match NonZeroU32::new(count) {
+        Some(count) => count,
+        None => panic!("a lease always has a place"),
+    }
+}
+
+impl JsonSchema for Slots {
     fn schema_name() -> Cow<'static, str> {
-        "Capacity".into()
+        "Slots".into()
     }
 
     fn inline_schema() -> bool {
@@ -357,17 +385,35 @@ impl JsonSchema for Capacity {
     }
 }
 
+impl JsonSchema for Capacity {
+    fn schema_name() -> Cow<'static, str> {
+        "Capacity".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_COUNT,
+        })
+    }
+}
+
 /// The lease every worker's `cargo test` run queues behind
 pub const CARGO_TEST: &str = "cargo-test";
 
 /// How many commands hold [`CARGO_TEST`] at once when no layer names it
-pub const CARGO_TEST_CAPACITY: Capacity = Capacity(3);
+pub const CARGO_TEST_CAPACITY: Capacity = Capacity(nonzero(3));
 
 /// How many commands hold a lease no layer names a capacity for
-const ONE_AT_A_TIME: Capacity = Capacity(1);
+const ONE_AT_A_TIME: Capacity = Capacity(nonzero(1));
 
 /// How many of a project's workers run at once when no layer names a cap
-const TWO_WORKERS: Capacity = Capacity(2);
+const TWO_WORKERS: Slots = Slots(2);
 
 /// The settings of one layer file, holding only the fields that file sets
 ///
@@ -399,8 +445,8 @@ pub struct Settings {
     /// How much effort a worker puts in, named as the harness names it. Empty leaves the effort to the harness.
     pub worker_effort: Option<String>,
 
-    /// How many of this project's workers run at once. A worker that is Paused or waiting on the maintainer holds no slot.
-    pub worker_slots: Option<Capacity>,
+    /// How many of this project's workers run at once. A worker that is Paused or waiting on the maintainer holds no slot. 0 holds every worker out of the project's slots.
+    pub worker_slots: Option<Slots>,
 
     /// Where a harness's model runs, for a harness that reaches a model through a server
     pub provider: Option<String>,
@@ -423,7 +469,7 @@ pub struct Settings {
     /// Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.
     pub bridge_updates: Option<BTreeMap<String, BridgeUpdates>>,
 
-    /// How many commands hold each lease at once, keyed by the lease's name such as `cargo-test`. A lease the map does not name takes kelpie's own capacity for it.
+    /// How many commands hold each lease at once, keyed by the lease's name such as `cargo-test`. A lease the map does not name takes kelpie's own capacity for it, and no lease holds zero.
     pub lease_capacity: Option<BTreeMap<String, Capacity>>,
 }
 
@@ -452,7 +498,7 @@ pub struct Defaults {
     pub worker_effort: Option<&'static str>,
 
     /// How many of a project's workers run at once when no layer caps them
-    pub worker_slots: Capacity,
+    pub worker_slots: Slots,
 
     /// The built-in provider
     pub provider: Option<&'static str>,
@@ -519,7 +565,7 @@ pub struct Resolved {
     pub worker_effort: Layered<Option<String>>,
 
     /// How many of the project's workers run at once
-    pub worker_slots: Layered<Capacity>,
+    pub worker_slots: Layered<Slots>,
 
     /// Where a harness's model runs
     pub provider: Layered<Option<String>>,

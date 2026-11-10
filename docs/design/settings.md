@@ -49,7 +49,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | PM harness | Global, project | Claude Code or goose |
 | PM model, effort | Global, project | Listed from the harness's own config options (ACP), so kelpie names no model outside the default. Kelpie starts the harness briefly to ask, sending no prompt, and keeps the list until a refresh |
 | Worker harness, model, effort | Project | Empty by default: kelpie names none (ADR 0006). The global value is the global `worker.md`'s own keys over `kelpie:worker`, as the PM's is `pm.md`'s (`workers.md`, Starting one) |
-| Worker slots | Project | How many of the project's workers run at once, 2 by default. A worker that is Paused or waiting on the maintainer holds none (`workers.md`, Slots, pacing and leases) |
+| Worker slots | Project | How many of the project's workers run at once, 2 by default, 0 to 64. A worker that is Paused or waiting on the maintainer holds none, and lowering the cap takes slots back from the newest holders (`workers.md`, Slots, pacing and leases) |
 | Provider and host | Global, project | For a harness that runs a model on a server, such as goose on Ollama |
 | Login | Global | Per harness, in the keychain. The field says *set* or *not set* and never shows the value. For Claude Code it is pasted, beside the command that makes it (`claude setup-token`). Kelpie running that command itself waits for the drawer's terminal |
 | Reply style | Global, project | Kelpie's Concise-plus style by default (`ux.md`, item 4) |
@@ -57,7 +57,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Read anywhere by default | Project | Off (`ux.md`, Sandbox) |
 | Harness global folder | Project | Off. Reads `~/.claude` or goose's own config when on (ADR 0006) |
 | Bridge updates | Global | Per bridge: *Registry, automatic* by default, *Registry, ask first*, or *Kelpie's pin* (`bridge-updates.md`) |
-| Lease capacity | Global | How many commands hold each lease at once, keyed by the lease's name, with `cargo-test` at 3. A lease no layer names holds one at a time. A lease is the machine's, so its capacity is one value for every project. The form has no row for the map yet, so the file is the way in (`workers.md`, Slots, pacing and leases) |
+| Lease capacity | Global | How many commands hold each lease at once, keyed by the lease's name, with `cargo-test` at 3. Each count is 1 to 64: a lease with no place can never be taken, and every command queued behind one waits forever. A lease no layer names holds one at a time. A lease is the machine's, so its capacity is one value for every project. The form has no row for the map yet, so the file is the way in (`workers.md`, Slots, pacing and leases) |
 
 ### Agent files
 

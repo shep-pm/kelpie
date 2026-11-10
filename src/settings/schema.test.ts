@@ -6,7 +6,7 @@ import { formSchema, ordered } from "./schema";
 const raw = {
   properties: {
     "lease-capacity": {
-      additionalProperties: { maximum: 64, minimum: 0, type: "integer" },
+      additionalProperties: { maximum: 64, minimum: 1, type: "integer" },
       default: null,
       description: "How many commands hold each lease at once.",
       type: ["object", "null"],
