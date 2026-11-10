@@ -24,15 +24,15 @@ const POLL: Duration = Duration::from_millis(50);
 
 /// A process the table lists
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Reading {
+pub(crate) struct Reading {
     /// When it started, in seconds since the epoch
-    pub started: u64,
+    pub(crate) started: u64,
     /// Whether it has exited and waits only to be reaped
-    pub zombie: bool,
+    pub(crate) zombie: bool,
 }
 
 /// Look up one pid in the process table, `None` when no such process runs
-pub(super) fn read(pid: u32) -> Option<Reading> {
+pub(crate) fn read(pid: u32) -> Option<Reading> {
     let pid = Pid::from_u32(pid);
     let mut system = System::new();
     system.refresh_processes_specifics(

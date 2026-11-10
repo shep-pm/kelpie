@@ -29,7 +29,7 @@ use std::{env, fs};
 ///
 /// `sockaddr_un.sun_path` is 104 bytes there, the last of them the NUL.
 #[cfg(target_os = "macos")]
-pub(super) const LONGEST_SOCKET: usize = 103;
+pub(crate) const LONGEST_SOCKET: usize = 103;
 
 /// What a relay dials: a Unix socket's path, or a TCP address
 ///
@@ -167,16 +167,16 @@ impl Write for Stream {
 
 /// The listening end of the door on macOS: a Unix socket
 #[cfg(target_os = "macos")]
-pub(super) type Listener = tokio::net::UnixListener;
+pub(crate) type Listener = tokio::net::UnixListener;
 /// The listening end of the door on Linux: loopback TCP
 #[cfg(target_os = "linux")]
-pub(super) type Listener = tokio::net::TcpListener;
+pub(crate) type Listener = tokio::net::TcpListener;
 /// A connection the door accepted
 #[cfg(target_os = "macos")]
-pub(super) type Accepted = tokio::net::UnixStream;
+pub(crate) type Accepted = tokio::net::UnixStream;
 /// A connection the door accepted
 #[cfg(target_os = "linux")]
-pub(super) type Accepted = tokio::net::TcpStream;
+pub(crate) type Accepted = tokio::net::TcpStream;
 
 /// The door opened, and what removes it
 ///
