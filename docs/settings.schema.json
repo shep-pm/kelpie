@@ -156,6 +156,34 @@
       ],
       "default": null,
       "description": "How kelpie asks a harness to phrase its replies"
+    },
+    "worker-effort": {
+      "default": null,
+      "description": "How much effort a worker puts in, named as the harness names it. Empty leaves the effort to the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "worker-harness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Harness"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which harness a worker runs on. Where it is empty, the `worker` agent's own harness decides."
+    },
+    "worker-model": {
+      "default": null,
+      "description": "Which model a worker runs on, named as the harness names it. Empty leaves the model to the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "Settings",
