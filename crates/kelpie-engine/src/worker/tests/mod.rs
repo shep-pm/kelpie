@@ -4,7 +4,9 @@
 //! and a [`FakeAgent`] as the harness, so a start prepares a real worktree
 //! through git and runs a real session over ACP with no model behind it.
 
-use std::ffi::OsString;
+use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -16,12 +18,12 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::{Binding, Origin, Sourced};
-use crate::lease::{Leases, SOCKET_VAR};
+use crate::github::fake::{FakeClock, FakeGithub};
+use crate::github::{AppTokens, TokenError};
+use crate::lease::Leases;
 use crate::sandbox::{self, Reads};
 use crate::session::fake::{FakeAgent, Turn};
 use crate::session::{Harness, Session};
-use crate::settings::{ConfigDir, Settings};
-use crate::tools::Door;
 use crate::tree::ProcessTree;
 use crate::worktree::tests::{Dir, git, process_tree, write_in};
 
@@ -110,6 +112,13 @@ pub(super) struct Rig {
     repo: PathBuf,
     paths: Paths,
     records: Arc<Mutex<Records>>,
+    // The Apps kelpie mints this project's workers' tokens from, `None` where it
+    // keeps none at all
+    tokens: Option<AppTokens>,
+    // The `gh` a worker's git answers github.com with. Every rig has a stub of one
+    // in a `bin` folder of its own, so a start here always sees a machine that can
+    // push; the test about a machine that cannot takes it away.
+    gh: Option<PathBuf>,
 }
 
 impl Rig {
@@ -127,6 +136,11 @@ impl Rig {
         let paths = Paths::new(root.join("data"), "p1");
         let records = Arc::new(Mutex::new(Records::load(paths.records()).unwrap()));
         let tree = Arc::new(process_tree(&root));
+        let gh = root.join("bin/gh");
+        std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
+        std::fs::write(&gh, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             _dir: dir,
             root,
@@ -134,7 +148,29 @@ impl Rig {
             repo,
             paths,
             records,
+            tokens: None,
+            gh: Some(gh),
         }
+    }
+
+    /// Make the checkout's `origin` `slug` on GitHub
+    ///
+    /// A `[url "<the bare origin here>"] insteadOf = <slug's URL>` section is
+    /// what git resolves that URL with, so the origin stays the local bare repo
+    /// this rig was cloned from and every fetch the start makes is off the
+    /// network. It is appended to the clone's config by hand: git's own
+    /// `config` command keeps the quotes of a key like
+    /// `url."<base>".insteadOf` in the subsection it writes.
+    fn on_github(&mut self, slug: &str) {
+        let url = format!("https://github.com/{slug}.git");
+        let origin = self.root.join("origin.git");
+        git(&self.repo, &["config", "remote.origin.url", &url]);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.repo.join(".git/config"))
+            .unwrap()
+            .write_all(format!("[url \"{}\"]\n\tinsteadOf = {url}\n", origin.display()).as_bytes())
+            .unwrap();
     }
 
     /// The project a test starts in, with `open` as its opener and `slots` as its cap
@@ -167,6 +203,8 @@ impl Rig {
             network_allowlist: &[],
             reads: Reads::Project,
             tools: None,
+            tokens: self.tokens.as_ref(),
+            gh: self.gh.as_deref(),
             leases,
             open,
         }
@@ -694,78 +732,6 @@ fn the_instructions_carry_the_base_branch_and_the_hand_over_file() {
     );
 }
 
-/// kelpie's leases, with one place for `cargo-test`, in the rig's data folder
-fn leases(rig: &Rig) -> Leases {
-    let config = rig.paths.data_dir.join("config");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(
-        config.join("settings.json"),
-        r#"{"lease-capacity": {"cargo-test": 1}}"#,
-    )
-    .unwrap();
-    Leases::new(&Settings::load(&ConfigDir::at(&config), "web").unwrap())
-}
-
-/// The socket a started worker was given, as its environment names it
-fn socket_of(named: &Mutex<Vec<(OsString, OsString)>>) -> Door {
-    let (name, value) = named.lock().unwrap().remove(0);
-    assert_eq!(name, SOCKET_VAR, "the lease socket is named by");
-    Door::parse(&value.to_string_lossy()).expect("the lease socket is a socket")
-}
-
-#[test]
-fn each_worker_gets_a_lease_socket_of_its_own_named_in_its_environment() {
-    let rig = Rig::new("lease");
-    let leases = leases(&rig);
-    let agent = FakeAgent::new().turn(Turn::new().text("done"));
-    let binding = binding();
-    let named = Arc::new(Mutex::new(Vec::<(OsString, OsString)>::new()));
-    let seen = Arc::clone(&named);
-    let open = |opening: &Opening<'_>| -> Result<Session, String> {
-        let lease = opening
-            .lease
-            .as_ref()
-            .expect("a worker started with leases has a lease socket");
-        seen.lock().unwrap().push(lease.env());
-        Ok(on(&agent, opening))
-    };
-
-    // Each worker is kept running while its socket is looked at: the socket ends
-    // with the session
-    let mut running = Vec::new();
-    let mut doors = Vec::new();
-    for id in ["74", "75"] {
-        let (sink, heard) = events();
-        let started = start(
-            &rig.project_with(&binding, &open, 2, Some(&leases)),
-            &ticket(id, "Do the thing"),
-            sink,
-        )
-        .unwrap();
-        assert!(matches!(started, Started::Running { .. }), "{started:?}");
-        until_turn_ends(&heard);
-        running.push(started);
-        doors.push(socket_of(&named));
-    }
-
-    assert_ne!(doors[0], doors[1], "one lease socket per session");
-    for door in &doors {
-        #[cfg(target_os = "macos")]
-        {
-            let socket = door.socket().expect("macOS binds a Unix socket");
-            assert!(
-                socket.exists(),
-                "{socket:?} is the socket kelpie bound for this worker"
-            );
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let address = door.tcp().expect("Linux binds a loopback address");
-            assert!(address.ip().is_loopback(), "{address}");
-        }
-    }
-}
-
 /// A worker mid-turn in `rig`, whose turn the test cancels after writing in its
 /// worktree, so the turn's end settles it
 struct Mid {
@@ -966,3 +932,6 @@ fn entries(paths: &[&str]) -> Config {
     });
     Config::from_json(&settings.to_string()).unwrap()
 }
+
+mod credential;
+mod lease;

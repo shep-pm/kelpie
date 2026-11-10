@@ -53,6 +53,7 @@
 pub mod agents;
 pub mod bridge;
 pub mod confine;
+pub mod github;
 pub mod guard;
 pub mod harness;
 pub mod lease;
