@@ -135,6 +135,32 @@ _Avoid_: pty session
 What a restart for an update does first: no new turns start, and the running ones finish.
 _Avoid_: handover
 
+## Workers
+
+**Worktree**:
+A worker's own copy of the project, on a branch of its own, where it does its one piece of work.
+_Avoid_: checkout (the maintainer's own), clone (the mechanism)
+
+**Note**:
+A message from the maintainer to a running worker, read at its next step without stopping it. It goes into the ticket's record.
+_Avoid_: tell, nudge
+
+**Stop and tell**:
+A message that interrupts the worker's turn and becomes its next prompt.
+_Avoid_: interrupt, cancel
+
+**Fence**:
+The check, when a worker's turn ends, that its branch changed only what a worker may change. It sits on top of the sandbox and is not the sandbox.
+_Avoid_: guard (the check on each command)
+
+**Slot**:
+One of the places a project has for a running worker. A worker that is Paused or waiting on the maintainer gives its slot back.
+_Avoid_: seat, lane
+
+**Lease**:
+A turn at something only a few may use at once, such as a test run, held while the command runs and handed back when it ends.
+_Avoid_: lock, mutex
+
 ## Building kelpie
 
 **Lift**:
