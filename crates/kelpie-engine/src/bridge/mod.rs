@@ -51,7 +51,10 @@ use std::time::Duration;
 use sha2::{Digest as _, Sha256};
 
 mod error;
+mod probe;
 pub mod registry;
+
+pub use probe::{Capability, ProbeError, probe};
 
 pub use error::BridgeError;
 use error::{could_not_download, could_not_read, could_not_write, missing_command};

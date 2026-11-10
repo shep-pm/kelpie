@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::run::RunId;
+use crate::session::fake::FakeAgent;
 
 /// The bridge every test installs
 const ID: &str = "claude-acp";
@@ -452,4 +453,46 @@ fn the_index_gives_a_pin_for_the_stable_version() {
         index.bridge("codex-acp").is_none(),
         "an agent with no binary distribution has no pin"
     );
+}
+
+#[test]
+fn the_probe_sends_no_prompt_and_stops_the_bridge() {
+    let mut agent = FakeAgent::new().can_resume();
+
+    probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap();
+
+    assert_eq!(
+        agent.methods(),
+        ["initialize"],
+        "the bridge was asked to initialize, never to open a session or run a prompt"
+    );
+    assert_eq!(agent.params("initialize")[0]["protocolVersion"], 1);
+    assert_eq!(agent.launches(), 1);
+    assert_eq!(agent.stopped(), 1, "the bridge was left running");
+}
+
+#[test]
+fn a_bridge_that_can_load_a_session_keeps_the_resume_capability() {
+    let mut agent = FakeAgent::new().can_load();
+
+    probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap();
+}
+
+#[test]
+fn a_bridge_that_lost_a_capability_fails_the_probe_naming_it() {
+    let mut agent = FakeAgent::new();
+
+    let error = probe::probed(&mut agent, &[Capability::ResumeSession]).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            ProbeError::Missing {
+                capability: Capability::ResumeSession
+            }
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().contains("session/resume"), "{error}");
+    assert_eq!(agent.stopped(), 1, "a failed probe still stops the bridge");
 }
