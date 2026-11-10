@@ -5,6 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::harness::{claude, goose};
+use crate::worktree::tests::process_tree;
 
 struct World {
     _dir: tempfile::TempDir,
@@ -25,6 +26,25 @@ fn world() -> World {
 impl World {
     fn judge(&self) -> Judge {
         Judge::new(&self.worktree, vec![self.worktree.clone()])
+    }
+
+    /// A judge that reads shell commands against a project whose base branch is `main`
+    fn judge_with_project(&self) -> Judge {
+        let tree = Arc::new(process_tree(self._dir.path()));
+        let project = Project::new(
+            tree,
+            self._dir.path().join("repo"),
+            "main",
+            Some(PathBuf::from("/home/me")),
+            LocalPaths::new([Path::new("/home/me")]),
+        );
+        self.judge().with_project(project)
+    }
+}
+
+fn shell(command: &str) -> Call {
+    Call::Shell {
+        command: command.to_owned(),
     }
 }
 
@@ -64,16 +84,56 @@ fn a_write_outside_the_worktree_is_refused_naming_it() {
 }
 
 #[test]
-fn a_shell_call_is_refused_until_guard_judges_it() {
+fn a_shell_call_is_refused_when_the_judge_has_no_project() {
     let w = world();
 
-    let Verdict::Refuse(why) = w.judge().judge(&Call::Shell {
-        command: "ls".to_owned(),
-    }) else {
+    let Verdict::Refuse(why) = w.judge().judge(&shell("ls")) else {
         panic!("a shell command went ahead");
     };
 
-    assert!(why.contains("guard"), "{why}");
+    assert!(why.contains("no project"), "{why}");
+}
+
+#[test]
+fn a_shell_call_is_judged_by_guard() {
+    let w = world();
+
+    assert_eq!(
+        w.judge_with_project().judge(&shell("ls -l")),
+        Verdict::Allow
+    );
+    let Verdict::Refuse(why) = w.judge_with_project().judge(&shell("pkill node")) else {
+        panic!("a process was stopped by name");
+    };
+    assert!(why.contains("by name or pattern"), "{why}");
+}
+
+#[test]
+fn a_gh_command_is_refused_until_the_github_slice() {
+    let w = world();
+
+    for command in [
+        "gh pr create --title 'fix: x'",
+        "env GH_PAGER= gh pr view 3",
+    ] {
+        let Verdict::Refuse(why) = w.judge_with_project().judge(&shell(command)) else {
+            panic!("{command} went ahead");
+        };
+        assert!(why.contains("no `gh` command"), "{command}: {why}");
+    }
+}
+
+#[test]
+fn a_commit_adding_the_home_folder_is_refused_in_the_handler() {
+    let w = world();
+    let Verdict::Refuse(why) = w
+        .judge_with_project()
+        .judge(&shell("git commit -m 'docs: see /home/me/x'"))
+    else {
+        panic!("a message naming the home folder went ahead");
+    };
+
+    assert!(why.contains("a path on this machine"), "{why}");
 }
 
 #[test]
