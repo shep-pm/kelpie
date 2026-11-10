@@ -93,9 +93,9 @@ As `docs/design/ux.md` (Workers) has it:
 
 ### Slots, pacing and leases
 
-1. **Slots** (`runner/slots.rs`, lifted): a per-project setting caps how many workers run at once, 2 by default. A worker that is Paused or waiting on the maintainer frees its slot (SK ADR 0007).
+1. **Slots** (`runner/slots.rs`, lifted): a per-project setting caps how many workers run at once, 2 by default. A worker that is Paused or waiting on the maintainer frees its slot (SK ADR 0007). Where the cap comes down, the newest holders give their slots back and the oldest keeps its own; a turn already running is never interrupted.
 2. **Pacing** (`core/pacer.rs`, lifted): a harness limit at 100% of its 5-hour or week window holds every new turn until it resets. Keyed by a limit id, so local models need none.
-3. **Leases** (`core/lease/counted.rs`, lifted as `kelpie lease run`): a capacity-N lease held by connection liveness, so two workers' `cargo test` runs take turns instead of starving the machine. The capacity per name is a setting. `kelpie lease run` reaches kelpie through a socket in the worker's state folder, one per session, which the worker's policy allows. Kelpie tools go over stdio MCP, but a lease must live exactly as long as the command it wraps.
+3. **Leases** (`core/lease/counted.rs`, lifted as `kelpie lease run`): a capacity-N lease held by connection liveness, N at least 1, so two workers' `cargo test` runs take turns instead of starving the machine. The capacity per name is a setting. `kelpie lease run` reaches kelpie through a socket in the worker's state folder, one per session, which the worker's policy allows. Kelpie tools go over stdio MCP, but a lease must live exactly as long as the command it wraps.
 4. **Flights** (`runner/flight/`, adapted as the worker supervisor): the running set, its news, and its ceilings. A ceiling counts from when the slot was granted, not from the launch.
 5. **Usage** (`runner/in_flight.rs`, `core/usage/`): a draft opens when the turn starts and is written once when it ends, from what ACP reports.
 

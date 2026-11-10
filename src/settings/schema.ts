@@ -13,6 +13,7 @@ const LABELS: Record<string, string> = {
   "worker-harness": "Worker harness",
   "worker-model": "Worker model",
   "worker-effort": "Worker effort",
+  "worker-slots": "Worker slots",
   provider: "Provider",
   host: "Host",
   "reply-style": "Reply style",
@@ -21,8 +22,8 @@ const LABELS: Record<string, string> = {
   "network-allowlist": "Allowed domains",
 };
 
-/** Fields the form leaves out: each bridge's update row, on the harness's login row, is a slice of its own. */
-const HIDDEN = new Set(["$schema", "bridge-updates"]);
+/** Fields the form leaves out: each bridge's update row is on the harness's login row, and a lease's capacity has no row of its own yet. */
+const HIDDEN = new Set(["$schema", "bridge-updates", "lease-capacity"]);
 
 /** The order a person meets the fields in; a key it does not name follows. */
 const ORDER = Object.keys(LABELS);
