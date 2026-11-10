@@ -222,6 +222,7 @@ jobs:
           import urllib.request
 
           MARKER = "<!-- pr-shots -->"
+          END = "<!-- /pr-shots -->"
           env = os.environ
           api = f"{env['GITHUB_API_URL']}/repos/{env['GITHUB_REPOSITORY']}/pulls/{env['PR']}"
 
@@ -273,14 +274,22 @@ jobs:
                   "| Light | Dark |",
                   "| --- | --- |",
                   f"| {cell('light', env['HAS_LIGHT'])} | {cell('dark', env['HAS_DARK'])} |",
+                  END,
               ]
           )
 
           body = call("GET").get("body") or ""
-          # The section is the last thing in the body, so everything from the
-          # marker on is the old one. A body without it gets the section added.
-          head = body.split(MARKER)[0].rstrip()
-          new = f"{head}\n\n{section}\n" if head else f"{section}\n"
+          # The section runs from the last start marker before the last end
+          # marker, so a mention of either string in the author's text earlier in
+          # the body is left alone, and so is anything written after the section.
+          # A body without a section gets one appended.
+          end = body.rfind(END)
+          start = body.rfind(MARKER, 0, end) if end != -1 else -1
+          if start == -1:
+              head = body.rstrip()
+              new = f"{head}\n\n{section}\n" if head else f"{section}\n"
+          else:
+              new = body[:start] + section + body[end + len(END):]
           if new != body:
               call("PATCH", {"body": new})
           EOF
