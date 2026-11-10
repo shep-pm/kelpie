@@ -71,7 +71,7 @@ From the next message, as `pm-chat.md` settles for switching. A model change kee
 
 Read anywhere by default is the exception: it lands at the session's next start, a relaunch or a harness switch, since crabpot widens only the network lists of a sandbox that is already running.
 
-A project whose folder is the home folder, or a folder above it, is refused at that start whichever way the setting is set, and the refusal says so with the folder's path. The home folder holds every harness's login and every secret, so the project needs a folder of its own.
+A project whose folder is the home folder, or a folder above it, is refused at that start whichever way the setting is set, whether it reaches the home folder by name or through a link, and the refusal says so with the folder's path as the person chose it. The home folder holds every harness's login and every secret, so the project needs a folder of its own.
 
 ## Synergy
 
