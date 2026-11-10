@@ -10,6 +10,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,12 @@ use super::{BRIDGES_FOLDER, Pin, is_name, token};
 
 /// The file one bridge's versions are kept in, beside its installed versions
 const FILE: &str = "versions.json";
+
+/// Held while one versions file is read, changed and written back
+///
+/// A bridge check and the settings row's yes both change this file. One write
+/// happens at a time in this process, so neither drops what the other just wrote.
+static WRITES: Mutex<()> = Mutex::new(());
 
 /// A version kelpie did not use, and why
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +204,28 @@ impl Versions {
             let _ = fs::remove_file(&temp);
             write(&target, source)
         })
+    }
+
+    /// Change `pin`'s versions file as one read-modify-write
+    ///
+    /// The change sees every earlier write, and no later write begins until it is
+    /// saved. A check that has just probed a candidate and the settings row's yes
+    /// both use this, so a check's save cannot write back the approval it read
+    /// before the yes (`docs/design/bridge-updates.md`, Flow).
+    ///
+    /// # Errors
+    ///
+    /// As [`Versions::load`] and [`Versions::save`].
+    pub fn update<T>(
+        data_dir: &Path,
+        pin: &Pin<'_>,
+        change: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, VersionsError> {
+        let _held = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut versions = Self::load(data_dir, pin)?;
+        let outcome = change(&mut versions);
+        versions.save(data_dir, pin.id)?;
+        Ok(outcome)
     }
 
     /// Whether `version` failed a session and is not tried again
