@@ -28,7 +28,7 @@ use std::time::SystemTime;
 
 use crate::tree::ProcessTree;
 
-pub mod cache;
+mod cache;
 pub mod clone;
 mod common;
 mod in_process;
@@ -38,7 +38,7 @@ mod loose;
 mod remote;
 mod stale_lock;
 mod stray;
-pub mod writable;
+mod writable;
 
 #[cfg(test)]
 pub(crate) mod tests;
