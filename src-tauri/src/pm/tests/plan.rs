@@ -20,10 +20,24 @@ fn the_next_send_uses_the_new_model() {
     let layer = || Target::Project {
         id: project.clone(),
     };
-    settings_set(chat.state(), layer(), "pm-model".to_owned(), "small".into()).unwrap();
+    settings_set(
+        chat.handle(),
+        chat.state(),
+        layer(),
+        "pm-model".to_owned(),
+        "small".into(),
+    )
+    .unwrap();
     chat.send("First").until_turn_ends();
 
-    settings_set(chat.state(), layer(), "pm-model".to_owned(), "large".into()).unwrap();
+    settings_set(
+        chat.handle(),
+        chat.state(),
+        layer(),
+        "pm-model".to_owned(),
+        "large".into(),
+    )
+    .unwrap();
     chat.send("Second").until_turn_ends();
 
     assert_eq!(agent.launches(), 1, "the same session carries on");
@@ -43,6 +57,7 @@ fn a_model_the_global_pm_agent_sets_reaches_the_first_send() {
         .turn(Turn::new().text("one"));
     let chat = Chat::planned(&agent);
     settings_set(
+        chat.handle(),
         chat.state(),
         Target::Global,
         "pm-model".to_owned(),
@@ -75,6 +90,7 @@ fn another_harness_gets_no_model_kelpie_named_for_the_default_one() {
     let chat = Chat::on(&FakeAgent::new());
     let project = chat.state().project_id(None).unwrap();
     settings_set(
+        chat.handle(),
         chat.state(),
         Target::Project {
             id: project.clone(),
@@ -108,6 +124,7 @@ fn the_projects_sandbox_settings_reach_the_plan() {
     let project = chat.state().project_id(None).unwrap();
     let set = |key: &str, value: serde_json::Value| {
         settings_set(
+            chat.handle(),
             chat.state(),
             Target::Project {
                 id: project.clone(),
@@ -145,6 +162,7 @@ fn the_reply_style_is_part_of_the_instructions_unless_the_harness_default_is_cho
     assert!(instructions().contains("decisions.md"));
 
     settings_set(
+        chat.handle(),
         chat.state(),
         Target::Global,
         "reply-style".to_owned(),

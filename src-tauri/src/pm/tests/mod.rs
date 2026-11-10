@@ -19,7 +19,7 @@ use kelpie_engine::tools::fake::FakeTools;
 use kelpie_protocol::{LogEntry, StopReason, ToolStatus};
 use tauri::ipc::InvokeResponseBody;
 use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
-use tauri::{App, Manager as _};
+use tauri::{App, AppHandle, Manager as _};
 
 use super::*;
 use crate::settings::{Target, settings_set};
@@ -196,6 +196,11 @@ impl Chat {
             dir,
             tools: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// What a command that reaches the window sees
+    fn handle(&self) -> AppHandle<MockRuntime> {
+        self.app.handle().clone()
     }
 
     /// What the commands see: the state Tauri manages
@@ -398,7 +403,14 @@ fn a_new_harness_stops_the_old_session_and_logs_a_divider() {
         let target = Target::Project {
             id: project.clone(),
         };
-        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+        settings_set(
+            chat.handle(),
+            chat.state(),
+            target,
+            key.to_owned(),
+            value.into(),
+        )
+        .unwrap();
     };
     chat.send("First").until_turn_ends();
     assert_eq!(claude.stopped(), 0, "the session runs between messages");
@@ -504,7 +516,14 @@ fn a_harness_changed_before_a_restart_starts_a_seeded_session_instead_of_resumin
     }
     let set = |key: &str, value: &str| {
         let target = Target::Project { id: "p1".into() };
-        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+        settings_set(
+            chat.handle(),
+            chat.state(),
+            target,
+            key.to_owned(),
+            value.into(),
+        )
+        .unwrap();
     };
     set("pm-harness", "goose");
     set("pm-model", "qwen");
@@ -553,7 +572,14 @@ fn the_divider_names_the_model_the_old_session_last_ran_on() {
         let target = Target::Project {
             id: project.clone(),
         };
-        settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+        settings_set(
+            chat.handle(),
+            chat.state(),
+            target,
+            key.to_owned(),
+            value.into(),
+        )
+        .unwrap();
     };
     set("pm-model", "small");
     chat.send("First").until_turn_ends();

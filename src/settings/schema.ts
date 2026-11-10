@@ -18,6 +18,7 @@ const LABELS: Record<string, string> = {
   provider: "Provider",
   host: "Host",
   "reply-style": "Reply style",
+  theme: "Theme",
   "read-anywhere": "Read anywhere by default",
   "harness-global-folder": "Read the harness's global folder",
   "network-allowlist": "Allowed domains",
@@ -64,10 +65,13 @@ function field(key: string, raw: Value, defs: Json): Json {
   if (Array.isArray(node.type)) {
     node = { ...node, type: node.type.find((t) => t !== "null") ?? "string" };
   }
-  // A const per variant is what rjsf draws as a select, labelled by its title
+  // A const per variant is what rjsf draws as a select, labelled by its title.
+  // The field needs a `type` of its own, which the `$ref` it came through does
+  // not carry, and every choice kelpie has is written as a string.
   if (Array.isArray(node.oneOf)) {
     node = {
       ...node,
+      type: node.type ?? "string",
       oneOf: node.oneOf.map((variant) =>
         isObject(variant)
           ? {

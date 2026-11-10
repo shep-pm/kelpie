@@ -154,6 +154,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: ReplyStyle::ConcisePlus,
                 from: Layer::BuiltIn,
             },
+            theme: Layered {
+                value: Theme::System,
+                from: Layer::BuiltIn,
+            },
             network_allowlist: Layered {
                 value: Vec::new(),
                 from: Layer::BuiltIn,

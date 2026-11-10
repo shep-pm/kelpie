@@ -127,8 +127,9 @@ export const commands = {
 	 *  Read every field of both tabs, each with the layer it came from
 	 * 
 	 *  The Global tab shows what the global layer and the global `pm` agent say. The
-	 *  Project tab shows what the project sees: its own file over those. `project`
-	 *  is a project's id, and `None` is the first project, since Phase 1 has one.
+	 *  Project tab shows the fields its layer may set, over what the layers below it
+	 *  say for each. `project` is a project's id, and `None` is the first project,
+	 *  since Phase 1 has one.
 	 * 
 	 *  # Errors
 	 * 
@@ -142,11 +143,12 @@ export const commands = {
 	 *  `null` and a blank string clear the field, which is what an empty form field
 	 *  means. On the Global tab the PM's harness, model and effort are written to the
 	 *  global `pm` agent's file, and everything else to `settings.json`. The PM's
-	 *  next message uses the result.
+	 *  next message uses the result, and a theme shows on the window at once.
 	 * 
 	 *  # Errors
 	 * 
-	 *  The text of why the value was refused, or the file could not be written.
+	 *  The text of why the value was refused, the file could not be written, or the
+	 *  window could not be themed.
 	 */
 	settingsSet: (layer: Target, path: string, value: Value) => typedError<null, string>(__TAURI_INVOKE("settings_set", { layer, path, value })),
 	/**
