@@ -37,6 +37,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
 
 #[cfg(test)]
 mod tests;
@@ -54,7 +57,8 @@ pub const RECHECK_SECS: u64 = 600;
 ///
 /// A harness prints a window's reset to the minute, so seconds are finer than
 /// anything kelpie compares here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
 pub struct Timestamp(u64);
 
 impl Timestamp {
@@ -62,6 +66,17 @@ impl Timestamp {
     #[must_use]
     pub fn from_secs(secs: u64) -> Self {
         Self(secs)
+    }
+
+    /// This moment, as the system's clock reads it
+    #[must_use]
+    pub fn now() -> Self {
+        Self(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
     }
 
     /// The seconds themselves

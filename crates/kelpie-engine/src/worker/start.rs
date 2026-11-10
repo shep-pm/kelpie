@@ -18,6 +18,10 @@
 //! holds the logins and the installed bridges; `start` hands it the folders the
 //! worker works in and a way to start its sandbox, so every harness on every
 //! caller gets the same policy ([`crate::sandbox::worker`]).
+//!
+//! Each worker gets a lease socket of its own in its state folder, which its
+//! policy names and its environment names, so its `kelpie lease run` waits its
+//! turn behind the other workers' tests ([`crate::lease`]).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,6 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::agents::Binding;
+use crate::lease::{Leases, SessionLease};
 use crate::permission::Judge;
 use crate::sandbox::{self, Reads, Sandbox};
 use crate::session::log::Log;
@@ -206,6 +211,10 @@ pub struct Project<'a> {
     /// `None` where the door could not open.
     pub tools: Option<&'a Tools>,
 
+    /// kelpie's leases, whose socket each worker's session gets. `None` where the
+    /// platform has no lease socket, which leaves every worker unleased.
+    pub leases: Option<&'a Leases>,
+
     /// Build the worker's session on the harness the binding names, inside the
     /// sandbox [`Opening::sandbox`] starts. The text of an error is for the
     /// maintainer to read.
@@ -248,6 +257,13 @@ pub struct Opening<'a> {
 
     /// kelpie's tools for this session, with a token of its own
     pub tools: Option<SessionTools>,
+
+    /// This session's lease socket, which its sandbox policy names and its
+    /// harness's environment names as [`SOCKET_VAR`](crate::lease::SOCKET_VAR).
+    /// An opener puts [`SessionLease::env`] into the harness's environment, so a
+    /// `kelpie lease run` it starts can reach kelpie. `None` where the platform
+    /// has no lease socket, or the state folder was too deep for one.
+    pub lease: Option<SessionLease>,
 
     /// Start the worker's sandbox for `harness`, as its policy has it
     ///
@@ -446,6 +462,18 @@ fn begin(
 
     let log = Log::open(project.paths.log_file(&ticket.id)).map_err(StartError::Log)?;
     let tools = project.tools.map(Tools::session);
+    // One lease socket per session, in its state folder, which its policy names.
+    // A worker whose socket could not open runs unleased: its `kelpie lease run`
+    // exits [`NO_LEASE`](crate::lease::run::NO_LEASE) and says so.
+    let lease = project.leases.and_then(|leases| {
+        leases
+            .session(&state_dir)
+            .map(Some)
+            .unwrap_or_else(|error| {
+                eprintln!("kelpie: ticket {} starts unleased: {error}", ticket.id);
+                None
+            })
+    });
     let sessions_root = project.paths.sessions_root();
     let folders = sandbox::Worker {
         worktree: &worktree,
@@ -454,8 +482,7 @@ fn begin(
         state_dir: &state_dir,
         kelpie_home: &project.paths.data_dir,
         door: tools.as_ref().map(SessionTools::door),
-        // The lease socket comes with `kelpie lease run`
-        lease_address: None,
+        lease: lease.as_ref().map(SessionLease::door),
     };
     let reach = sandbox::Project {
         folder: project.folder,
@@ -474,12 +501,18 @@ fn begin(
         state_dir: &state_dir,
         resume: record.session.clone(),
         tools: tools.clone(),
+        lease: lease.clone(),
         sandbox: &sandbox,
     })
     .map_err(StartError::Session)?;
 
     let session = match tools {
         Some(tools) => session.with_tools(tools),
+        None => session,
+    };
+    // The socket stays open while the session runs, and closes with it
+    let session = match lease {
+        Some(lease) => session.with_lease(lease),
         None => session,
     };
     let session = Arc::new(

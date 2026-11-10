@@ -686,7 +686,7 @@ fn refuses_worker(name: &str, wanted: &Path) -> SandboxError {
         state_dir: &state,
         kelpie_home: &scratch,
         door: None,
-        lease_address: None,
+        lease: None,
     };
 
     let error = Sandbox::start_worker(&on(&[]), &project, &worker)

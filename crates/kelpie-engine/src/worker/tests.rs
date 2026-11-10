@@ -4,6 +4,7 @@
 //! and a [`FakeAgent`] as the harness, so a start prepares a real worktree
 //! through git and runs a real session over ACP with no model behind it.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -15,9 +16,12 @@ use serde_json::json;
 
 use super::*;
 use crate::agents::{Binding, Origin, Sourced};
+use crate::lease::{Leases, SOCKET_VAR};
 use crate::sandbox::{self, Reads};
 use crate::session::fake::{FakeAgent, Turn};
 use crate::session::{Harness, Session};
+use crate::settings::{ConfigDir, Settings};
+use crate::tools::Door;
 use crate::tree::ProcessTree;
 use crate::worktree::tests::{Dir, git, process_tree, write_in};
 
@@ -140,6 +144,17 @@ impl Rig {
         open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
         slots: usize,
     ) -> Project<'a> {
+        self.project_with(binding, open, slots, None)
+    }
+
+    /// The same, with `leases` holding each worker's lease socket
+    fn project_with<'a>(
+        &'a self,
+        binding: &'a Binding,
+        open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
+        slots: usize,
+        leases: Option<&'a Leases>,
+    ) -> Project<'a> {
         Project {
             paths: &self.paths,
             folder: &self.repo,
@@ -152,6 +167,7 @@ impl Rig {
             network_allowlist: &[],
             reads: Reads::Project,
             tools: None,
+            leases,
             open,
         }
     }
@@ -601,7 +617,7 @@ fn the_record_sits_outside_every_folder_the_worker_writes() {
         state_dir: &rig.paths.state_dir("74"),
         kelpie_home: &rig.paths.data_dir,
         door: None,
-        lease_address: None,
+        lease: None,
     };
     let policy = sandbox::worker::policy(&harness, &reach, &folders).unwrap();
 
@@ -676,6 +692,78 @@ fn the_instructions_carry_the_base_branch_and_the_hand_over_file() {
             && !prompt.contains("{pull_request}"),
         "no placeholder reaches the worker: {prompt:?}"
     );
+}
+
+/// kelpie's leases, with one place for `cargo-test`, in the rig's data folder
+fn leases(rig: &Rig) -> Leases {
+    let config = rig.paths.data_dir.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("settings.json"),
+        r#"{"lease-capacity": {"cargo-test": 1}}"#,
+    )
+    .unwrap();
+    Leases::new(&Settings::load(&ConfigDir::at(&config), "web").unwrap())
+}
+
+/// The socket a started worker was given, as its environment names it
+fn socket_of(named: &Mutex<Vec<(OsString, OsString)>>) -> Door {
+    let (name, value) = named.lock().unwrap().remove(0);
+    assert_eq!(name, SOCKET_VAR, "the lease socket is named by");
+    Door::parse(&value.to_string_lossy()).expect("the lease socket is a socket")
+}
+
+#[test]
+fn each_worker_gets_a_lease_socket_of_its_own_named_in_its_environment() {
+    let rig = Rig::new("lease");
+    let leases = leases(&rig);
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let binding = binding();
+    let named = Arc::new(Mutex::new(Vec::<(OsString, OsString)>::new()));
+    let seen = Arc::clone(&named);
+    let open = |opening: &Opening<'_>| -> Result<Session, String> {
+        let lease = opening
+            .lease
+            .as_ref()
+            .expect("a worker started with leases has a lease socket");
+        seen.lock().unwrap().push(lease.env());
+        Ok(on(&agent, opening))
+    };
+
+    // Each worker is kept running while its socket is looked at: the socket ends
+    // with the session
+    let mut running = Vec::new();
+    let mut doors = Vec::new();
+    for id in ["74", "75"] {
+        let (sink, heard) = events();
+        let started = start(
+            &rig.project_with(&binding, &open, 2, Some(&leases)),
+            &ticket(id, "Do the thing"),
+            sink,
+        )
+        .unwrap();
+        assert!(matches!(started, Started::Running { .. }), "{started:?}");
+        until_turn_ends(&heard);
+        running.push(started);
+        doors.push(socket_of(&named));
+    }
+
+    assert_ne!(doors[0], doors[1], "one lease socket per session");
+    for door in &doors {
+        #[cfg(target_os = "macos")]
+        {
+            let socket = door.socket().expect("macOS binds a Unix socket");
+            assert!(
+                socket.exists(),
+                "{socket:?} is the socket kelpie bound for this worker"
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let address = door.tcp().expect("Linux binds a loopback address");
+            assert!(address.ip().is_loopback(), "{address}");
+        }
+    }
 }
 
 /// A worker mid-turn in `rig`, whose turn the test cancels after writing in its

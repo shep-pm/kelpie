@@ -55,6 +55,7 @@ pub mod bridge;
 pub mod confine;
 pub mod guard;
 pub mod harness;
+pub mod lease;
 pub mod local_paths;
 pub mod login;
 pub mod pacer;
