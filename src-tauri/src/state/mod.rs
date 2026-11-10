@@ -14,14 +14,18 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::Duration;
 
+use kelpie_engine::bridge::{self, CheckOutcome, Pin};
+use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{LogEntry, Session, SessionId};
-use kelpie_engine::settings::{ConfigDir, Harness};
+use kelpie_engine::settings::{ConfigDir, Harness, Settings};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +53,9 @@ const DECISIONS_FILE: &str = "decisions.md";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long kelpie waits between two looks for a newer version of each bridge
+const BRIDGE_CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The reaper's name, as `bundle.externalBin` in `tauri.conf.json` names it
 ///
@@ -268,6 +275,8 @@ pub struct AppState {
     opening: Mutex<()>,
     opener: Opener,
     picker: Picker,
+    /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
+    bridge_checks: Mutex<Option<Sender<()>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -328,7 +337,46 @@ impl AppState {
             opening: Mutex::new(()),
             opener,
             picker,
+            bridge_checks: Mutex::new(None),
         })
+    }
+
+    /// Look for a newer version of each installed bridge now, and again every 24 hours
+    ///
+    /// The checks run on a thread of their own, since each one waits on the
+    /// network and on a probe. A bridge kelpie has not installed is skipped, and
+    /// a quit ends them: [`AppState::stop_all`] wakes the thread, which then
+    /// starts nothing more. Does nothing when they already run.
+    pub fn start_bridge_checks(&self) {
+        let mut held = lock(&self.bridge_checks);
+        if held.is_some() {
+            return;
+        }
+        let (stop, quit) = mpsc::channel();
+        *held = Some(stop);
+        let (data_dir, config, tree) = (self.data_dir.clone(), self.config.clone(), self.tree());
+        let check = move |pin: &Pin<'_>| {
+            let policy = Settings::load_global(&config)
+                .map_err(|error| error.to_string())?
+                .bridge_updates_for(pin.id);
+            Ok(bridge::check(
+                &data_dir,
+                &tree,
+                pin,
+                policy,
+                claude::REQUIRES,
+            ))
+        };
+        let data_dir = self.data_dir.clone();
+        thread::spawn(move || {
+            run_bridge_checks(
+                &[claude::pin()],
+                &data_dir,
+                BRIDGE_CHECK_EVERY,
+                &quit,
+                &check,
+            );
+        });
     }
 
     /// The app's data folder
@@ -565,7 +613,53 @@ impl AppState {
         if let Some(session) = self.held_session() {
             session.close_log();
         }
+        // Before the tree stops, so no check starts a probe the stop would miss
+        lock(&self.bridge_checks).take();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
+    }
+}
+
+/// Check each installed bridge in `pins`, then wait `every` and do it again
+///
+/// Ends when `quit`'s sender is dropped, whether it is waiting or about to check.
+/// A failed check is logged and the next one runs on schedule.
+fn run_bridge_checks(
+    pins: &[&Pin<'_>],
+    data_dir: &Path,
+    every: Duration,
+    quit: &Receiver<()>,
+    check: &dyn Fn(&Pin<'_>) -> Result<CheckOutcome, String>,
+) {
+    loop {
+        for pin in pins {
+            if matches!(quit.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                return;
+            }
+            if !data_dir.join("bridges").join(pin.id).is_dir() {
+                continue;
+            }
+            match check(pin) {
+                Ok(CheckOutcome::Failed { reason }) | Err(reason) => {
+                    eprintln!(
+                        "kelpie: could not check {} for a newer version: {reason}",
+                        pin.id
+                    );
+                }
+                Ok(CheckOutcome::Unlisted { in_use }) => {
+                    eprintln!(
+                        "kelpie: {} not usable in the registry index, keeping {in_use}",
+                        pin.id
+                    );
+                }
+                Ok(CheckOutcome::HeldBack { version, reason }) => {
+                    eprintln!("kelpie: {} {version} is held back: {reason}", pin.id);
+                }
+                Ok(_) => {}
+            }
+        }
+        if !matches!(quit.recv_timeout(every), Err(RecvTimeoutError::Timeout)) {
+            return;
+        }
     }
 }
 
@@ -599,290 +693,4 @@ fn new_id() -> io::Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A folder of its own for one test
-    struct Dir(PathBuf);
-
-    impl Dir {
-        fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("kelpie-state-{}", new_id().unwrap()));
-            fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-
-    impl Drop for Dir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn projects_json_round_trips_a_list() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        let mut projects = Projects::load(file.clone()).unwrap();
-        assert!(projects.list().is_empty(), "no file is no projects");
-
-        let first = Project {
-            id: "p1".to_owned(),
-            path: PathBuf::from("/work/web"),
-            pm_session: None,
-            pm_ran: None,
-        };
-        projects.replace_all(first.clone()).unwrap();
-        projects
-            .set_pm_session("p1", SessionId::from("s-1"))
-            .unwrap();
-
-        let reloaded = Projects::load(file.clone()).unwrap();
-        assert_eq!(
-            reloaded.list(),
-            [Project {
-                pm_session: Some("s-1".into()),
-                ..first
-            }]
-        );
-
-        // The rail adds more later: a list of two reads back as it was written
-        let two = r#"[
-            {"id":"a","path":"/work/a","pm_session":null},
-            {"id":"b","path":"/work/b","pm_session":"s-2"}
-        ]"#;
-        fs::write(&file, two).unwrap();
-        let reloaded = Projects::load(file).unwrap();
-        assert_eq!(
-            reloaded
-                .list()
-                .iter()
-                .map(|project| project.id.as_str())
-                .collect::<Vec<_>>(),
-            ["a", "b"]
-        );
-        assert_eq!(reloaded.list()[1].pm_session, Some("s-2".into()));
-    }
-
-    #[test]
-    fn another_harness_drops_the_saved_session_in_the_same_write() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        let mut projects = Projects::load(file.clone()).unwrap();
-        projects
-            .replace_all(Project {
-                id: "p1".to_owned(),
-                path: PathBuf::from("/work/web"),
-                pm_session: Some("s-1".into()),
-                pm_ran: None,
-            })
-            .unwrap();
-        let ran = |harness, model: &str| Ran {
-            harness,
-            model: Some(model.to_owned()),
-        };
-
-        // A file from before `pm_ran` was kept does not say whose id this is
-        projects
-            .set_pm_ran("p1", &ran(Harness::ClaudeCode, "opus"))
-            .unwrap();
-        projects
-            .set_pm_ran("p1", &ran(Harness::ClaudeCode, "sonnet"))
-            .unwrap();
-        assert_eq!(projects.list()[0].pm_session, Some("s-1".into()));
-
-        projects
-            .set_pm_ran("p1", &ran(Harness::Goose, "qwen"))
-            .unwrap();
-
-        let reloaded = Projects::load(file).unwrap();
-        assert_eq!(reloaded.list()[0].pm_session, None);
-        assert_eq!(reloaded.list()[0].pm_ran, Some(ran(Harness::Goose, "qwen")));
-    }
-
-    #[test]
-    fn a_list_that_cannot_be_written_is_not_kept_in_memory() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        let mut projects = Projects::load(file.clone()).unwrap();
-        let old = Project {
-            id: "old".to_owned(),
-            path: PathBuf::from("/work/old"),
-            pm_session: None,
-            pm_ran: None,
-        };
-        projects.replace_all(old.clone()).unwrap();
-        // A folder where the partial file goes, so the write fails
-        fs::create_dir(file.with_extension("json.partial")).unwrap();
-
-        let new = Project {
-            id: "new".to_owned(),
-            path: PathBuf::from("/work/new"),
-            pm_session: None,
-            pm_ran: None,
-        };
-        projects.replace_all(new).unwrap_err();
-
-        assert_eq!(projects.list(), [old]);
-    }
-
-    #[test]
-    fn a_project_that_cannot_be_kept_leaves_the_session_of_the_old_one() {
-        let dir = Dir::new();
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            None,
-        )
-        .unwrap();
-        state.set_project(PathBuf::from("/work/old")).unwrap();
-        fs::create_dir(dir.0.join("projects.json.partial")).unwrap();
-
-        state.set_project(PathBuf::from("/work/new")).unwrap_err();
-
-        assert_eq!(state.project_path(), Some(PathBuf::from("/work/old")));
-    }
-
-    #[test]
-    fn a_file_that_is_not_a_list_is_refused_naming_it() {
-        let dir = Dir::new();
-        let file = dir.0.join("projects.json");
-        fs::write(&file, r#"{"id":"a"}"#).unwrap();
-        let error = Projects::load(file).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("projects.json"), "{error}");
-    }
-
-    #[test]
-    fn a_session_waits_for_a_project() {
-        let dir = Dir::new();
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            None,
-        )
-        .unwrap();
-        assert_eq!(state.project_path(), None);
-        let error = state.pm_session().map(|_| ()).unwrap_err();
-        assert!(error.contains("Pick"), "{error}");
-        assert!(
-            dir.0.join("run.json").exists(),
-            "the tree wrote its run file"
-        );
-    }
-
-    #[test]
-    fn the_reaper_is_looked_for_beside_the_executable() {
-        assert_eq!(reaper_path().file_name().unwrap(), REAPER);
-        assert_eq!(
-            reaper_path().parent(),
-            std::env::current_exe().unwrap().parent(),
-            "the app looks for its reaper beside its own executable"
-        );
-    }
-
-    #[test]
-    fn a_run_with_no_reaper_to_start_never_opens() {
-        let dir = Dir::new();
-        let missing = dir.0.join("not-a-reaper");
-        let error = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|_| Err("never built".to_owned())),
-            Box::new(|| Ok(None)),
-            Some(&missing),
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("not-a-reaper"), "{error}");
-    }
-
-    /// A stand-in reaper: it blocks on its standard input and exits when it ends
-    ///
-    /// The reaper binary is `kelpie-reaper`'s, and `scripts/build-reaper.sh`
-    /// builds it into the sidecar folder. What these tests hold is the app's
-    /// half: the tree it opens has a reaper running before a session can be built.
-    #[cfg(unix)]
-    fn stand_in_reaper(dir: &Dir) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let path = dir.0.join("reaper");
-        fs::write(&path, "#!/bin/sh\ncat >/dev/null\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    /// Whether the process table still lists `pid` as running
-    #[cfg(unix)]
-    fn running(pid: u32) -> bool {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
-
-        let pid = Pid::from_u32(pid);
-        let mut system = System::new();
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            true,
-            ProcessRefreshKind::nothing().without_tasks(),
-        );
-        system.process(pid).is_some_and(|process| {
-            !matches!(
-                process.status(),
-                ProcessStatus::Zombie | ProcessStatus::Dead
-            )
-        })
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn the_reaper_starts_before_the_pm() {
-        let dir = Dir::new();
-        let reaper = stand_in_reaper(&dir);
-        let state = AppState::open(
-            dir.0.clone(),
-            ConfigDir::at(dir.0.join("config")),
-            Store::memory(),
-            Box::new(|opening| {
-                let reaper = opening
-                    .tree
-                    .reaper_id()
-                    .expect("the tree should hold a reaper by the time a PM is built");
-                assert!(running(reaper), "the reaper runs while the PM is built");
-                Err("no session here".to_owned())
-            }),
-            Box::new(|| Ok(None)),
-            Some(&reaper),
-        )
-        .unwrap();
-
-        let reaper = state
-            .tree()
-            .reaper_id()
-            .expect("the run has a reaper of its own");
-        assert!(running(reaper), "the reaper runs before any session exists");
-        assert!(state.held_session().is_none(), "no session before a send");
-
-        state.set_project(PathBuf::from("/work/one")).unwrap();
-        // The opener runs on this thread, and asserts from inside the build
-        state.pm_session().map(|_| ()).unwrap_err();
-
-        // Dropping the state closes the reaper's pipe, and the stand-in exits on
-        // the end of it. Waiting for that keeps the folder it lives in until the
-        // shell has read it.
-        drop(state);
-        let deadline = std::time::Instant::now() + STOP_GRACE;
-        while running(reaper) && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            !running(reaper),
-            "the reaper exits when the tree is dropped"
-        );
-    }
-}
+mod tests;

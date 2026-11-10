@@ -24,6 +24,7 @@
 //! # Ok::<(), kelpie_engine::settings::SettingsError>(())
 //! ```
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write as _};
@@ -193,6 +194,36 @@ const CONCISE_PLUS: &str = "## Replies
 - Say what you know and what you do not. Mark a guess as one.
 - Ask one question at a time, with your recommendation, when the maintainer has to choose.";
 
+/// Where a bridge's new versions come from (`docs/design/bridge-updates.md`, The setting)
+// wire format: a settings file holds these strings
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum BridgeUpdates {
+    /// The default. A version that passes the probe is used at each session's next idle point
+    #[default]
+    RegistryAutomatic,
+
+    /// A quiet notice with an Update button. It is not in the needs-you count, since nothing is blocked
+    RegistryAskFirst,
+
+    /// Only the version in kelpie's code, which changes with kelpie's releases
+    KelpiesPin,
+}
+
 /// One settings field
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -223,11 +254,14 @@ pub enum Field {
 
     /// Whether a harness may read its own global config folder
     HarnessGlobalFolder,
+
+    /// Where each bridge's new versions come from
+    BridgeUpdates,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 9] = [
+    pub const ALL: [Field; 10] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -237,6 +271,7 @@ impl Field {
         Field::NetworkAllowlist,
         Field::ReadAnywhere,
         Field::HarnessGlobalFolder,
+        Field::BridgeUpdates,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -252,6 +287,7 @@ impl Field {
             Self::NetworkAllowlist => "network-allowlist",
             Self::ReadAnywhere => "read-anywhere",
             Self::HarnessGlobalFolder => "harness-global-folder",
+            Self::BridgeUpdates => "bridge-updates",
         }
     }
 }
@@ -294,6 +330,9 @@ pub struct Settings {
 
     /// Whether a harness may read the global config folder it keeps for itself
     pub harness_global_folder: Option<bool>,
+
+    /// Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.
+    pub bridge_updates: Option<BTreeMap<String, BridgeUpdates>>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -375,6 +414,21 @@ pub struct Resolved {
 
     /// Whether a harness may read its own global config folder
     pub harness_global_folder: Layered<bool>,
+
+    /// Where each bridge's new versions come from, for the bridges a file names
+    pub bridge_updates: Layered<BTreeMap<String, BridgeUpdates>>,
+}
+
+impl Resolved {
+    /// Where `bridge`'s new versions come from: what the settings name for it, or the default
+    #[must_use]
+    pub fn bridge_updates_for(&self, bridge: &str) -> BridgeUpdates {
+        self.bridge_updates
+            .value
+            .get(bridge)
+            .copied()
+            .unwrap_or_default()
+    }
 }
 
 /// The JSON Schema a settings file must satisfy, from the Rust types

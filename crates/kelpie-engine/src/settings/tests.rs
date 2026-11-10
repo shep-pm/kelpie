@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Barrier;
@@ -149,10 +150,64 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: false,
                 from: Layer::BuiltIn,
             },
+            bridge_updates: Layered {
+                value: BTreeMap::new(),
+                from: Layer::BuiltIn,
+            },
         }
     );
     assert_eq!(BUILT_IN.reply_style, ReplyStyle::ConcisePlus);
     assert_eq!(BUILT_IN.network_allowlist, &[] as &[&str]);
+}
+
+#[test]
+fn bridge_updates_default_to_registry_automatic() {
+    let dir = Dir::new();
+
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+
+    assert_eq!(
+        settings.bridge_updates_for("claude-acp"),
+        BridgeUpdates::RegistryAutomatic
+    );
+    assert_eq!(settings.bridge_updates.from, Layer::BuiltIn);
+
+    Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::BridgeUpdates,
+        &json!({ "claude-acp": "kelpies-pin" }),
+    )
+    .unwrap();
+    let settings = Settings::load(&dir.config(), "web").unwrap();
+    assert_eq!(
+        settings.bridge_updates_for("claude-acp"),
+        BridgeUpdates::KelpiesPin
+    );
+    assert_eq!(
+        settings.bridge_updates_for("codex-acp"),
+        BridgeUpdates::RegistryAutomatic,
+        "a bridge the map does not name keeps the default"
+    );
+}
+
+#[test]
+fn a_bridge_update_policy_the_schema_does_not_know_is_refused() {
+    let dir = Dir::new();
+
+    let error = Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::BridgeUpdates,
+        &json!({ "claude-acp": "whenever" }),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, SettingsError::ValueRefused { .. }),
+        "{error}"
+    );
+    assert!(!dir.config().file(LayerFile::Global).unwrap().exists());
 }
 
 #[test]

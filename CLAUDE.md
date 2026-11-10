@@ -24,6 +24,10 @@ Kelpie is a hub of adapters: harnesses (Claude Code, Codex, pi, goose), the mode
 
 This covers what kelpie runs for people. Kelpie's own stack is settled in its ADRs.
 
+## New UX, SK's internals
+
+Kelpie's new work is mostly its UI and UX, which deliberately differs from SK's. Its internals, git behaviour above all, come from SK as SK built them (`docs/lift-plan.md`). A design that departs from SK's internals names its reason in its note. ACP in place of SK's per-harness CLIs is one such departure, and a welcome one. This is the maintainer's leaning, not a rule: a good reason to differ is worth raising.
+
 ## Design before building
 
 The maintainer asked for this gate and wants it held even when they push to skip it. Say so plainly when a feature is being rushed.
@@ -35,6 +39,8 @@ A feature's issues go `ready-for-agent` only once its design note in `docs/desig
 3. **Synergy:** what it reuses or connects to (the PM, sessions, the process tree, the board), and what it would duplicate.
 
 Each issue links its note. Workspace, CI and other plumbing with no behaviour of its own need no note.
+
+Grill the maintainer on new decisions only. An internal behaviour SK already settled, in its code, its ADRs or `docs/lift-plan.md`, comes over settled: the note states it and cites SK, and the maintainer reads it there. Ask about one only where kelpie has a reason to differ (New UX, SK's internals).
 
 ## Commands
 

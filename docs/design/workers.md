@@ -2,16 +2,16 @@
 
 Phase 2's worker sessions (`docs/process-and-sk.md`, Order of work): an agent that builds one ticket in its own worktree, inside its own sandbox, while the maintainer watches and steers it from the same chat view the PM uses. It places itself in `docs/design/ux.md` (Workers, Sandbox, Attention) and lifts most of its parts from SK, row by row from `docs/lift-plan.md` (Phase 2). Terms are in `GLOSSARY.md`.
 
-**Status:** draft for the maintainer, written on 2026-11-09. No issue is filed from it until it is confirmed.
+**Status:** confirmed by the maintainer on 2026-11-09.
 
 ## Use case
 
 Today SK's workers build kelpie headless: the maintainer sees a pull request at the end, and steers through rulings and `shep kelpie tell`. Kelpie can build itself only once it runs workers of its own.
 
-1. A ticket is ready. The maintainer clicks Start on it, or the PM asks to start it and the maintainer approves.
+1. A ticket is ready. The maintainer clicks Start on it, or the PM starts it.
 2. Kelpie makes the ticket a worktree and starts a worker there, on the harness and model the project's settings name.
 3. The maintainer opens the building ticket and sees the worker's stream, its diff so far and its processes. A Note reaches it at its next tool boundary. Stop and tell interrupts the turn.
-4. The worker commits in its worktree and ends its turn. Kelpie pushes the branch and opens the pull request, so the worker never holds a credential.
+4. The worker commits, pushes its branch and opens the pull request, with a token that reaches that one repo alone.
 5. When kelpie quits mid-turn, the worker comes back Paused on the next launch and resumes only when the maintainer says so.
 
 Why it matters: the maintainer can watch and redirect a worker instead of reading its result afterwards, and every harness kelpie has can do the building.
@@ -22,7 +22,7 @@ Why it matters: the maintainer can watch and redirect a worker instead of readin
 
 ```text
 ticket (Ready)
-  Start (the maintainer, or the PM's start_worker tool after approval)
+  Start (the maintainer, or the PM's start_worker tool)
     take a slot                    held while the 5-hour or week window is full
     prepare the worktree           a clone with its own git dir, from origin/main
     Sandbox::start                 the worker's policy
@@ -30,16 +30,16 @@ ticket (Ready)
       stream into the chat view    Note, Stop and tell
       tool calls judged            confine and guard, in the ACP permission handler
       kelpie lease run cargo test  waits its turn behind other workers
+      git push, open the PR        with its repo-scoped App token, judged by guard
     turn ends
-      fence check                  the diff against a trusted commit
-      kelpie pushes, opens the PR  through the forge adapter
+      fence check                  the branch's diff against a trusted commit
     slot freed, ticket to Review
 quit mid-turn: process stops, worker Paused, slot freed
 ```
 
 ### Starting one
 
-In Phase 2 a worker starts by hand: the Start button on a ticket, or the PM's `start_worker` tool, which raises the same approval prompt as a sandbox request (`docs/design/kelpie-tools.md`). Phase 3 adds the board's dispatch, which starts Ready tickets on its own. Both go through one function, so dispatch is a caller, not a second path.
+In Phase 2 a worker starts on request: the Start button on a ticket, or the PM's `start_worker` tool (`docs/design/kelpie-tools.md`), which needs no approval: starting work on a Ready ticket is the PM's job. Phase 3 adds the board's dispatch, which starts Ready tickets on its own. Both go through one function, so dispatch is a caller, not a second path.
 
 The worker is an agent file like any other (`docs/design/settings.md`): a built-in `kelpie:worker` that a project or the maintainer can `extends` or replace, with its harness, model, effort and instructions. Kelpie ships the default and requires none of it (ADR 0006).
 
@@ -60,18 +60,25 @@ Same shape as the PM's (ADR 0005), composed from SK's `WorkerProfile::reach` (`c
 | Reads | The project, its worktrees, sibling repos | Its worktree and the project, sibling repos |
 | Writes | Its own folder, its harness's config folder | Its worktree, its state folder, its harness's config folder |
 | Network | Model host plus the project's allowlist | The same |
-| Credentials | Denied | Denied, plus the clone's remote config and push flags |
+| Credentials | Denied | The maintainer's denied. Its own repo-scoped App token, in a `gh` folder of its own |
 | Everything else | Kelpie's tools | Kelpie's tools |
 
 Three checks sit on top of the sandbox, all lifted from SK:
 
 1. **Confine** (`core/confine/`): each file tool call is judged against the worktree before it runs. Kelpie calls `judge_path` in process from the ACP permission handler, where SK spawned `kelpie confine` as a hook. Every harness gets it, since every harness asks permission over ACP (ADR 0007).
 2. **Guard** (`core/guard/`): each shell command is read and its git calls judged in the same handler. `gh.rs` waits for the GitHub slice.
-3. **Fence** (`core/fence/`): when the turn ends, the worktree's diff is checked against a trusted commit, which catches what the sandbox's globs miss. A harness's own files (`.claude/`, `.codex/` and the rest) are refused, with the list supplied by each adapter.
+3. **Fence** (`core/fence/`): when the turn ends, the branch's diff is checked against a trusted commit, which catches what the sandbox's globs miss. A harness's own files (`.claude/`, `.codex/` and the rest) are refused, with the list supplied by each adapter.
 
 ### Pushing and the pull request
 
-The worker commits. Kelpie pushes, outside the sandbox, with the trusted git call, and opens the pull request through the forge adapter (GitHub first, `docs/lift-plan.md`, GitHub). SK's `push_commits` already refuses `Remote::Origin` from a worker, because its credential is scoped to one repo. Kelpie goes one step further: no credential enters the sandbox at all, which matches the PM (ADR 0005).
+As in SK: the worker pushes its own branch and opens its own pull request.
+
+1. Kelpie's GitHub App mints an installation token for the one repo, with `Grant::Worker` (`adapters/github/api.rs`): contents written, and workflows where the installation holds it. No comment, review, approval or merge.
+2. The token goes into a `gh` config folder of the worker's own (`core/profile/login.rs`), which git's credential helper answers from. No variable carries it: Codex drops variables named like tokens, and a variable shows in every process's environment.
+3. It lapses within the hour and is minted again five minutes before (`adapters/github/tokens.rs`). The maintainer's own logins stay denied.
+4. Kelpie pushes only to a fork, from outside the sandbox (`push_commits`), since a repo-scoped token cannot reach one.
+
+Other forges bring their own token through the forge adapter. The cost: a token that writes contents can push any branch, `main` included, and a private repo on the free plan has no ruleset. Guard judges every `git push`, but a direct API call is not git. Protecting `main` another way is left for later.
 
 ### Talking to a worker
 
@@ -83,9 +90,9 @@ As `docs/design/ux.md` (Workers) has it:
 
 ### Slots, pacing and leases
 
-1. **Slots** (`runner/slots.rs`, lifted): a per-project setting caps how many workers run at once. A worker that is Paused or waiting on the maintainer frees its slot (SK ADR 0007).
+1. **Slots** (`runner/slots.rs`, lifted): a per-project setting caps how many workers run at once, 2 by default. A worker that is Paused or waiting on the maintainer frees its slot (SK ADR 0007).
 2. **Pacing** (`core/pacer.rs`, lifted): a harness limit at 100% of its 5-hour or week window holds every new turn until it resets. Keyed by a limit id, so local models need none.
-3. **Leases** (`core/lease/counted.rs`, lifted as `kelpie lease run`): a capacity-N lease held by connection liveness, so two workers' `cargo test` runs take turns instead of starving the machine. The capacity per name is a setting.
+3. **Leases** (`core/lease/counted.rs`, lifted as `kelpie lease run`): a capacity-N lease held by connection liveness, so two workers' `cargo test` runs take turns instead of starving the machine. The capacity per name is a setting. `kelpie lease run` reaches kelpie through a socket in the worker's state folder, one per session, which the worker's policy allows. Kelpie tools go over stdio MCP, but a lease must live exactly as long as the command it wraps.
 4. **Flights** (`runner/flight/`, adapted as the worker supervisor): the running set, its news, and its ceilings. A ceiling counts from when the slot was granted, not from the launch.
 5. **Usage** (`runner/in_flight.rs`, `core/usage/`): a draft opens when the turn starts and is written once when it ends, from what ACP reports.
 
@@ -112,14 +119,4 @@ A worker cannot open kelpie's window inside its sandbox (`docs/lessons/2026-11-0
 | The board | Phase 3's dispatch calls the same start function |
 | Attention (`docs/design/ux.md`) | A Paused worker, a fence refusal or a sandbox request adds to the count |
 
-What it would duplicate: SK's runner, while SK still builds kelpie. Both building the same repo would race for the same tickets, so kelpie's workers run only on tickets SK does not hold until Phase 3 archives SK.
-
-## Open for the maintainer
-
-1. **The PM starts workers only with approval in Phase 2?** Recommended: yes, until the board's dispatch arrives in Phase 3.
-2. **Default slot cap.** Recommended: 1 per project, SK's default (`concurrency.active_items`, `core/settings/ci.rs:119`), raised in the project's settings. kelpie-app runs SK with 4.
-3. **How `kelpie lease run` reaches kelpie from inside the sandbox.** Kelpie tools go over stdio MCP, but a lease must live exactly as long as the command it wraps. Recommended: a socket in the worker's state folder that the policy allows, one per session.
-4. **An ADR for "kelpie pushes, workers hold no credential"?** Recommended: yes, since a forge adapter built around it is hard to undo.
-5. **Which tickets kelpie's workers may take while SK runs.** Recommended: a per-project setting, off for kelpie's own repo until Phase 3.
-
-Terms to add to `GLOSSARY.md` once confirmed: Worktree, Slot, Lease, Note, Stop and tell.
+What it would duplicate: nothing in practice. SK's runner builds kelpie until Phase 3, while the maintainer trials kelpie's Phase 2 workers on a project SK never touches.

@@ -213,6 +213,11 @@ fn fields(resolved: &Resolved, pm: &Defaulted, only: impl Fn(Field) -> bool) -> 
                 &resolved.harness_global_folder.value,
                 resolved.harness_global_folder.from,
             ),
+            Field::BridgeUpdates => layered(
+                field,
+                &resolved.bridge_updates.value,
+                resolved.bridge_updates.from,
+            ),
             // `Field` grows with each slice's settings, and a form shows only those it has
             _ => FieldView {
                 key: field.key().to_owned(),
