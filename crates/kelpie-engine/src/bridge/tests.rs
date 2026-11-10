@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
-use std::io::Read as _;
+use std::io::{self, Read as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,12 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use agent_client_protocol::{Channel, DynConnectTo};
+use semver::Version;
+
 use super::*;
 use crate::run::RunId;
-use crate::session::Harness;
 use crate::session::fake::FakeAgent;
+use crate::session::{Harness, Launch, Link};
 use crate::settings::BridgeUpdates;
-use semver::Version;
 
 /// The bridge every test installs
 const ID: &str = "claude-acp";
@@ -21,8 +25,19 @@ const VERSION: &str = "0.101.1";
 /// The command the fixtures hold, and the only one kelpie unpacks
 const CMD: &str = "claude-code-acp";
 
+/// The fixture's bridge that is run with a subcommand, as the live index's goose entry is
+const GOOSE: &str = "goose";
+const GOOSE_VERSION: &str = "1.2.0";
+const GOOSE_CMD: &str = "goose";
+const ACP: &str = "acp";
+const GOOSE_PROVIDER: &str = "GOOSE_PROVIDER";
+const OLLAMA: &str = "ollama";
+
 /// How long a fake bridge is given to answer the probe
 const ANSWER: Duration = Duration::from_secs(5);
+
+/// What the fake bridge says about why it never answered
+const NO_ARG: &str = "the bridge was started without its argument";
 
 /// What the command says, which is how a test tells a whole file from half one
 const COMMAND_TEXT: &str = "#!/bin/sh\necho kelpie bridge fixture\n";
@@ -36,9 +51,11 @@ const PLATFORMS: [Platform; 5] = [
     Platform::WindowsX64,
 ];
 
-/// The two archives the server answers with
+/// The archives the server answers with
 const TAR: &str = "bridge.tar.gz";
 const ZIP: &str = "bridge.zip";
+const GOOSE_TAR: &str = "goose.tar.gz";
+const GOOSE_ZIP: &str = "goose.zip";
 
 /// The registry's index, which the server answers with `{{base}}` made its own address
 const REGISTRY: &str = "registry.json";
@@ -123,7 +140,7 @@ fn answer(mut stream: TcpStream, addr: SocketAddr, delay: Duration, hits: &Atomi
     thread::sleep(delay);
     let name = path.trim_start_matches('/');
     let reply = match name {
-        TAR | ZIP => {
+        TAR | ZIP | GOOSE_TAR | GOOSE_ZIP => {
             hits.fetch_add(1, Ordering::SeqCst);
             let body = fs::read(fixture_path(name)).unwrap();
             let mut reply = format!(
@@ -190,6 +207,8 @@ fn download(server: &Server, name: &str) -> Download {
         url: server.url(name),
         sha256: hash_file(&fixture_path(name)).unwrap(),
         cmd: CMD.to_string(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
     }
 }
 
@@ -199,6 +218,8 @@ fn unfetched(name: &str) -> Download {
         url: format!("http://127.0.0.1:1/{name}"),
         sha256: hash_file(&fixture_path(name)).unwrap(),
         cmd: CMD.to_string(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
     }
 }
 
@@ -452,6 +473,8 @@ fn the_index_gives_a_pin_for_the_stable_version() {
             url: server.url(ZIP),
             sha256: hash_file(&fixture_path(ZIP)).unwrap(),
             cmd: CMD.to_string(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
         },
         "the command is the file's name, without the registry's ./"
     );
@@ -501,6 +524,48 @@ fn a_bridge_that_lost_a_capability_fails_the_probe_naming_it() {
     );
     assert!(error.to_string().contains("session/resume"), "{error}");
     assert_eq!(agent.stopped(), 1, "a failed probe still stops the bridge");
+}
+
+#[test]
+fn a_malformed_args_entry_gives_no_pin() {
+    let server = Server::start(Duration::ZERO);
+
+    let index = registry::fetch(&server.url(REGISTRY)).unwrap();
+
+    // Both fixture entries carry an archive for every platform kelpie ships on,
+    // so the shape of what they carry is the only reason kelpie has no pin
+    assert!(
+        index.bridge("malformed-args").is_none(),
+        "args that are not a list were read"
+    );
+    assert!(
+        index.bridge("malformed-env").is_none(),
+        "env that is not a map was read"
+    );
+    assert!(
+        index.bridge(GOOSE).is_some(),
+        "a well-shaped entry was left out too"
+    );
+}
+
+#[test]
+fn a_binary_pin_carries_its_args_and_env() {
+    let server = Server::start(Duration::ZERO);
+
+    let index = registry::fetch(&server.url(REGISTRY)).unwrap();
+
+    let pin = index.bridge(GOOSE).expect("goose is in the index");
+    let (_, archive) = pin
+        .platforms
+        .iter()
+        .find(|(platform, _)| *platform == this_platform())
+        .expect("the index has a goose archive for this platform");
+    assert_eq!(archive.args, [ACP.to_string()]);
+    assert_eq!(
+        archive.env,
+        BTreeMap::from([(GOOSE_PROVIDER.to_string(), OLLAMA.to_string())]),
+        "the entry's env was not read"
+    );
 }
 
 /// A version that is not kelpie's pin
@@ -665,6 +730,93 @@ fn a_newer_version_is_installed_probed_and_ready() {
     assert_eq!(versions.in_use, version(VERSION), "nothing swaps here");
     assert_eq!(versions.ready, Some(version("0.102.0")));
     assert!(versions.held_back.is_empty());
+}
+
+#[test]
+fn the_probe_starts_the_bridge_with_its_args() {
+    let dir = Dir::new();
+    let server = Server::start(Duration::ZERO);
+    let probed = std::cell::RefCell::new(Vec::<Harness>::new());
+    // `check` installs what the index names, so this pin's own archive is never fetched
+    let platforms = [(this_platform(), unfetched(GOOSE_TAR))];
+
+    let outcome = check::checked(
+        &server.url(REGISTRY),
+        dir.data(),
+        &goose_pin(&platforms),
+        BridgeUpdates::RegistryAutomatic,
+        &|harness| {
+            probed.borrow_mut().push(harness.clone());
+            let mut bridge = AnswersWithArg {
+                harness: harness.clone(),
+                agent: FakeAgent::new().can_resume(),
+            };
+            probe::probed_within(&mut bridge, &[Capability::ResumeSession], ANSWER)
+        },
+    );
+
+    assert_eq!(
+        outcome,
+        CheckOutcome::Ready {
+            version: version(GOOSE_VERSION)
+        },
+        "the bridge was held back"
+    );
+    let probed = probed.borrow();
+    let harness = probed.first().expect("the new version was probed");
+    assert_eq!(
+        harness.args,
+        [OsString::from(ACP)],
+        "the bridge was started bare"
+    );
+    assert_eq!(
+        harness.env,
+        [(OsString::from(GOOSE_PROVIDER), OsString::from(OLLAMA))],
+        "the bridge was started with no env of its own"
+    );
+    assert_eq!(
+        harness.program,
+        dir.data()
+            .join("bridges")
+            .join(GOOSE)
+            .join(GOOSE_VERSION)
+            .join(GOOSE_CMD),
+        "the bridge that was probed is not the one that was installed"
+    );
+}
+
+/// A pin for the fixture's bridge that carries its args, at a version older than the index's
+fn goose_pin(platforms: &[(Platform, Download)]) -> Pin<'_> {
+    Pin {
+        id: GOOSE,
+        registry_id: GOOSE,
+        version: "1.1.0",
+        platforms,
+    }
+}
+
+/// A bridge that answers `initialize` only when it was started with `ACP`
+///
+/// Started without it, it closes its end of the connection at once and says
+/// nothing, which the probe reads as the bridge ending before it answered.
+struct AnswersWithArg {
+    harness: Harness,
+    agent: FakeAgent,
+}
+
+impl Launch for AnswersWithArg {
+    fn launch(&mut self) -> io::Result<Link> {
+        if self.harness.args != [OsString::from(ACP)] {
+            let (client_side, agent_side) = Channel::duplex();
+            drop(agent_side);
+            return Ok(Link {
+                transport: DynConnectTo::new(client_side),
+                explain: Box::new(|| Some(NO_ARG.to_owned())),
+                stop: Box::new(|_| Some(NO_ARG.to_owned())),
+            });
+        }
+        self.agent.launch()
+    }
 }
 
 #[test]
