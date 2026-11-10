@@ -7,6 +7,7 @@
 //! is refused.
 
 use super::front::front;
+use super::{cut_short, cut_short_names};
 use crate::guard::values;
 
 /// The shell commands a git command's own options give it to run
@@ -25,11 +26,7 @@ pub(in crate::guard) fn scripts(words: &[String]) -> Vec<String> {
         _ => return Vec::new(),
     };
     // Git takes any start of a long option that names only one.
-    let long: Vec<&str> = long
-        .iter()
-        .flat_map(|name| (3..=name.len()).map(|n| &name[..n]))
-        .collect();
-    values(args, &long, short)
+    values(args, &cut_short_names(long), short)
 }
 
 // `git grep -O<pager>`: its value is optional, so only one joined to the option.
@@ -102,10 +99,11 @@ pub(super) fn safe(key: &str) -> bool {
     key.contains('.') && SAFE_SECTIONS.contains(&section) || SAFE_KEYS.contains(&key.as_str())
 }
 
-/// The key a `git config` command sets, when it sets one
-pub(super) fn config_set(args: &[String]) -> Option<&str> {
+/// The key a `git config` command sets, when it sets one. A section renamed to `new`
+/// sets every key of the old one there, as `new.`.
+pub(super) fn config_set(args: &[String]) -> Option<String> {
     // Options that read, or take no key and value, set nothing.
-    const READS: [&str; 12] = [
+    const READS: [&str; 10] = [
         "--get",
         "--get-all",
         "--get-regexp",
@@ -114,16 +112,18 @@ pub(super) fn config_set(args: &[String]) -> Option<&str> {
         "-l",
         "--unset",
         "--unset-all",
-        "--rename-section",
         "--remove-section",
-        "--edit",
-        "-e",
+        "--get-color",
     ];
     let mut positional = Vec::new();
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             w if READS.contains(&w) => return None,
+            w if cut_short(w, "--rename-section") => {
+                words.next();
+                return words.next().map(|new| format!("{new}."));
+            }
             "-f" | "--file" | "--blob" | "--type" | "--default" | "--comment" => {
                 words.next();
             }
@@ -132,16 +132,44 @@ pub(super) fn config_set(args: &[String]) -> Option<&str> {
         }
     }
     match positional[..] {
-        ["set", key, ..] | [key, _, ..] if !matches!(key, "get" | "list" | "unset") => Some(key),
+        ["set", key, ..] | [key, _, ..] if !matches!(key, "get" | "list" | "unset") => {
+            Some(key.to_owned())
+        }
         _ => None,
     }
+}
+
+/// Whether a `git config` command opens an editor, which can write any key
+pub(super) fn config_edits(args: &[String]) -> bool {
+    let mut positional = None;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "-f" | "--file" | "--blob" | "--type" | "--default" | "--comment" => {
+                words.next();
+            }
+            w if cut_short(w, "--edit") => return true,
+            w if w.starts_with("--") => {}
+            // Short options are bundled, as `-ge`.
+            w if w.starts_with('-') => {
+                if w.contains('e') {
+                    return true;
+                }
+            }
+            w => {
+                positional.get_or_insert(w);
+            }
+        }
+    }
+    positional == Some("edit")
 }
 
 /// Whether config `key`, set to `value`, has a push send more than the refs it names
 pub(super) fn pushes_more(key: &str, value: &str) -> bool {
     let on = !matches!(value, "false" | "no" | "off" | "0");
     match key {
-        "push.default" => value == "matching",
+        // `upstream` sends a bare push to the branch's upstream, which may be the base.
+        "push.default" => matches!(value, "matching" | "upstream" | "tracking"),
         "push.followtags" => on,
         "push.recursesubmodules" => on && value != "check",
         _ => {
@@ -225,8 +253,44 @@ mod tests {
             ("git config get core.pager", None),
             ("git config --unset core.pager", None),
             ("git config -l", None),
+            ("git config --rename-section color core", Some("core.")),
+            ("git config --rename color core", Some("core.")),
+            ("git config --remove-section color", None),
         ] {
-            assert_eq!(config_set(&w(line)[2..]), key, "{line}");
+            assert_eq!(config_set(&w(line)[2..]).as_deref(), key, "{line}");
+        }
+    }
+
+    #[test]
+    fn git_config_opens_an_editor_in_every_spelling() {
+        for line in [
+            "git config --edit",
+            "git config -e",
+            "git config --global -e",
+            "git config --ed",
+            "git config -ge",
+            "git config edit",
+            "git config --edit=x",
+        ] {
+            assert!(config_edits(&w(line)[2..]), "{line}");
+        }
+        for line in [
+            "git config core.pager x",
+            "git config -f edit core.pager",
+            "git config --list",
+            "git config user.name e",
+        ] {
+            assert!(!config_edits(&w(line)[2..]), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_push_default_that_goes_to_the_upstream_sends_more() {
+        for value in ["matching", "upstream", "tracking"] {
+            assert!(pushes_more("push.default", value), "{value}");
+        }
+        for value in ["simple", "current", "nothing"] {
+            assert!(!pushes_more("push.default", value), "{value}");
         }
     }
 }

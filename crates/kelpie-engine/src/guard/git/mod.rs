@@ -14,7 +14,8 @@ mod runs;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::shell::Quoting;
 use super::wrap::Reach;
@@ -120,6 +121,13 @@ pub(super) fn judge(
                 .to_owned(),
         );
     }
+    if front.exec_path {
+        out.push(
+            "kelpie cannot check git run with `--exec-path`, which has it run the programs in \
+             another folder, and a worker may have written them: run it without."
+                .to_owned(),
+        );
+    }
     if let Some(key) = front
         .config
         .iter()
@@ -157,21 +165,30 @@ pub(super) fn judge(
         && writes_remote_refs(sub, args)
         && !(front.redirected || git.redirected)
         && !git.after_new_repo
-        && fetch_reaches_clone(checkout.worktree, dir.as_deref())
+        && fetch_reaches_clone(&clone_roots(checkout), dir.as_deref())
     {
         out.push(fetch_answered(checkout.base));
         return out;
     }
-    if sub == "config"
-        && let Some(key) = runs::config_set(args)
-        && !runs::safe(key)
-    {
-        out.push(format!(
-            "kelpie cannot check git once its config names a program for it to run, and \
-             `{}` can: set only keys that run nothing, such as `color.*`, `user.*` or \
-             `core.quotepath`.",
-            key.chars().take(SHOWN_CHARS).collect::<String>()
-        ));
+    if sub == "config" {
+        if runs::config_edits(args) {
+            out.push(
+                "kelpie cannot check git config opened in an editor, which can write any key, \
+                 and one that names a program for git to run: set a key with `git config \
+                 <key> <value>`."
+                    .to_owned(),
+            );
+        }
+        if let Some(key) = runs::config_set(args)
+            && !runs::safe(&key)
+        {
+            out.push(format!(
+                "kelpie cannot check git once its config names a program for it to run, and \
+                 `{}` can: set only keys that run nothing, such as `color.*`, `user.*` or \
+                 `core.quotepath`.",
+                key.chars().take(SHOWN_CHARS).collect::<String>()
+            ));
+        }
     }
     // Where a push goes is judged wherever it runs from.
     let pushed = if sub == "push" {
@@ -194,9 +211,14 @@ pub(super) fn judge(
         Vec::new()
     };
     if sub == "commit" || sub == "tag" {
-        let messages: Vec<String> = values(args, &["--message"], &['m'])
+        let messages: Vec<String> = values(args, &cut_short_names(&["--message"]), &['m'])
             .into_iter()
-            .chain(files(args, &["--file"], &['F'], dir.as_deref()))
+            .chain(files(
+                args,
+                &cut_short_names(&["--file"]),
+                &['F'],
+                dir.as_deref(),
+            ))
             .chain(git.heredocs.iter().cloned())
             .collect();
         if let Some(leak) = home.find_in_prose(messages.iter().cloned()) {
@@ -248,9 +270,17 @@ pub(super) fn judge(
             .chain(sent)
             .collect()
     } else {
-        vec![Read::Commit {
-            all: all_tracked(args),
-        }]
+        let (all, paths) = match commit_paths(args) {
+            _ if all_tracked(args) => (true, Vec::new()),
+            // A path list kept in a file, or paths from a folder the read cannot
+            // follow them from, are every tracked change.
+            None => (true, Vec::new()),
+            Some(paths) if !paths.is_empty() && !at_root(checkout.worktree, dir.as_deref()) => {
+                (true, Vec::new())
+            }
+            Some(paths) => (false, paths),
+        };
+        vec![Read::Commit { all, paths }]
     };
     for key in keys {
         let found = reads
@@ -276,8 +306,9 @@ pub(super) fn judge(
 /// One read of the worktree's git, keyed so a call makes it once
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Read {
-    /// What a commit adds: staged, or every tracked change with `all`
-    Commit { all: bool },
+    /// What a commit adds: staged, plus the content of the `paths` it names, or
+    /// every tracked change with `all`
+    Commit { all: bool, paths: Vec<String> },
     /// What a push of this source sends past `origin`'s base branch
     Push(String),
     /// The branch checked out, where a push of `HEAD` alone goes
@@ -357,6 +388,10 @@ fn fetch_answered(base: &str) -> String {
     )
 }
 
+// What to do about a tag whose message names this machine
+const RETAG: &str = "That tag has not left this machine: delete it with `git tag -d <name>` and \
+                     make it again without that.";
+
 /// The refusal for a push to the base branch
 fn to_base(base: &str) -> String {
     format!(
@@ -431,6 +466,113 @@ fn all_tracked(args: &[String]) -> bool {
         .any(|a| a == "--all" || a.starts_with('-') && !a.starts_with("--") && a.contains('a'))
 }
 
+// Each annotated tag `source` names, through tags of tags, and its message.
+fn tag_messages(
+    source: &str,
+    run: &impl Fn(&[&str]) -> Result<String, WorktreeError>,
+) -> Result<Vec<String>, WorktreeError> {
+    // A chain longer than this is no tag a worker made by hand.
+    const DEPTH: usize = 16;
+    let mut messages = Vec::new();
+    let mut at = source.to_owned();
+    for _ in 0..DEPTH {
+        if run(&["cat-file", "-t", &at])?.trim() != "tag" {
+            break;
+        }
+        let tag = run(&["cat-file", "tag", &at])?;
+        let (head, message) = tag.split_once("\n\n").unwrap_or((&tag, ""));
+        messages.push(message.to_owned());
+        match head.lines().find_map(|line| line.strip_prefix("object ")) {
+            Some(next) => at = next.to_owned(),
+            None => break,
+        }
+    }
+    Ok(messages)
+}
+
+// Git takes any start of a long option that names only one, as `--mess`.
+fn cut_short_names<'a>(names: &[&'a str]) -> Vec<&'a str> {
+    names
+        .iter()
+        .flat_map(|name| (3..=name.len()).map(|n| &name[..n]))
+        .collect()
+}
+
+// Whether `word` is `option`, or a start of it git takes for it, with an `=` value
+// or without. One that could be another option too is an error to git.
+fn cut_short(word: &str, option: &str) -> bool {
+    let name = word.split_once('=').map_or(word, |(name, _)| name);
+    name.len() >= 3 && option.starts_with(name)
+}
+
+// The paths a `git commit` names, which it commits as they are in the working tree.
+// `None` when they come from a file.
+fn commit_paths(args: &[String]) -> Option<Vec<String>> {
+    // Options that take the next word as their value, or an `=` one.
+    const VALUED: [&str; 11] = [
+        "--message",
+        "--file",
+        "--reuse-message",
+        "--reedit-message",
+        "--template",
+        "--author",
+        "--date",
+        "--cleanup",
+        "--trailer",
+        "--fixup",
+        "--squash",
+    ];
+    // Short options whose value is the rest of their word, or the next word.
+    const SHORT_VALUED: [char; 5] = ['m', 'F', 'C', 'c', 't'];
+    let mut paths = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            paths.extend(words.by_ref().cloned());
+        } else if let Some(long) = word.strip_prefix("--") {
+            if cut_short(word, "--pathspec-from-file") {
+                return None;
+            }
+            let valued = VALUED.iter().any(|option| cut_short(word, option));
+            if valued && !long.contains('=') {
+                words.next();
+            }
+        } else if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+            if let Some(at) = cluster.find(SHORT_VALUED)
+                && cluster[at + 1..].is_empty()
+            {
+                words.next();
+            }
+        } else {
+            paths.push(word.clone());
+        }
+    }
+    Some(paths)
+}
+
+// Whether `dir` is the worktree's own folder, which the pathspecs of a read run from.
+fn at_root(worktree: &Path, dir: Option<&Path>) -> bool {
+    matches!(
+        (worktree.canonicalize(), dir.map(Path::canonicalize)),
+        (Ok(worktree), Some(Ok(dir))) if worktree == dir
+    )
+}
+
+// The folders whose repo is the ticket's shared clone: its own worktree, the
+// project's repo, and every other worktree the repo lists.
+fn clone_roots(checkout: Checkout<'_>) -> Vec<PathBuf> {
+    let mut roots = vec![checkout.worktree.to_owned(), checkout.repo.to_owned()];
+    let listed = checkout.repo.join(".git").join("worktrees");
+    for entry in fs::read_dir(listed).into_iter().flatten().flatten() {
+        // Each lists the `.git` file of its worktree.
+        let Ok(gitdir) = fs::read_to_string(entry.path().join("gitdir")) else {
+            continue;
+        };
+        roots.extend(Path::new(gitdir.trim()).parent().map(Path::to_owned));
+    }
+    roots.iter().filter_map(|r| r.canonicalize().ok()).collect()
+}
+
 // Plain patches: no colour, and no program the repo's config names.
 const PLAIN: [&str; 4] = [
     "--unified=0",
@@ -482,16 +624,41 @@ fn read(
                 let what = "a message in the commits this push sends";
                 out.push(home.refusal(what, leak, REWRITE));
             }
+            // A tag's own message goes with it, and `log` never reads one.
+            for message in tag_messages(source, &run)? {
+                if let Some(leak) = home.find_in_prose([message]) {
+                    let what = "the message of a tag this push sends";
+                    out.push(home.refusal(what, leak, RETAG));
+                }
+            }
             let sent = patches(&["log", "-p", "--format=", source, "--not", &tip])?;
             for (file, leak) in home.added(&sent) {
                 let what = format!("{file} in the commits this push sends");
                 out.push(home.refusal(&what, leak, REWRITE));
             }
         }
-        Read::Commit { all } => {
-            let range = if *all { "HEAD" } else { "--cached" };
-            for (file, leak) in home.added(&patches(&["diff", range])?) {
-                out.push(home.refusal(&format!("this commit's {file}"), leak, WRITE));
+        Read::Commit { all, paths } => {
+            let mut diffs = Vec::new();
+            if *all {
+                diffs.push(patches(&["diff", "HEAD"])?);
+            } else {
+                diffs.push(patches(&["diff", "--cached"])?);
+                // `git commit <path>` takes the path's working-tree content.
+                if !paths.is_empty() {
+                    let mut args = vec!["diff", "HEAD"];
+                    args.extend(PLAIN);
+                    args.push("--");
+                    args.extend(paths.iter().map(String::as_str));
+                    diffs.push(run(&args)?);
+                }
+            }
+            for diff in diffs {
+                for (file, leak) in home.added(&diff) {
+                    let refusal = home.refusal(&format!("this commit's {file}"), leak, WRITE);
+                    if !out.contains(&refusal) {
+                        out.push(refusal);
+                    }
+                }
             }
         }
     }
@@ -513,13 +680,14 @@ fn in_own_repo(worktree: &Path, dir: Option<&Path>) -> bool {
             .all(no_repo_between)
 }
 
-// Whether a fetch reaches the ticket's shared clone. git searches upward for a
-// repo, so a folder kelpie cannot follow, or one the call made inside the
-// worktree, reaches it too. Only a repo of the worker's own, in the folder or
-// between it and the worktree, keeps a fetch out of the answer.
-fn fetch_reaches_clone(worktree: &Path, dir: Option<&Path>) -> bool {
+// Whether a fetch reaches the ticket's shared clone: from its repo or any of its
+// worktrees. git searches upward for a repo, so a folder kelpie cannot follow, or
+// one the call made inside a worktree, reaches it too. Only a repo of the
+// worker's own, in the folder or between it and the clone's root, keeps a fetch
+// out of the answer.
+fn fetch_reaches_clone(roots: &[PathBuf], dir: Option<&Path>) -> bool {
     // A folder kelpie cannot follow: the only repo it can name is the ticket's.
-    let (Ok(worktree), Some(dir)) = (worktree.canonicalize(), dir) else {
+    let (false, Some(dir)) = (roots.is_empty(), dir) else {
         return true;
     };
     // The deepest part of the path that is there, with its links resolved, and
@@ -541,11 +709,13 @@ fn fetch_reaches_clone(worktree: &Path, dir: Option<&Path>) -> bool {
             .into_iter()
             .fold(base, |folder, name| folder.join(name))
     };
-    folder.starts_with(&worktree)
-        && folder
-            .ancestors()
-            .take_while(|a| *a != worktree)
-            .all(no_repo_between)
+    roots.iter().any(|root| {
+        folder.starts_with(root)
+            && folder
+                .ancestors()
+                .take_while(|a| a != root)
+                .all(no_repo_between)
+    })
 }
 
 // Whether one folder of the worktree holds no repo of its own

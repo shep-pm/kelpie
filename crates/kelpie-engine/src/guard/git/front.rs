@@ -17,6 +17,8 @@ pub(super) struct Front<'a> {
     pub redirected: bool,
     // Whether `-c`, `--config-env` or `--exec-path` changes its config.
     pub configured: bool,
+    // Whether `--exec-path=<dir>` has it run its helpers from a folder of the worker's.
+    pub exec_path: bool,
     // Each `-c` and `--config-env` setting, as `key=value`.
     pub config: Vec<&'a str>,
 }
@@ -52,7 +54,10 @@ pub(super) fn front(words: &[String]) -> Result<Front<'_>, String> {
                         front.configured = true;
                         front.config.push(value);
                     }
-                    "--exec-path" => front.configured = true,
+                    "--exec-path" => {
+                        front.configured = true;
+                        front.exec_path = true;
+                    }
                     "--namespace" | "--super-prefix" | "--attr-source" | "--list-cmds" => {}
                     _ => return Err(unknown_option(w)),
                 }

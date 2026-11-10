@@ -262,6 +262,8 @@ fn push_config_that_sends_more_than_the_push_names_is_refused() {
         ("remote.origin.push", "refs/heads/*:refs/heads/*"),
         ("remote.origin.mirror", "true"),
         ("push.default", "matching"),
+        ("push.default", "upstream"),
+        ("push.default", "tracking"),
         ("push.followTags", "true"),
         ("push.recurseSubmodules", "on-demand"),
     ] {
