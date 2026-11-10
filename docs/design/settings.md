@@ -54,6 +54,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Provider and host | Global, project | For a harness that runs a model on a server, such as goose on Ollama |
 | Login | Global | Per harness, in the keychain. The field says *set* or *not set* and never shows the value. For Claude Code it is pasted, beside the command that makes it (`claude setup-token`). Kelpie running that command itself waits for the drawer's terminal |
 | Reply style | Global, project | Kelpie's Concise-plus style by default (`ux.md`, item 4) |
+| Theme | Global | *System* by default, *Light* or *Dark*. *System* follows the OS as the app did before the setting. The choice sets the window's own theme too (Tauri's `setTheme`), so the title bar matches the page, and it is read before the window's first paint, so a launch shows no flash of the other theme. A quick toggle elsewhere waits until one is missed |
 | Network allowlist | Project | Domains a sandbox request saved with *Allow for this project* (ADR 0005) |
 | Read anywhere by default | Project | Off (`ux.md`, Sandbox). On, it opens the whole file system and keeps every harness's login, every secret and every other session's state folder closed |
 | Run without a sandbox | Project | Off. Applies only while this machine's sandbox cannot start, and only to the PM and its threads (`sandbox-setup.md`) |
@@ -69,7 +70,7 @@ The editor: the frontmatter as the layered form, the body in an MDX editor (chel
 
 ### When a change applies
 
-From the next message, as `pm-chat.md` settles for switching. A model change keeps the session. A harness change starts a new one behind a divider.
+From the next message, as `pm-chat.md` settles for switching. Theme applies at once, with no restart. A model change keeps the session. A harness change starts a new one behind a divider.
 
 Read anywhere by default and Harness global folder are the exception: each lands at the session's next start, a relaunch or a harness switch, since crabpot widens only the network lists of a sandbox that is already running, and a link is made when the session's config folder is built.
 
