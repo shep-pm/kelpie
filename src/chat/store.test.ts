@@ -1,6 +1,6 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogEntry, SessionEvent } from "@/bindings";
+import type { LogEntry, SandboxAnswer, SessionEvent } from "@/bindings";
 
 // The real Channel needs Tauri's IPC bridge, which jsdom has not got.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -24,6 +24,15 @@ const pmHistory =
       { status: "ok"; data: LogEntry[] } | { status: "error"; error: string }
     >
   >();
+const pmAnswer =
+  vi.fn<
+    (
+      id: string,
+      answer: SandboxAnswer,
+    ) => Promise<
+      { status: "ok"; data: null } | { status: "error"; error: string }
+    >
+  >();
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -31,6 +40,7 @@ vi.mock("@/bindings", () => ({
     pmCancel: () => pmCancel(),
     pmRetry: (on: Channel<SessionEvent>) => pmRetry(on),
     pmHistory: () => pmHistory(),
+    pmAnswer: (id: string, answer: SandboxAnswer) => pmAnswer(id, answer),
     projectGet: async () => "/work/project",
     projectPick: async () => ({ status: "ok", data: "/work/project" }),
   },
@@ -44,6 +54,14 @@ function emit(event: SessionEvent) {
   if (!channel?.onmessage) throw new Error("no channel is listening");
   channel.onmessage(event);
 }
+
+/** One `request_network` call, and the event it puts on its turn. */
+const asked = {
+  id: "net-1",
+  host: "docs.rs",
+  why: "to read the tokio::process docs",
+};
+const askedEvent: SessionEvent = { kind: "sandbox_request", ...asked };
 
 const usage = {
   input: 1200,
@@ -61,6 +79,8 @@ beforeEach(() => {
   pmRetry.mockResolvedValue(undefined);
   pmHistory.mockReset();
   pmHistory.mockResolvedValue({ status: "ok", data: [] });
+  pmAnswer.mockReset();
+  pmAnswer.mockResolvedValue({ status: "ok", data: null });
   useChat.getState().reset();
 });
 
@@ -88,6 +108,70 @@ describe("the chat store", () => {
     expect(useChat.getState().turns[0]?.steps).toEqual([
       { id: "a", title: "Read a.ts", status: "done" },
       { id: "b", title: "Read b.ts", status: "running" },
+    ]);
+  });
+
+  it("a sandbox request stays on its turn until it is answered", async () => {
+    await useChat.getState().send("go");
+    emit(askedEvent);
+    emit({ kind: "text", delta: "Waiting on you" });
+
+    expect(useChat.getState().turns[0]?.sandboxRequests).toEqual([
+      { ...asked, answer: null },
+    ]);
+  });
+
+  it("answering a sandbox request sends the answer and keeps it on the turn", async () => {
+    await useChat.getState().send("go");
+    emit(askedEvent);
+
+    await useChat.getState().answer("net-1", "project");
+
+    expect(pmAnswer).toHaveBeenCalledWith("net-1", "project");
+    expect(useChat.getState().turns[0]?.sandboxRequests).toEqual([
+      { ...asked, answer: "project" },
+    ]);
+  });
+
+  it("an answer the app could not carry out says so on the request", async () => {
+    pmAnswer.mockResolvedValue({
+      status: "error",
+      error: "docs.rs is allowed for this session, but not saved",
+    });
+    await useChat.getState().send("go");
+    emit(askedEvent);
+
+    await useChat.getState().answer("net-1", "project");
+
+    expect(useChat.getState().turns[0]?.sandboxRequests).toEqual([
+      {
+        ...asked,
+        answer: "project",
+        error: "docs.rs is allowed for this session, but not saved",
+      },
+    ]);
+  });
+
+  it("a request still waiting when the turn ends is denied", async () => {
+    await useChat.getState().send("go");
+    emit(askedEvent);
+    emit({
+      kind: "sandbox_request",
+      id: "net-2",
+      host: "crates.io",
+      why: "to check the crate versions",
+    });
+    await useChat.getState().answer("net-1", "once");
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+
+    expect(useChat.getState().turns[0]?.sandboxRequests).toEqual([
+      { ...asked, answer: "once" },
+      {
+        id: "net-2",
+        host: "crates.io",
+        why: "to check the crate versions",
+        answer: "deny",
+      },
     ]);
   });
 

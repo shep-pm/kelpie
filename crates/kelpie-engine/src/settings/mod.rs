@@ -751,19 +751,32 @@ impl Settings {
         field: Field,
         value: &Value,
     ) -> Result<(), SettingsError> {
-        let file = dir.file(at)?;
         let _held = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut doc = schema::read(dir, at)?;
-        let rule = schema::field_schema(field, at.layer())?;
-        if value.is_null() {
-            doc.fields.remove(field.key());
-        } else {
-            if let Some((_, reason)) = schema::check(&rule, value, field.key()) {
-                return Err(SettingsError::ValueRefused { field, reason });
-            }
-            doc.fields.insert(field.key().to_string(), value.clone());
-        }
-        write(&file, &doc.fields)
+        write_field(dir, at, field, value)
+    }
+
+    /// Write one field of one layer with what `make` builds from what the layers resolve to now
+    ///
+    /// The resolve and the write are one step under the write lock, so two calls
+    /// that each add to a list cannot leave the file holding only the last one's
+    /// entry. [`Settings::set`] reads only the file it writes, which is not
+    /// enough for a list meant to keep what the layers below it already hold.
+    ///
+    /// # Errors
+    ///
+    /// As [`Settings::load`] for the read, and as [`Settings::set`] for the write.
+    pub fn update(
+        dir: &ConfigDir,
+        at: LayerFile<'_>,
+        field: Field,
+        make: impl FnOnce(&Resolved) -> Value,
+    ) -> Result<(), SettingsError> {
+        let _held = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
+        let resolved = match at {
+            LayerFile::Global => Self::load_global(dir)?,
+            LayerFile::Project(id) => Self::load(dir, id)?,
+        };
+        write_field(dir, at, field, &make(&resolved))
     }
 
     /// Clear one field of one layer, so its value falls back to the layer below
@@ -782,6 +795,30 @@ impl Settings {
         }
         write(&file, &doc.fields)
     }
+}
+
+/// Read one layer's file, set one field in it, and write it back
+///
+/// [`WRITES`] is held by the caller, which is what keeps a read, change and
+/// write of one file from losing another thread's change.
+fn write_field(
+    dir: &ConfigDir,
+    at: LayerFile<'_>,
+    field: Field,
+    value: &Value,
+) -> Result<(), SettingsError> {
+    let file = dir.file(at)?;
+    let mut doc = schema::read(dir, at)?;
+    let rule = schema::field_schema(field, at.layer())?;
+    if value.is_null() {
+        doc.fields.remove(field.key());
+    } else {
+        if let Some((_, reason)) = schema::check(&rule, value, field.key()) {
+            return Err(SettingsError::ValueRefused { field, reason });
+        }
+        doc.fields.insert(field.key().to_string(), value.clone());
+    }
+    write(&file, &doc.fields)
 }
 
 /// Replace one layer's file with `fields`, creating its folder when it is not there

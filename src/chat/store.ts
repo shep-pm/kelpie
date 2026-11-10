@@ -3,12 +3,28 @@ import { create } from "zustand";
 import {
   commands,
   type LogEntry,
+  type SandboxAnswer,
   type SessionEvent,
   type ToolStatus,
   type Usage,
 } from "@/bindings";
 
 export type Step = { id: string; title: string; status: ToolStatus };
+
+/**
+ * A host the PM's sandbox refused, which the maintainer answers.
+ *
+ * `answer` is `null` while it waits. A request the turn ended without an answer
+ * is denied, which is what the engine did with it.
+ */
+export type SandboxRequest = {
+  id: string;
+  host: string;
+  why: string;
+  answer: SandboxAnswer | null;
+  /** Why the answer did not fully land, in kelpie's own words. */
+  error?: string;
+};
 
 /** `interrupted`: the log has the message and no end, because kelpie quit mid-turn. */
 export type TurnState =
@@ -28,6 +44,7 @@ export type Turn = {
   user: string;
   reply: string;
   steps: Step[];
+  sandboxRequests: SandboxRequest[];
   usage: Usage | null;
   state: TurnState;
   error?: string;
@@ -48,12 +65,38 @@ type Chat = {
   retry: () => Promise<void>;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
+  /**
+   * Answer the sandbox request `id` with `answer`.
+   *
+   * The answer is shown at once: the engine takes it before this call returns,
+   * and only saving a *Allow for this project* can still fail, which the request
+   * then says in its own line.
+   */
+  answer: (id: string, answer: SandboxAnswer) => Promise<void>;
   /** Forget every turn. For tests. */
   reset: () => void;
 };
 
 function patch(turns: Turn[], id: number, change: (turn: Turn) => Turn) {
   return turns.map((turn) => (turn.id === id ? change(turn) : turn));
+}
+
+/** Change the sandbox request `id`, in whichever turn holds it. */
+function patchRequest(
+  turns: Turn[],
+  id: string,
+  change: (asked: SandboxRequest) => SandboxRequest,
+) {
+  return turns.map((turn) =>
+    turn.sandboxRequests.some((asked) => asked.id === id)
+      ? {
+          ...turn,
+          sandboxRequests: turn.sandboxRequests.map((asked) =>
+            asked.id === id ? change(asked) : asked,
+          ),
+        }
+      : turn,
+  );
 }
 
 /** A turn a `Failed` ended goes on running when more of it arrives. */
@@ -76,11 +119,29 @@ function apply(turn: Turn, event: SessionEvent): Turn {
           : turn.steps.map((s, i) => (i === at ? step : s));
       return { ...turn, state: resumed(turn), steps };
     }
+    case "sandbox_request": {
+      const asked: SandboxRequest = {
+        id: event.id,
+        host: event.host,
+        why: event.why,
+        answer: null,
+      };
+      return {
+        ...turn,
+        state: resumed(turn),
+        sandboxRequests: [...turn.sandboxRequests, asked],
+      };
+    }
     case "turn_ended":
+      // The engine answers every request the turn left waiting as denied, so the
+      // maintainer is never offered a button that no longer reaches anything.
       return {
         ...turn,
         usage: event.usage,
         state: event.stop_reason === "cancelled" ? "cancelled" : "done",
+        sandboxRequests: turn.sandboxRequests.map((asked) =>
+          asked.answer === null ? { ...asked, answer: "deny" } : asked,
+        ),
       };
     case "failed":
       // The protocol cannot tell a `Failed` the turn survives from one that
@@ -103,6 +164,7 @@ function begin(user: string, dividers: string[] = []): Turn {
     user,
     reply: "",
     steps: [],
+    sandboxRequests: [],
     usage: null,
     state: "running",
   };
@@ -224,6 +286,21 @@ export const useChat = create<Chat>()((set, get) => {
 
     async cancel() {
       await commands.pmCancel();
+    },
+
+    async answer(id, answer) {
+      set((s) => ({
+        turns: patchRequest(s.turns, id, (asked) => ({ ...asked, answer })),
+      }));
+      const done = await commands.pmAnswer(id, answer);
+      if (done.status === "error") {
+        set((s) => ({
+          turns: patchRequest(s.turns, id, (asked) => ({
+            ...asked,
+            error: done.error,
+          })),
+        }));
+      }
     },
 
     reset() {

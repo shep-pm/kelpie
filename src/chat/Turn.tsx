@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Divider } from "./Divider";
+import { SandboxRequest } from "./SandboxRequest";
 import { type Turn as TurnData, useChat } from "./store";
 import { ToolSteps } from "./ToolSteps";
 import { UsageFooter } from "./UsageFooter";
@@ -40,6 +41,28 @@ function UserBubble({ id }: { id: number }) {
 function StepsOfTurn({ id }: { id: number }) {
   const steps = useField(id, "steps");
   return <ToolSteps steps={steps ?? []} />;
+}
+
+/**
+ * The turn's sandbox requests, answered or waiting.
+ *
+ * Only the first waiting one is open: the rest queue behind it as a count, so a
+ * turn never stacks prompts (`docs/design/system/`, SandboxRequest).
+ */
+function RequestsOfTurn({ id }: { id: number }) {
+  const requests = useField(id, "sandboxRequests") ?? [];
+  const open = requests.filter((asked) => asked.answer === null);
+  const first = open[0];
+  return requests.map((asked) =>
+    asked.answer === null && asked !== first ? null : (
+      <SandboxRequest
+        key={asked.id}
+        request={asked}
+        queued={asked === first ? open.length - 1 : 0}
+        onAnswer={(answer) => void useChat.getState().answer(asked.id, answer)}
+      />
+    ),
+  );
 }
 
 function Reply({ id }: { id: number }) {
@@ -134,6 +157,7 @@ export function Turn({ id }: { id: number }) {
       <UserBubble id={id} />
       <Interrupted id={id} />
       <StepsOfTurn id={id} />
+      <RequestsOfTurn id={id} />
       <Reply id={id} />
       <Failure id={id} />
       <Footer id={id} />
