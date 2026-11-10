@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
+use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
@@ -37,6 +38,9 @@ const PROJECTS_FOLDER: &str = "projects";
 
 /// The folder inside a project's folder that holds its PM's harness state
 const PM_FOLDER: &str = "pm";
+
+/// The PM's log, by name, in its state folder
+const PM_LOG_FILE: &str = "log.jsonl";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -378,21 +382,37 @@ impl AppState {
             session.choose(plan.choice.clone());
             return Ok((Arc::clone(session), handle));
         }
-        let state_dir = self
-            .data_dir
-            .join(PROJECTS_FOLDER)
-            .join(&project.id)
-            .join(PM_FOLDER);
-        let session = Arc::new((self.opener)(&Opening {
-            tree: &self.tree,
-            data_dir: &self.data_dir,
-            project: &project,
-            state_dir: &state_dir,
-            logins: &self.logins,
-            pm: &plan,
-        })?);
+        let state_dir = self.pm_dir(&project.id);
+        let log = Log::open(state_dir.join(PM_LOG_FILE))
+            .map_err(|error| format!("could not open the PM's log: {error}"))?;
+        let session = Arc::new(
+            (self.opener)(&Opening {
+                tree: &self.tree,
+                data_dir: &self.data_dir,
+                project: &project,
+                state_dir: &state_dir,
+                logins: &self.logins,
+                pm: &plan,
+            })?
+            .with_log(log),
+        );
         *lock(&self.session) = Some((plan.harness, Arc::clone(&session)));
         Ok((session, handle))
+    }
+
+    /// The folder of the PM's harness state and log for the project `id`
+    fn pm_dir(&self, id: &str) -> PathBuf {
+        self.data_dir.join(PROJECTS_FOLDER).join(id).join(PM_FOLDER)
+    }
+
+    /// Where the first project's PM log is, `None` before a project is picked
+    ///
+    /// The path only: it opens nothing, so reading history never builds a
+    /// session or starts a process.
+    #[must_use]
+    pub fn pm_log_path(&self) -> Option<PathBuf> {
+        let id = lock(&self.projects).first()?.id.clone();
+        Some(self.pm_dir(&id).join(PM_LOG_FILE))
     }
 
     /// The id of the project `id` names, or of the first when `None`
@@ -427,12 +447,17 @@ impl AppState {
             .map(|(_, session)| Arc::clone(session))
     }
 
-    /// Stop every process of this run
+    /// Stop every process of this run, and stop logging the PM
     ///
     /// # Errors
     ///
     /// The first process that could not be stopped, after the others were tried.
     pub fn stop_all(&self) -> io::Result<()> {
+        // First, so the `Failed` that stopping the harness gives the turn in
+        // flight stays out of the log, and the turn relaunches as interrupted
+        if let Some(session) = self.held_session() {
+            session.close_log();
+        }
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }
 }

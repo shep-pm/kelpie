@@ -42,6 +42,8 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             pm::project_pick,
             pm::pm_send,
             pm::pm_cancel,
+            pm::pm_history,
+            pm::pm_retry,
             settings::login_set,
             settings::login_status,
             settings::login_clear,

@@ -1,3 +1,4 @@
+import { RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
@@ -81,6 +82,34 @@ function Failure({ id }: { id: number }) {
   );
 }
 
+/**
+ * What a quit cut off (`TurnMarkers`): a badge under the message, and Retry on
+ * the last turn, the only one that can be sent again.
+ */
+function Interrupted({ id }: { id: number }) {
+  const state = useField(id, "state");
+  const last = useChat((s) => s.turns.at(-1)?.id === id);
+  if (state !== "interrupted") return null;
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <span className="flex items-center gap-2 text-xs text-status-failed-fg">
+        <X className="size-3" strokeWidth={1.75} aria-hidden="true" />
+        Interrupted when kelpie quit
+      </span>
+      {last && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void useChat.getState().retry()}
+        >
+          <RotateCcw aria-hidden="true" />
+          Retry
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function Footer({ id }: { id: number }) {
   const usage = useField(id, "usage");
   return usage ? <UsageFooter usage={usage} /> : null;
@@ -90,6 +119,7 @@ export function Turn({ id }: { id: number }) {
   return (
     <article className="flex flex-col gap-2">
       <UserBubble id={id} />
+      <Interrupted id={id} />
       <StepsOfTurn id={id} />
       <Reply id={id} />
       <Failure id={id} />

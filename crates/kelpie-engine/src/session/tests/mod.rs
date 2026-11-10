@@ -394,15 +394,6 @@ fn an_unlisted_model_fails_and_keeps_the_default() {
     assert!(agent.params("session/set_config_option").is_empty());
 }
 
-/// One value the fake agent lists, which names it the same way it values it
-fn listed(value: &str) -> kelpie_protocol::Choice {
-    kelpie_protocol::Choice {
-        id: value.to_owned(),
-        name: value.to_owned(),
-        description: None,
-    }
-}
-
 /// A folder of this test's own, for what kelpie keeps of a harness's answers
 fn data_folder() -> PathBuf {
     use crate::run::RunId;
@@ -410,152 +401,6 @@ fn data_folder() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-#[test]
-fn asking_options_sends_no_prompt_and_stops_the_harness() {
-    let mut agent = FakeAgent::new()
-        .can_close()
-        .offers_models("small", &["small", "large"])
-        .offers_efforts("low", &["low", "high"]);
-    let data = data_folder();
-    let meta = json!({ "claudeCode": { "emitRawSDKMessages": true } });
-
-    let options = options::offerings_at(
-        &mut agent,
-        "fake",
-        &data,
-        &PathBuf::from("/project"),
-        Some(&meta),
-        true,
-    )
-    .unwrap();
-
-    assert_eq!(options.models, [listed("small"), listed("large")]);
-    assert_eq!(options.efforts, [listed("low"), listed("high")]);
-    assert_eq!(
-        agent.methods(),
-        ["initialize", "session/new", "session/close"],
-        "the harness was asked, never prompted"
-    );
-    assert_eq!(
-        agent.params("session/new")[0]["_meta"],
-        meta,
-        "the harness was asked the way a session would ask it"
-    );
-    assert_eq!(agent.launches(), 1);
-    assert_eq!(
-        agent.stopped(),
-        1,
-        "the harness was stopped, not left running"
-    );
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[test]
-fn options_are_read_from_the_cache_until_a_refresh() {
-    let mut agent = FakeAgent::new().offers_models("small", &["small", "large"]);
-    let data = data_folder();
-    let project = PathBuf::from("/project");
-
-    let asked = options::offerings_at(&mut agent, "fake", &data, &project, None, false).unwrap();
-    assert_eq!(agent.launches(), 1);
-
-    let kept = options::offerings_at(&mut agent, "fake", &data, &project, None, false).unwrap();
-    assert_eq!(kept, asked);
-    assert_eq!(
-        agent.launches(),
-        1,
-        "the kept answer is read, not asked again"
-    );
-
-    let fresh = options::offerings_at(&mut agent, "fake", &data, &project, None, true).unwrap();
-    assert_eq!(fresh, asked);
-    assert_eq!(agent.launches(), 2, "a refresh asks the harness again");
-
-    let kept = std::fs::read_to_string(data.join("options").join("fake.json")).unwrap();
-    let kept: serde_json::Value = serde_json::from_str(&kept).unwrap();
-    assert!(
-        kept["asked_at"].as_u64().is_some_and(|at| at > 0),
-        "the answer says when it was asked: {kept}"
-    );
-    assert_eq!(kept["models"][1]["id"], "large");
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[test]
-fn a_harness_with_no_model_option_lists_none() {
-    let mut agent = FakeAgent::new();
-
-    let options = options::asked(&mut agent, &PathBuf::from("/project"), None).unwrap();
-
-    assert_eq!(options, kelpie_protocol::Options::default());
-    assert!(options.models.is_empty());
-    assert!(options.efforts.is_empty());
-}
-
-#[test]
-fn a_harness_that_never_answers_is_stopped_when_the_deadline_passes() {
-    let mut agent = FakeAgent::new().never_answers_session_new();
-
-    let error = options::asked_within(
-        &mut agent,
-        &PathBuf::from("/project"),
-        None,
-        Duration::from_millis(200),
-    )
-    .unwrap_err();
-
-    assert!(
-        matches!(error, SessionError::TimedOut { .. }),
-        "a silent harness was not called silent: {error}"
-    );
-    assert_eq!(agent.stopped(), 1, "the silent harness was left running");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_harness_that_exits_before_answering_is_explained_from_its_stderr() {
-    use crate::run::RunId;
-    use crate::tree::ProcessTree;
-
-    let dir = std::env::temp_dir().join(format!("kelpie-options-{}", RunId::new().unwrap()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let tree = Arc::new(ProcessTree::new(RunId::new().unwrap(), dir.join("run.json")).unwrap());
-    let mut harness = Harness::new("sh");
-    harness.args = vec!["-c".into(), "echo token rejected >&2; exit 3".into()];
-
-    let error = options::ask(&tree, &harness, &dir).unwrap_err();
-
-    let SessionError::Ended { message } = &error else {
-        panic!("a harness that exited did not end the ask: {error}");
-    };
-    assert!(message.contains("exit status: 3"), "{message}");
-    assert!(message.contains("token rejected"), "{message}");
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn a_harness_id_that_names_no_file_starts_nothing() {
-    let mut agent = FakeAgent::new();
-    let data = data_folder();
-
-    let error = options::offerings_at(
-        &mut agent,
-        "../escape",
-        &data,
-        &PathBuf::from("/project"),
-        None,
-        true,
-    )
-    .expect_err("no answer can be kept under a path");
-
-    assert!(
-        matches!(&error, SessionError::Name { name } if name == "../escape"),
-        "{error}"
-    );
-    assert_eq!(agent.launches(), 0, "a bad name started no harness");
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[test]
@@ -951,3 +796,153 @@ fn a_harness_gone_before_the_first_write_is_explained() {
 
 mod choose;
 mod instructions;
+mod offered_options;
+
+/// A log file's path in a folder of this test's own
+fn log_path() -> PathBuf {
+    let dir = data_folder();
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join("log.jsonl")
+}
+
+#[test]
+fn the_log_round_trips_user_messages_and_events() {
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Hel").text("lo"))
+        .turn(Turn::new().text("Again"));
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
+
+    let first = say(&session, "Hi");
+    let second = say(&session, "More");
+
+    let mut expected = vec![LogEntry::User {
+        text: "Hi".to_owned(),
+    }];
+    expected.extend(first.into_iter().map(LogEntry::Event));
+    expected.push(LogEntry::User {
+        text: "More".to_owned(),
+    });
+    expected.extend(second.into_iter().map(LogEntry::Event));
+    assert_eq!(log::read(&path).unwrap(), expected);
+}
+
+#[test]
+fn a_missing_log_is_an_empty_history() {
+    let path = log_path();
+
+    assert_eq!(log::read(&path).unwrap(), []);
+}
+
+#[test]
+fn a_torn_last_line_is_dropped() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    let whole = serde_json::to_string(&hi).unwrap();
+    // A crash cut the second line short, in the middle of a character
+    let mut bytes = format!("{whole}\n{{\"entry\":\"user\",\"text\":\"h").into_bytes();
+    bytes.push(0xE2);
+    std::fs::write(&path, bytes).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi]);
+}
+
+#[test]
+fn a_log_reopened_after_a_torn_write_carries_on_from_the_last_whole_line() {
+    let path = log_path();
+    let hi = LogEntry::User {
+        text: "Hi".to_owned(),
+    };
+    std::fs::write(
+        &path,
+        format!("{}\n{{\"entry\":\"us", serde_json::to_string(&hi).unwrap()),
+    )
+    .unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    assert_eq!(log::read(&path).unwrap(), [hi, more]);
+}
+
+#[test]
+fn a_line_that_is_not_the_last_and_not_an_entry_is_named() {
+    let path = log_path();
+    std::fs::write(&path, "nonsense\n{\"entry\":\"user\",\"text\":\"Hi\"}\n").unwrap();
+
+    let error = log::read(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("line 1"), "{error}");
+}
+
+#[test]
+fn reading_history_starts_no_process() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+    let path = log_path();
+    let first = session(&agent).with_log(log::Log::open(&path).unwrap());
+    say(&first, "Hi");
+    drop(first);
+    let launched = agent.launches();
+
+    // A later launch: a session over the same log, and the history read before any send
+    let relaunched = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let history = log::read(&path).unwrap();
+
+    assert!(history.contains(&LogEntry::User {
+        text: "Hi".to_owned()
+    }));
+    assert_eq!(agent.launches(), launched);
+    drop(relaunched);
+}
+
+#[test]
+fn a_closed_log_keeps_what_comes_after_out_of_it() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Working").until_cancelled());
+    let path = log_path();
+    let session = session(&agent).with_log(log::Log::open(&path).unwrap());
+    let (sink, heard) = events();
+    session.send("Go", sink);
+    while !matches!(next(&heard), SessionEvent::Text { .. }) {}
+
+    // The app is quitting: what the stop does to the session is not the maintainer's turn
+    session.close_log();
+    session.cancel();
+    until_turn_ends(&heard);
+
+    let history = log::read(&path).unwrap();
+    assert!(
+        history
+            .iter()
+            .all(|entry| !matches!(entry, LogEntry::Event(SessionEvent::TurnEnded { .. }))),
+        "{history:?}"
+    );
+    assert!(history.contains(&LogEntry::User {
+        text: "Go".to_owned()
+    }));
+}
+
+#[test]
+fn a_log_with_a_bad_line_in_the_middle_still_opens_and_appends() {
+    let path = log_path();
+    let hi = r#"{"entry":"user","text":"Hi"}"#;
+    std::fs::write(&path, format!("nonsense\n{hi}\n")).unwrap();
+    let more = LogEntry::User {
+        text: "More".to_owned(),
+    };
+
+    log::Log::open(&path).unwrap().append(&more).unwrap();
+
+    let held = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        held,
+        format!(
+            "nonsense\n{hi}\n{}\n",
+            serde_json::to_string(&more).unwrap()
+        )
+    );
+}

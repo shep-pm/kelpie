@@ -16,7 +16,7 @@ import {
   it,
   vi,
 } from "vitest";
-import type { SessionEvent } from "@/bindings";
+import type { LogEntry, SessionEvent } from "@/bindings";
 
 // The real Channel needs Tauri's IPC bridge, which jsdom has not got.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -28,6 +28,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 const pmSend =
   vi.fn<(text: string, on: Channel<SessionEvent>) => Promise<void>>();
 const pmCancel = vi.fn(async () => {});
+const pmRetry = vi.fn<(on: Channel<SessionEvent>) => Promise<void>>();
+const pmHistory = vi.fn<() => Promise<{ status: "ok"; data: LogEntry[] }>>();
 const projectGet = vi.fn<() => Promise<string | null>>();
 const projectPick = vi.fn();
 
@@ -35,6 +37,8 @@ vi.mock("@/bindings", () => ({
   commands: {
     pmSend: (text: string, on: Channel<SessionEvent>) => pmSend(text, on),
     pmCancel: () => pmCancel(),
+    pmRetry: (on: Channel<SessionEvent>) => pmRetry(on),
+    pmHistory: () => pmHistory(),
     projectGet: () => projectGet(),
     projectPick: () => projectPick(),
   },
@@ -44,7 +48,9 @@ import { ChatBox } from "./ChatBox";
 import { useChat } from "./store";
 
 function emit(event: SessionEvent) {
-  const channel = pmSend.mock.calls.at(-1)?.[1];
+  const channel = (pmRetry.mock.calls.at(-1) ?? pmSend.mock.calls.at(-1))?.at(
+    -1,
+  ) as Channel<SessionEvent> | undefined;
   if (!channel?.onmessage) throw new Error("no channel is listening");
   act(() => channel.onmessage(event));
 }
@@ -80,6 +86,10 @@ beforeEach(() => {
   pmSend.mockReset();
   pmSend.mockResolvedValue(undefined);
   pmCancel.mockClear();
+  pmRetry.mockReset();
+  pmRetry.mockResolvedValue(undefined);
+  pmHistory.mockReset();
+  pmHistory.mockResolvedValue({ status: "ok", data: [] });
   projectGet.mockReset();
   projectGet.mockResolvedValue("/work/project");
   projectPick.mockReset();
@@ -238,5 +248,77 @@ describe("the chat box", () => {
 
     expect(projectPick).toHaveBeenCalledTimes(1);
     expect(await screen.findByPlaceholderText("Message the PM")).toBeTruthy();
+  });
+
+  it("shows the history from the log before anything is sent", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "yesterday's question" },
+        { entry: "event", kind: "text", delta: "yesterday's answer" },
+        {
+          entry: "event",
+          kind: "turn_ended",
+          stop_reason: "end_turn",
+          usage: null,
+        },
+      ],
+    });
+
+    await openBox();
+
+    expect(await screen.findByText("yesterday's question")).toBeTruthy();
+    expect(await screen.findByText("yesterday's answer")).toBeTruthy();
+    expect(screen.queryByText(/Interrupted/)).toBeNull();
+    expect(pmSend).not.toHaveBeenCalled();
+  });
+
+  it("retry sends the interrupted message again", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "split the reaper out" },
+        { entry: "event", kind: "text", delta: "Par" },
+      ],
+    });
+    await openBox();
+    expect(
+      await screen.findByText("Interrupted when kelpie quit"),
+    ).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pmRetry).toHaveBeenCalledTimes(1));
+
+    // The interrupted turn gives way to the retry, which streams like any turn
+    expect(screen.getAllByText("split the reaper out")).toHaveLength(1);
+    expect(screen.queryByText("Interrupted when kelpie quit")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    emit({ kind: "text", delta: "Done." });
+    expect(await screen.findByText("Done.")).toBeTruthy();
+    expect(pmSend).not.toHaveBeenCalled();
+  });
+
+  it("an interrupted turn that is not the last has no Retry", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "cut off" },
+        { entry: "event", kind: "text", delta: "Par" },
+        { entry: "user", text: "asked something else" },
+        {
+          entry: "event",
+          kind: "turn_ended",
+          stop_reason: "end_turn",
+          usage: null,
+        },
+      ],
+    });
+
+    await openBox();
+
+    expect(
+      await screen.findByText("Interrupted when kelpie quit"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

@@ -116,6 +116,27 @@ pub enum SessionEvent {
     },
 }
 
+/// One line of a session's log: a message the maintainer sent, or an event the session streamed
+///
+/// Kelpie keeps its own log of every session, so history shows on any harness
+/// without starting one. The log holds what a harness's own transcript does
+/// not: what kelpie sent and what it saw.
+// wire format: the session log holds one of these per line, so changing this
+// is a breaking change
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "entry", rename_all = "snake_case")]
+#[non_exhaustive] // dividers and notes arrive with their own slices
+pub enum LogEntry {
+    /// A message the maintainer sent, which starts a turn
+    User {
+        /// What they wrote
+        text: String,
+    },
+    /// An event the session streamed
+    Event(SessionEvent),
+}
+
 /// How far a tool call got
 // wire format: changing this is a breaking change
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +280,28 @@ mod tests {
         for (event, json) in events {
             assert_eq!(serde_json::to_string(&event).unwrap(), json);
             assert_eq!(serde_json::from_str::<SessionEvent>(json).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn a_log_entry_is_one_json_object_tagged_with_its_entry() {
+        let entries = [
+            (
+                LogEntry::User {
+                    text: "Hi".to_owned(),
+                },
+                r#"{"entry":"user","text":"Hi"}"#,
+            ),
+            (
+                LogEntry::Event(SessionEvent::Text {
+                    delta: "Hello".to_owned(),
+                }),
+                r#"{"entry":"event","kind":"text","delta":"Hello"}"#,
+            ),
+        ];
+        for (entry, json) in entries {
+            assert_eq!(serde_json::to_string(&entry).unwrap(), json);
+            assert_eq!(serde_json::from_str::<LogEntry>(json).unwrap(), entry);
         }
     }
 
