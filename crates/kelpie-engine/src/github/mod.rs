@@ -40,6 +40,7 @@ use crate::tree::ProcessTree;
 
 pub mod api;
 pub mod curl;
+pub mod origin;
 pub mod slug;
 pub mod tokens;
 
@@ -52,6 +53,7 @@ pub use api::{
     ApiError, Cooldown, GithubApi, Grant, Installation, IssuedToken, Pem, Signer, token_request,
 };
 pub use curl::{CurlGithub, Openssl};
+pub use origin::origin_of;
 pub use slug::{ForgeSlug, forge_of};
 pub use tokens::{AppTokens, GithubApp, InstallationToken, Jwt, TokenError, WorkerToken};
 
