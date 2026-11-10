@@ -74,6 +74,11 @@ tar = { version = "0.4.45", default-features = false }
 # `deflate` only: the registry's archives are stored or deflated
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
+# Reads a ref, an ancestry and a tree in a repo without starting git, which costs
+# tens of milliseconds on Windows. Reads only: no network, no writes. `sha1` is
+# the one hash gix builds, so a sha256 repo is left to git.
+gix = { version = "0.90", default-features = false, features = ["revision", "sha1"] }
+
 # The OS keychain a harness's login lives in (`docs/design/settings.md`). `v1` is
 # the crate's own pick of the native store per OS: Keychain Services on macOS,
 # Credential Manager on Windows, the Secret Service over pure-Rust zbus on Linux.
