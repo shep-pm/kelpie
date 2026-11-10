@@ -261,16 +261,16 @@ fn own_lines(front: &str) -> String {
 
 // One top-level key of the frontmatter, with the lines under it: its
 // continuation, comments and blank lines, up to the next key.
-struct Entry {
-    key: String,
-    text: String,
+pub(super) struct Entry {
+    pub(super) key: String,
+    pub(super) text: String,
     // The line of the file the key is on, which counts the opening `---`.
     line: usize,
 }
 
 impl Entry {
     // The text after `key:`, without a trailing comment or quotes.
-    fn value(&self) -> String {
+    pub(super) fn value(&self) -> String {
         let line = self.text.lines().next().unwrap_or("");
         let value = line.split_once(':').map_or("", |(_, v)| v);
         let value = value.trim();
@@ -285,7 +285,7 @@ impl Entry {
 }
 
 // The frontmatter's keys in order. Lines before the first key are dropped.
-fn entries(front: &str) -> Vec<Entry> {
+pub(super) fn entries(front: &str) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
     for (at, line) in front.split_inclusive('\n').enumerate() {
         let key = key_of(line).map(str::to_owned);
