@@ -73,7 +73,8 @@ const SECRETS: [&str; 10] = [
 ];
 
 /// The macOS services that answer for the keychain, which a session never asks
-const KEYCHAIN_SERVICES: [&str; 2] = ["com.apple.securityd.xpc", "com.apple.SecurityServer"];
+pub(super) const KEYCHAIN_SERVICES: [&str; 2] =
+    ["com.apple.securityd.xpc", "com.apple.SecurityServer"];
 
 /// The project a session works in, and what its settings say about the sandbox
 #[derive(Debug, Clone, Copy)]
@@ -179,7 +180,7 @@ pub fn policy_with_door(
 }
 
 /// The folders a session reads inside the closed home folder
-fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
+pub(super) fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<String> {
     let mut folders = vec![text(project.folder)];
     // The folders beside the project: its sibling repos and worktrees. Not when
     // they are the home folder or the root, which would open everything.
@@ -197,7 +198,7 @@ fn reads(harness: &Harness, project: &Project<'_>, state_dir: &Path) -> Vec<Stri
 }
 
 /// The harness's model hosts, then the project's allowlist, each once
-fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
+pub(super) fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
     let mut seen = HashSet::new();
     harness
         .hosts
@@ -209,12 +210,12 @@ fn hosts(harness: &Harness, project: &Project<'_>) -> Vec<String> {
 }
 
 /// The person's home folder
-fn home() -> Option<std::path::PathBuf> {
+pub(super) fn home() -> Option<std::path::PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(Into::into)
 }
 
-fn text(path: &Path) -> String {
+pub(super) fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
