@@ -126,6 +126,37 @@ fn stop_all_ends_a_child_and_its_grandchild() {
 }
 
 #[test]
+fn one_child_stops_without_stopping_the_tree() {
+    let dir = Dir::new();
+    let run = RunId::new().unwrap();
+    let tree = ProcessTree::new(run, dir.run_file()).unwrap();
+    let mut stopped = tree
+        .spawn(&mut sh(r#"sleep 60 & echo "pid $!"; echo ready; sleep 60"#))
+        .unwrap();
+    let (_stdout, mut pids) = ready(stopped.stdout.take().unwrap());
+    pids.push(stopped.id());
+    let other = tree.spawn(&mut sh("sleep 60")).unwrap();
+    assert_eq!(
+        RunFile::read(&dir.run_file()).unwrap().groups.len(),
+        2,
+        "both groups are listed before either is stopped"
+    );
+
+    stopped.stop(GRACE).unwrap();
+
+    assert_gone(&pids);
+    assert!(!stopped.wait().unwrap().success());
+    let groups = RunFile::read(&dir.run_file()).unwrap().groups;
+    assert_eq!(
+        groups.iter().map(|group| group.pid).collect::<Vec<_>>(),
+        [other.id()]
+    );
+    // The tree is open still, so a session can start its next process
+    tree.spawn(&mut sh("true")).unwrap().wait().unwrap();
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
 fn a_grandchild_that_leaves_the_group_is_still_swept_by_its_mark() {
     // `perl`, since `setsid(1)` is absent on macOS
     let script = r#"perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$0" --ignored --exact --nocapture tree::tests::sleep_a_minute & sleep 60"#;
@@ -371,5 +402,36 @@ fn an_exit_noticed_while_another_handle_drops_leaves_the_run_file() {
 
     let file = RunFile::read(&dir.run_file()).unwrap();
     assert_eq!(file.groups.len(), 1, "only the sleep is listed: {file:?}");
+    tree.stop_all(GRACE).unwrap();
+}
+
+#[test]
+fn stopping_one_child_does_not_hold_the_tree_for_its_grace() {
+    let dir = Dir::new();
+    let tree = ProcessTree::new(RunId::new().unwrap(), dir.run_file()).unwrap();
+    let mut stubborn = tree
+        .spawn(&mut sh(
+            "trap '' TERM; echo ready; while :; do sleep 1; done",
+        ))
+        .unwrap();
+    let (reader, _) = ready(stubborn.stdout.take().unwrap());
+    let grace = Duration::from_secs(3);
+    let stopping = std::thread::spawn(move || {
+        let _reader = reader;
+        stubborn.stop(grace).unwrap()
+    });
+    // The term is out and ignored, so the stop is now waiting out its grace
+    std::thread::sleep(Duration::from_millis(300));
+
+    let began = Instant::now();
+    let mut other = tree.spawn(Command::new("sleep").arg("60")).unwrap();
+    assert!(other.try_wait().unwrap().is_none());
+    let waited = began.elapsed();
+
+    assert!(
+        waited < Duration::from_secs(1),
+        "a spawn and a try_wait waited {waited:?} behind another child's stop"
+    );
+    assert!(!stopping.join().unwrap().success());
     tree.stop_all(GRACE).unwrap();
 }

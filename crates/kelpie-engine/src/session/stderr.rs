@@ -2,8 +2,9 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead as _, BufReader, Read};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::Duration;
 
 /// Lines kept
 const LINES: usize = 8;
@@ -12,7 +13,27 @@ const WIDTH: usize = 300;
 
 /// Reads a pipe on a thread of its own until it closes, keeping the last lines
 #[derive(Debug, Clone, Default)]
-pub(super) struct Tail(Arc<Mutex<VecDeque<String>>>);
+pub(super) struct Tail(Arc<Inner>);
+
+#[derive(Debug, Default)]
+struct Inner {
+    kept: Mutex<Kept>,
+    /// Signalled when the pipe closes
+    closed: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct Kept {
+    lines: VecDeque<String>,
+    /// The thread read to the end of the pipe
+    done: bool,
+}
+
+impl Inner {
+    fn lock(&self) -> MutexGuard<'_, Kept> {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 impl Tail {
     /// Start reading `pipe`
@@ -21,7 +42,7 @@ impl Tail {
     /// the thread reads until the pipe closes.
     pub(super) fn collect(pipe: impl Read + Send + 'static) -> Self {
         let tail = Self::default();
-        let kept = Arc::clone(&tail.0);
+        let inner = Arc::clone(&tail.0);
         // A thread that cannot start leaves the tail empty, and the pipe unread
         let _ = thread::Builder::new()
             .name("kelpie-stderr".to_owned())
@@ -38,20 +59,36 @@ impl Tail {
                     if text.is_empty() {
                         continue;
                     }
-                    let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
-                    if kept.len() == LINES {
-                        kept.pop_front();
+                    let mut kept = inner.lock();
+                    if kept.lines.len() == LINES {
+                        kept.lines.pop_front();
                     }
-                    kept.push_back(text);
+                    kept.lines.push_back(text);
                 }
+                inner.lock().done = true;
+                inner.closed.notify_all();
             });
         tail
     }
 
+    /// Wait up to `within` for the pipe to close, so the lines are all of them
+    ///
+    /// A harness that has exited has written everything it will, but the thread
+    /// reading it may not have caught up. A grandchild holding the pipe open
+    /// makes this wait the whole `within`.
+    pub(super) fn settle(&self, within: Duration) {
+        let kept = self.0.lock();
+        let _ = self
+            .0
+            .closed
+            .wait_timeout_while(kept, within, |kept| !kept.done);
+    }
+
     /// The lines kept, joined, oldest first
     pub(super) fn lines(&self) -> String {
-        let kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        kept.iter()
+        let kept = self.0.lock();
+        kept.lines
+            .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join(" / ")

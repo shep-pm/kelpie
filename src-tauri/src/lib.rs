@@ -43,6 +43,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::login_set,
             settings::login_status,
             settings::login_clear,
+            settings::harness_options,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
