@@ -265,6 +265,36 @@ fn turning_it_off_removes_the_links() {
     }
 }
 
+/// goose's link sits one folder under the root kelpie gives it, where goose looks
+/// for its config, so taking the setting back has to reach it down there
+#[test]
+fn turning_it_off_removes_a_link_one_folder_deep() {
+    let (install, global, state) = (goose_installed(), gooses_config(), session_state());
+    let config = state.join("goose").join("config");
+
+    gooses_harness(&state, &global, &install, true).unwrap();
+    assert!(
+        config.join("config.yaml").is_symlink(),
+        "the link was not made where goose looks"
+    );
+
+    let off = gooses_harness(&state, &global, &install, false).unwrap();
+
+    assert!(
+        !config.join("config.yaml").exists(),
+        "the link one folder deep was left in the session's goose root"
+    );
+    assert!(off.global_reads.is_empty(), "{:?}", off.global_reads);
+    assert_eq!(
+        fs::read_to_string(global.join("config.yaml")).unwrap(),
+        "GOOSE_MODEL: x\n",
+        "taking the link back changed the person's own config"
+    );
+    for dir in [install, global, state] {
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn a_login_in_the_global_folder_is_never_linked() {
     let (install, global, state) = (installed(), claudes_global(), session_state());

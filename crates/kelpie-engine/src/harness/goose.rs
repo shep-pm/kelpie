@@ -80,16 +80,25 @@ const CONFIG_FOLDER: &str = "goose";
 ///
 /// goose's path code names its root with `GOOSE_PATH_ROOT` and joins `config` to
 /// it for its config folder, with its `data` and `state` folders beside it, so
-/// `config.yaml` is one folder under the root and never in the root itself. The
-/// goose on `PATH` (block-goose-cli 1.57.0) carries `crates/goose/src/config/paths.rs`,
-/// whose read-only data holds `config` and `state` beside `GOOSE_PATH_ROOT` and
-/// the `goose requires a home dir` of the branch taken when it is unset.
+/// `config.yaml` is one folder under the root and never in the root itself.
+///
+/// The goose on `PATH` (block-goose-cli 1.57.0) says so in three ways: it carries
+/// `crates/goose/src/config/paths.rs`; it exports `goose::config::paths::Paths`
+/// with `config_dir`, `data_dir`, `state_dir`, `in_data_dir` and `in_state_dir`
+/// beside a single `get_dir`, which is one base with its folders under it; and
+/// its read-only data holds `config` and `state` beside `GOOSE_PATH_ROOT` and the
+/// `goose requires a home dir` of the branch taken when it is unset. The path is
+/// built one join at a time, so `config/config` is never a literal to search for.
 const ROOT_CONFIG: &str = "config";
 
 /// The folder goose keeps its config in when the person sets no root of their own
 ///
-/// The `goose` folder under the OS's config folder, `~/.config/goose`, which is
-/// where the flat `~/.config/goose/config.yaml` of goose's own docs sits.
+/// `~/.config/goose`, which is where the flat `~/.config/goose/config.yaml` of
+/// goose's own docs sits, and where its prompt template sends a person who wants
+/// to override one (`~/.config/goose/prompts/compaction_summary.md`) in the macOS
+/// build of the goose on `PATH`: goose lays out `config`, `data` and `state` under
+/// `~/.config`, `~/.local/share` and `~/.local/state` on every platform, which is
+/// the set of folders [`OWN_FILES`] closes as its login.
 const GLOBAL_CONFIG: &str = ".config/goose";
 
 /// Each entry of the person's goose config folder a session reads when they turn it on
