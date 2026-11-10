@@ -491,7 +491,6 @@ fn begin(
     .map_err(StartError::Worktree)?;
 
     let credential = credential(project, &ticket.id, &state_dir)?;
-    let pushes = credential.pushes;
     let log = Log::open(project.paths.log_file(&ticket.id)).map_err(StartError::Log)?;
     let tools = project.tools.map(Tools::session);
     let sessions_root = project.paths.sessions_root();
@@ -537,7 +536,7 @@ fn begin(
                 &worktree,
                 vec![worktree.clone(), state_dir.clone()],
             ))
-            .with_instructions(instructions(project, &ticket.id, pushes))
+            .with_instructions(instructions(project, &ticket.id, credential.why))
             .with_log(log),
     );
     let watch = Watch::new();
@@ -563,11 +562,41 @@ fn begin(
 
 /// What a worker is given to push with
 struct Credential {
-    /// Whether it holds a token for the repo, which is what lets it push
-    pushes: bool,
+    /// Why it has no token for its repo, `None` where it has one
+    why: Option<NoCredential>,
 
     /// The variables its harness and every command it runs carry
     env: Vec<(String, String)>,
+}
+
+/// Why a worker got no token for its one repo, as its instructions tell the
+/// maintainer
+///
+/// Each is a different thing to go after, and the worker's final message is where
+/// the maintainer hears about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoCredential {
+    /// kelpie keeps no App, or none installed on this repo
+    NoApp,
+
+    /// The `PATH` its git runs on holds no `gh` to answer github.com with
+    NoHelper,
+
+    /// Its remote is not GitHub, so kelpie names no repo to mint for
+    NotGithub,
+}
+
+impl NoCredential {
+    /// The cause, as the worker is told to pass it on
+    fn describe(self) -> &'static str {
+        match self {
+            Self::NoApp => "kelpie has no GitHub App installed on it",
+            Self::NoHelper => {
+                "no `gh` is installed where its git runs, and `gh` is what answers github.com for it"
+            }
+            Self::NotGithub => "its remote is not GitHub, so kelpie names no repo to mint for",
+        }
+    }
 }
 
 /// Mint the worker a token for its one repo, write it into the `gh` folder of its
@@ -580,8 +609,8 @@ struct Credential {
 ///
 /// A repo kelpie's App does not cover, a repo that is not GitHub at all, and a
 /// machine whose `PATH` holds no `gh` for git to answer github.com with each leave
-/// the worker with no credential. It is told so in its instructions, and git is
-/// pointed at no helper at all, so nothing the maintainer logged into is asked.
+/// the worker with no credential. It is told which one in its instructions, and git
+/// is pointed at no helper at all, so nothing the maintainer logged into is asked.
 /// Nothing is minted, and no `gh` folder is written, where the worker could not
 /// have pushed with it; whatever an earlier turn left in that folder is taken out,
 /// since it is still a live token until its hour is up. A token kelpie would not
@@ -600,13 +629,13 @@ fn credential(
 ) -> Result<Credential, StartError> {
     let build = project.paths.build_dir(ticket);
     let mut env = vec![("CARGO_TARGET_DIR".to_owned(), text(&build))];
-    let worker = match (
+    let (worker, why) = match (
         project.tokens,
         project.gh,
         origin(project.tree, project.folder),
     ) {
         (Some(tokens), Some(_), Some(repo)) => match tokens.worker(&repo) {
-            Ok(worker) => Some(worker),
+            Ok(worker) => (Some(worker), None),
             // No App for the owner, or one the repo does not cover: the worker
             // has no credential, and says so.
             Err(
@@ -615,21 +644,23 @@ fn credential(
                 | TokenError::NotInstalled { .. }),
             ) => {
                 eprintln!("kelpie: ticket {ticket} cannot push: {error}");
-                None
+                (None, Some(NoCredential::NoApp))
             }
             Err(error) => return Err(StartError::Token(error)),
         },
+        // Not a GitHub remote, so there is no repo to mint a token for at all
+        (_, _, None) => (None, Some(NoCredential::NotGithub)),
         (Some(_), None, Some(_)) => {
             eprintln!(
                 "kelpie: ticket {ticket} cannot push: no `{}` on the PATH its git runs on",
                 login::HELPER
             );
-            None
+            (None, Some(NoCredential::NoHelper))
         }
-        _ => None,
+        // kelpie keeps no Apps
+        (None, _, Some(_)) => (None, Some(NoCredential::NoApp)),
     };
     env.extend(login::env(state_dir));
-    let pushes = worker.is_some();
     let helper = match worker {
         Some(worker) => {
             login::write(state_dir, &worker.token).map_err(StartError::Login)?;
@@ -641,7 +672,7 @@ fn credential(
         }
     };
     env.push(("GIT_CONFIG_PARAMETERS".to_owned(), helper.to_owned()));
-    Ok(Credential { pushes, env })
+    Ok(Credential { why, env })
 }
 
 /// The project's repo as GitHub sees it, from the `origin` of its checkout,
@@ -843,8 +874,11 @@ fn lost(ticket: &str, kept: io::Result<()>, what: &str) {
 ///
 /// A worker with no credential is told so outright, whatever its agent file
 /// says about pushing: it has no way to get its work out, and saying so is the
-/// most the maintainer can do about it until an App is registered for the repo.
-fn instructions(project: &Project<'_>, ticket: &str, pushes: bool) -> String {
+/// most the maintainer can do about it. The reason is named with it, since a
+/// missing App, a missing `gh` and a repo that is not GitHub are three different
+/// things for the maintainer to go after, and the worker's final message is where
+/// they hear which.
+fn instructions(project: &Project<'_>, ticket: &str, why: Option<NoCredential>) -> String {
     let kelpie = std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("kelpie"))
         .display()
@@ -863,14 +897,22 @@ fn instructions(project: &Project<'_>, ticket: &str, pushes: bool) -> String {
         .replace("{kelpie}", &kelpie)
         .replace("{base}", project.base)
         .replace("{pull_request}", &hand_over);
-    if pushes {
-        return body;
+    match why {
+        None => body,
+        Some(why) => format!("{body}{}", no_credential(why)),
     }
-    format!("{body}{NO_CREDENTIAL}")
 }
 
 /// What a worker with no credential is told, after every other instruction
-const NO_CREDENTIAL: &str = "\nYou have no credential for this repo: kelpie has no GitHub App installed on it, so `git push` is refused and every instruction above that says to push means to commit. Commit your work, and say in your final message that the branch is not pushed and why, so the maintainer can get it out by hand.\n";
+fn no_credential(why: NoCredential) -> String {
+    format!(
+        "\nYou have no credential for this repo: {}, so `git push` is refused and every \
+         instruction above that says to push means to commit. Commit your work, and name this \
+         same reason in your final message, so the maintainer knows what to fix and can get the \
+         branch out by hand.\n",
+        why.describe()
+    )
+}
 
 /// The model and effort the session asks the harness for
 fn choice(binding: &Binding) -> Choice {

@@ -169,6 +169,10 @@ fn a_worker_with_no_app_on_its_repo_is_told_it_cannot_push() {
         "{prompt:?}"
     );
     assert!(
+        prompt.contains("no GitHub App installed on it"),
+        "the worker names the cause it can actually report: {prompt:?}"
+    );
+    assert!(
         !login::config_dir(&state_dir).join("hosts.yml").exists(),
         "no login is written where there is no token"
     );
@@ -297,6 +301,14 @@ fn a_worker_on_a_machine_with_no_gh_is_told_it_cannot_push() {
     );
     let prompt = prompt(&agent);
     assert!(prompt.contains("no credential for this repo"), "{prompt:?}");
+    assert!(
+        prompt.contains("no `gh` is installed where its git runs"),
+        "the worker is told the helper is what is missing: {prompt:?}"
+    );
+    assert!(
+        !prompt.contains("GitHub App"),
+        "and not an App it does have: {prompt:?}"
+    );
 }
 
 // A repo kelpie cannot name on GitHub gets no token, whatever Apps it has: the
@@ -327,8 +339,16 @@ fn a_repo_that_is_not_github_gets_the_worker_no_token() {
         github.asked().is_empty(),
         "no token was minted for any repo"
     );
-    assert!(!login::config_dir(&rig.paths.state_dir("74")).exists());
-    assert!(prompt(&agent).contains("no credential for this repo"));
+    assert!(
+        !login::config_dir(&rig.paths.state_dir("74")).exists(),
+        "no `gh` folder is written for a repo kelpie cannot name"
+    );
+    let prompt = prompt(&agent);
+    assert!(prompt.contains("no credential for this repo"), "{prompt:?}");
+    assert!(
+        prompt.contains("its remote is not GitHub"),
+        "the worker names the remote, which is what the maintainer can check: {prompt:?}"
+    );
 }
 
 // A token GitHub made hold more than pushing is never handed to a worker, and
