@@ -118,6 +118,8 @@ Revisit this if updates mid-turn turn out to hurt. The move then would be to run
 
 ## SK: a treasure chest, not a backend
 
+`docs/lift-plan.md` maps every module, with its verdict, its home in kelpie and its phase. The tables below are the first sketch, and their line counts are from an older commit.
+
 Measured at origin/main:
 
 | | Lines | Note |

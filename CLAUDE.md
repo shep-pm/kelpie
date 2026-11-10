@@ -73,6 +73,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `docs/adr/`: decisions. Read the ones touching your area first.
 - `docs/lessons/`: incidents from SK and its tools, and what kelpie does about each. Read the ones touching your area before designing it.
 - `.claude/skills/`: read `tauri` before touching `src-tauri/`, `tauri.conf.json`, capabilities or any `invoke` call, since Tauri 2 differs from Tauri 1 in ways models get wrong. Read `lift-from-sk` before bringing in any SK code, and `zustand-subscription-patterns` before wiring a component to a store.
+- `docs/lift-plan.md`: what kelpie lifts from SK, module by module. Read its row before writing or building an issue in an area SK covered: lifting is the default.
 - `docs/lifted.md`: every chunk lifted from SK, with what it handles and what was dropped.
 - `src-tauri/`: the `kelpie-app` crate, `tauri.conf.json`, `capabilities/` and `icons/`. `src-tauri/gen/` is the ACL schema `build.rs` writes, and is ignored.
 
