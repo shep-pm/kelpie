@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path};
+use std::sync::Mutex;
 
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, fstat, mkdirat, openat, renameat, unlinkat};
 use rustix::io::Errno;
@@ -60,7 +61,15 @@ pub(super) fn write(root: &Path, rel: &Path, text: &str, private: bool) -> Resul
     put(root, rel, text, mode)
 }
 
+// Every write stages at `<name>.tmp`, so two writes to one file at once would
+// share it: the second removes the first's staged file as a leftover, and the
+// first renames the second's half-written file into place. One write at a time
+// in this process rules that out.
+static STAGING: Mutex<()> = Mutex::new(());
+
 fn put(root: &Path, rel: &Path, text: &str, mode: Mode) -> Result<(), Error> {
+    // The guard holds no data, so a panic in another write leaves nothing to distrust
+    let _one_at_a_time = STAGING.lock().unwrap_or_else(|e| e.into_inner());
     std::fs::create_dir_all(root).map_err(|e| Error::Io(e.kind()))?;
     let (dir, name) = walk(root, rel, true)?.ok_or(Error::Io(io::ErrorKind::NotFound))?;
     let mut beside = name.clone();

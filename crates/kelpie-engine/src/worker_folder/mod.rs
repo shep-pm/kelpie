@@ -284,6 +284,28 @@ mod tests {
     }
 
     #[test]
+    fn writes_to_one_file_at_once_each_succeed_and_leave_one_whole_text() {
+        let (_dir, build, _) = folders();
+        let texts: Vec<String> = (0..8).map(|n| format!("{n}\n").repeat(50_000)).collect();
+
+        let threads: Vec<_> = texts
+            .iter()
+            .cloned()
+            .map(|text| {
+                let build = build.clone();
+                std::thread::spawn(move || write(&build, Path::new("a.md"), &text))
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(thread.join().unwrap(), Ok(()));
+        }
+
+        let kept = fs::read_to_string(build.join("a.md")).unwrap();
+        assert!(texts.contains(&kept), "the file holds a mix of the writes");
+        assert!(!build.join("a.md.tmp").exists());
+    }
+
+    #[test]
     fn a_path_that_climbs_out_of_the_folder_is_refused() {
         let (_dir, build, _) = folders();
 
