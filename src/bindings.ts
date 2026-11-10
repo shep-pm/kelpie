@@ -78,7 +78,9 @@ export const commands = {
 	 * 
 	 *  # Errors
 	 * 
-	 *  No request is waiting for `id`, or the host could not be kept. The text is for the maintainer to read.
+	 *  No request is waiting for `id`, or the host could not be kept to the
+	 *  project, in which case it stays allowed for the session alone. The text is
+	 *  for the maintainer to read.
 	 */
 	pmAnswer: (id: string, answer: SandboxAnswer) => typedError<null, string>(__TAURI_INVOKE("pm_answer", { id, answer })),
 	/**
