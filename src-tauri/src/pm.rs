@@ -164,6 +164,7 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
 /// How the maintainer's divider names a harness and the model it runs, such as `goose (qwen)`
 #[must_use]
 pub fn describe(harness: Harness, model: Option<&str>) -> String {
+    // parity: harness.pm
     let name = match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Goose => "goose",
