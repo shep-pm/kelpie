@@ -1,0 +1,286 @@
+name: screenshots
+# Light and dark screenshots of the app window, in the body of a pull request
+# that changes the frontend. A worker's GitHub credential cannot put an image on
+# a pull request, so CI does it.
+#
+# Two jobs, split by what they trust:
+#
+# - `shots` runs the pull request's code (it builds the app and drives it) with a
+#   read-only token, and hands the PNGs over as an artifact.
+# - `post` runs none of the pull request's code. It never checks the branch out,
+#   copies only two files it names itself, and is the only job that can write.
+#
+# The images live on an orphan `pr-shots` branch, in a folder per pull request.
+# Each body links an image by the commit that holds it, so a later push to the
+# folder does not change an older body, and `pr-shots` is never pruned: merged
+# pull request bodies keep their images.
+#
+# The screenshots are for the maintainer's eye. Nothing compares them to a
+# baseline, and a failed or missing shot fails no check: the section says what
+# happened in place of the image.
+#
+# The `paths` filter is the point of the workflow: a change to `crates/` or
+# `src-tauri/` alone starts no job. The workflow's own file is in it, so a pull
+# request that edits it runs it on itself.
+on:
+  pull_request:
+    paths:
+      - src/**
+      - index.html
+      - e2e/**
+      - .github/workflows/screenshots.yml
+permissions:
+  contents: read
+# One run per pull request: a newer push cancels the older run, so a stale run
+# cannot post over a newer one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  shots:
+    name: shots
+    # Pull requests from a fork get a read-only token that cannot post, and
+    # their code would run on the maintainer's runner.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    # The same box the `app` job in test.yml builds on, for the same reason.
+    runs-on: [self-hosted, X64]
+    timeout-minutes: 40
+    # A failure here fails no check. `post` reports it in the body instead.
+    continue-on-error: true
+    outputs:
+      build: ${{ steps.build.outcome }}
+      test: ${{ steps.wdio.outcome }}
+    env:
+      # Inside the workspace, where rust-cache looks for it, and where
+      # e2e/wdio.conf.ts finds the app: it reads this variable.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # pnpm before setup-node, as in web.yml: setup-node's pnpm cache hashes
+      # the lockfile through the pnpm version `packageManager` pins.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      # Nothing else builds the debug app, so no cache of main's applies, and a
+      # pull request's own cache serves only its next push. It also keeps the
+      # `tauri-driver` binary below.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The packages the `app` job in test.yml installs, plus the virtual
+      # display the window opens on and the WebDriver server WebKitGTK ships.
+      - name: Install the Linux packages Tauri builds against and the window test needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb webkit2gtk-driver
+      - name: Install tauri-driver
+        run: command -v tauri-driver || cargo install tauri-driver --locked
+      - run: pnpm install --frozen-lockfile
+      # What scripts/e2e-remote.sh builds: the sidecar, then the debug app the
+      # window test drives. `continue-on-error` so `post` can say it failed.
+      - name: Build the reaper sidecar and the app
+        id: build
+        continue-on-error: true
+        run: |
+          scripts/build-reaper.sh --debug
+          pnpm tauri build --debug --no-bundle
+      - name: Run the window test
+        id: wdio
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          rm -rf test-results
+          mkdir test-results
+          xvfb-run -a pnpm exec wdio run e2e/wdio.conf.ts
+      - name: Upload the test results
+        if: always()
+        uses: actions/upload-artifact@v4 # unpinned: no network here to look up a commit
+        with:
+          name: shots
+          path: test-results/
+          if-no-files-found: ignore
+
+  post:
+    name: post
+    needs: shots
+    # A run that was cancelled by a newer push posts nothing, and a fork's run
+    # has no `shots` to post and no token that could.
+    if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted]
+    timeout-minutes: 10
+    # The only job that writes: it pushes `pr-shots` and edits the body.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Download the screenshots
+        uses: actions/download-artifact@v4 # unpinned: no network here to look up a commit
+        continue-on-error: true
+        with:
+          name: shots
+          path: ${{ runner.temp }}/shots
+      # No checkout: the branch's code stays off this job. The repository is made
+      # fresh in the runner's temp folder, and authenticated the way
+      # actions/checkout does it.
+      - name: Commit the screenshots to pr-shots
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -eu
+          shots="$RUNNER_TEMP/shots"
+          repo="$RUNNER_TEMP/pr-shots"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth"
+
+          # Only the two files this job names, and only when they are a PNG of
+          # a sane size: the artifact is the pull request's code's output.
+          valid() {
+            f="$shots/$1"
+            [ -f "$f" ] && [ ! -L "$f" ] || return 1
+            [ "$(wc -c < "$f")" -le 10000000 ] || return 1
+            [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ]
+          }
+
+          pushed=""
+          cd "$RUNNER_TEMP"
+          for attempt in 1 2 3 4 5; do
+            cd "$RUNNER_TEMP"
+            rm -rf "$repo"
+            git init -q "$repo"
+            cd "$repo"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+            git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+
+            # Exit 2 is "no such branch": the first run on this repository.
+            # Any other failure is a real one, and `set -e` stops on it.
+            status=0
+            git ls-remote --exit-code --heads origin pr-shots > /dev/null || status=$?
+            case "$status" in
+              0)
+                git fetch -q --depth=1 origin pr-shots
+                git checkout -q -B pr-shots FETCH_HEAD
+                ;;
+              2) git checkout -q --orphan pr-shots ;;
+              *) exit "$status" ;;
+            esac
+
+            # The folder is rewritten whole, so a shot that failed this time
+            # does not keep last push's image.
+            rm -rf "$PR"
+            mkdir "$PR"
+            for name in window-light.png window-dark.png; do
+              if valid "$name"; then cp "$shots/$name" "$PR/$name"; fi
+            done
+            touch "$PR/.keep"
+            git add -A -- "$PR"
+
+            if git diff --cached --quiet; then
+              pushed=1
+              break
+            fi
+            git commit -q -m "chore(shots): pull request $PR @ ${GITHUB_SHA}"
+            # A push that races another pull request's loses to it: start over
+            # from the new head.
+            if git push -q origin pr-shots; then
+              pushed=1
+              break
+            fi
+            echo "push raced, attempt $attempt"
+            sleep $((attempt * 3))
+          done
+          [ -n "$pushed" ] || { echo "::warning::pr-shots push kept racing"; exit 1; }
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          for name in light dark; do
+            if [ -f "$PR/window-$name.png" ]; then echo "$name=1" >> "$GITHUB_OUTPUT"; fi
+          done
+      # Runs even when the commit failed: the body then says so.
+      - name: Write the Screenshots section into the pull request body
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+          HAS_LIGHT: ${{ steps.commit.outputs.light }}
+          HAS_DARK: ${{ steps.commit.outputs.dark }}
+          BUILD: ${{ needs.shots.outputs.build }}
+          TEST: ${{ needs.shots.outputs.test }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 -I - <<'EOF'
+          import json
+          import os
+          import urllib.request
+
+          MARKER = "<!-- pr-shots -->"
+          env = os.environ
+          api = f"{env['GITHUB_API_URL']}/repos/{env['GITHUB_REPOSITORY']}/pulls/{env['PR']}"
+
+
+          def call(method, data=None):
+              request = urllib.request.Request(
+                  api,
+                  method=method,
+                  data=None if data is None else json.dumps(data).encode(),
+                  headers={
+                      "Authorization": f"Bearer {env['GH_TOKEN']}",
+                      "Accept": "application/vnd.github+json",
+                      "User-Agent": "pr-shots",
+                  },
+              )
+              with urllib.request.urlopen(request) as response:
+                  return json.load(response)
+
+
+          def why_missing():
+              # Only the outcomes GitHub itself reports reach this text, never
+              # anything the pull request's code wrote.
+              if env["BUILD"] != "success":
+                  return f"the app did not build (build: {env['BUILD'] or 'did not run'})"
+              if env["TEST"] != "success":
+                  return f"the window test failed before it saved this one (test: {env['TEST'] or 'did not run'})"
+              if not env["COMMIT_SHA"]:
+                  return "the screenshot could not be committed to `pr-shots`"
+              return "the window test passed but saved no image"
+
+
+          def cell(name, present):
+              if present and env["COMMIT_SHA"]:
+                  url = (
+                      f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}"
+                      f"/blob/{env['COMMIT_SHA']}/{env['PR']}/window-{name}.png?raw=true"
+                  )
+                  return f"![{name} window]({url})"
+              return f"Failed: {why_missing()}."
+
+
+          section = "\n".join(
+              [
+                  MARKER,
+                  "## Screenshots",
+                  "",
+                  f"From [this run]({env['RUN_URL']}) at `{env['GITHUB_SHA'][:12]}`.",
+                  "",
+                  "| Light | Dark |",
+                  "| --- | --- |",
+                  f"| {cell('light', env['HAS_LIGHT'])} | {cell('dark', env['HAS_DARK'])} |",
+              ]
+          )
+
+          body = call("GET").get("body") or ""
+          # The section is the last thing in the body, so everything from the
+          # marker on is the old one. A body without it gets the section added.
+          head = body.split(MARKER)[0].rstrip()
+          new = f"{head}\n\n{section}\n" if head else f"{section}\n"
+          if new != body:
+              call("PATCH", {"body": new})
+          EOF
