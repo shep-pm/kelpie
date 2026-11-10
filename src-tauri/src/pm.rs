@@ -5,6 +5,11 @@
 //! process: the engine's session does, through the process tree (ADR 0001), and
 //! the app only forwards what it says.
 //!
+//! A send whose harness differs from the session's does not move the session: it
+//! stops it, logs a divider and starts a seeded one ([`AppState::pm_session`]),
+//! and a resume the harness refuses starts a seeded session the same way
+//! (`docs/design/pm-chat.md`, Switching harness or model).
+//!
 //! [`pm_history`] reads kelpie's own log of the PM and starts nothing, and
 //! [`pm_retry`] sends the last message again after a quit cut a turn off.
 //!
@@ -156,6 +161,21 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
     })
 }
 
+/// How the maintainer's divider names a harness and the model it runs, such as `goose (qwen)`
+#[must_use]
+pub fn describe(harness: Harness, model: Option<&str>) -> String {
+    let name = match harness {
+        Harness::ClaudeCode => "Claude Code",
+        Harness::Goose => "goose",
+        // `Harness` grows with each harness's slice
+        other => return format!("{other:?}"),
+    };
+    match model {
+        Some(model) => format!("{name} ({model})"),
+        None => name.to_owned(),
+    }
+}
+
 /// The app's [`Opener`](crate::state::Opener): the PM on what `opening.pm` says
 ///
 /// Installs the bridge if it is not yet, and builds the session on it.
@@ -233,10 +253,20 @@ pub fn project_pick(state: State<'_, AppState>) -> Result<Option<String>, String
 /// session id is saved to `projects.json` when the session starts, so the next
 /// launch resumes it. A failure before the session exists is the turn's only
 /// event, a `Failed`.
+///
+/// A send whose settings name another harness than the session runs on stops
+/// that session and starts a new one with a seed ahead of the message. It
+/// returns the divider's text, which is in the log already, and `None` for any
+/// other send. A resume the harness refuses does the same, and its divider is
+/// in the log and not returned: the turn's `Failed` says it live.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<SessionEvent>) {
-    send(&state, text, on_event);
+pub fn pm_send(
+    state: State<'_, AppState>,
+    text: String,
+    on_event: Channel<SessionEvent>,
+) -> Option<String> {
+    send(&state, text, on_event)
 }
 
 /// Send the last message the maintainer sent again, and stream the reply into `on_event`
@@ -244,9 +274,10 @@ pub fn pm_send(state: State<'_, AppState>, text: String, on_event: Channel<Sessi
 /// For a turn a quit cut off. The message is read from kelpie's log and goes
 /// through the same path as [`pm_send`], so the log gets it again and the
 /// session resumes. Nothing in the log to send is a `Failed` on the channel.
+/// Returns what [`pm_send`] does.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) {
+pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) -> Option<String> {
     let last = state
         .pm_log_path()
         .map_or(Ok(Vec::new()), log::read)
@@ -262,21 +293,23 @@ pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) {
             let _ = on_event.send(SessionEvent::Failed {
                 message: "There is no message to send again.".to_owned(),
             });
+            None
         }
         Err(error) => {
             let _ = on_event.send(SessionEvent::Failed {
                 message: format!("could not read the PM's log: {error}"),
             });
+            None
         }
     }
 }
 
-fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) {
-    let (session, project) = match state.pm_session() {
+fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) -> Option<String> {
+    let (session, project, divider) = match state.pm_session() {
         Ok(held) => held,
         Err(message) => {
             let _ = on_event.send(SessionEvent::Failed { message });
-            return;
+            return None;
         }
     };
     session.send(text, move |event| {
@@ -290,6 +323,7 @@ fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) {
         }
         let _ = on_event.send(event);
     });
+    divider
 }
 
 /// The history kelpie logged for the PM, oldest first, empty before a project or a message
@@ -382,6 +416,30 @@ mod tests {
             let chat = Self::with(opener, Box::new(|| Ok(None)), None);
             chat.state().set_project(chat.dir.clone()).unwrap();
             chat
+        }
+
+        /// A chat whose PM is Claude Code on `claude` until the settings name goose, which runs on `goose`
+        fn switching(claude: &FakeAgent, goose: &FakeAgent) -> Self {
+            let (claude, goose) = (claude.clone(), goose.clone());
+            let opener: Opener = Box::new(move |opening| {
+                let agent = match opening.pm.harness {
+                    Harness::ClaudeCode => &claude,
+                    _ => &goose,
+                };
+                Ok(agent.session(
+                    opening.project.path.clone(),
+                    opening.project.pm_session.clone(),
+                    opening.pm.choice.clone(),
+                ))
+            });
+            let chat = Self::with(opener, Box::new(|| Ok(None)), None);
+            chat.state().set_project(chat.dir.clone()).unwrap();
+            chat
+        }
+
+        /// What the PM's log holds
+        fn log(&self) -> Vec<LogEntry> {
+            log::read(self.state().pm_log_path().unwrap()).unwrap()
         }
 
         /// An opener whose session asks the harness for no model or effort
@@ -697,6 +755,109 @@ mod tests {
                 .iter()
                 .any(|method| method == "session/resume")
         );
+    }
+
+    /// The text of the last prompt an agent got
+    fn last_prompt(agent: &FakeAgent) -> String {
+        let prompts = agent.params("session/prompt");
+        prompts.last().unwrap()["prompt"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn a_new_harness_stops_the_old_session_and_logs_a_divider() {
+        let claude = FakeAgent::new()
+            .turn(Turn::new().text("Claude answers"))
+            .turn(Turn::new().text("never asked"));
+        let goose = FakeAgent::new()
+            .offers_models("other", &["other", "qwen"])
+            .turn(Turn::new().text("goose answers"));
+        let chat = Chat::switching(&claude, &goose);
+        let project = chat.state().project_id(None).unwrap();
+        let set = |key: &str, value: &str| {
+            let target = Target::Project {
+                id: project.clone(),
+            };
+            settings_set(chat.state(), target, key.to_owned(), value.into()).unwrap();
+        };
+        chat.send("First").until_turn_ends();
+        assert_eq!(claude.stopped(), 0, "the session runs between messages");
+
+        set("pm-harness", "goose");
+        set("pm-model", "qwen");
+        chat.send("Second").until_turn_ends();
+
+        assert_eq!(claude.stopped(), 1, "the old harness was stopped");
+        assert_eq!(goose.launches(), 1);
+        assert_eq!(
+            claude.params("session/prompt").len(),
+            1,
+            "the old session was sent nothing more"
+        );
+        let divider = LogEntry::Divider {
+            text: "Switched from Claude Code (opus) to goose (qwen)".to_owned(),
+        };
+        let log = chat.log();
+        let at = log.iter().position(|entry| *entry == divider).unwrap();
+        assert_eq!(
+            log[at + 1],
+            LogEntry::User {
+                text: "Second".to_owned()
+            },
+            "the divider comes before the message that started the new session: {log:?}"
+        );
+        let prompt = last_prompt(&goose);
+        assert!(prompt.contains("Maintainer: First"), "{prompt}");
+        assert!(prompt.contains("PM: Claude answers"), "{prompt}");
+        assert!(prompt.ends_with("Second"), "{prompt}");
+    }
+
+    #[test]
+    fn a_refused_resume_starts_a_seeded_session() {
+        let agent = FakeAgent::new()
+            .can_resume()
+            .knows("other")
+            .turn(Turn::new().text("Fresh"));
+        let chat = Chat::resumed(&agent, "gone");
+        let log_path = chat.state().pm_log_path().unwrap();
+        let earlier = log::Log::open(&log_path).unwrap();
+        for entry in [
+            LogEntry::User {
+                text: "Earlier question".to_owned(),
+            },
+            LogEntry::Event(SessionEvent::Text {
+                delta: "Earlier answer".to_owned(),
+            }),
+        ] {
+            earlier.append(&entry).unwrap();
+        }
+        fs::write(
+            log_path.with_file_name("decisions.md"),
+            "- Never squash merges\n",
+        )
+        .unwrap();
+
+        let events = chat.send("Now");
+        // The refusal is a `Failed` the turn goes on from, so wait for its end
+        while !matches!(events.next(), SessionEvent::TurnEnded { .. }) {}
+
+        let prompt = last_prompt(&agent);
+        let decisions = prompt.find("Never squash merges").unwrap();
+        let exchange = prompt.find("Maintainer: Earlier question").unwrap();
+        assert!(decisions < exchange, "{prompt}");
+        assert!(prompt.contains("PM: Earlier answer"), "{prompt}");
+        assert!(prompt.ends_with("Now"), "{prompt}");
+        assert!(
+            !prompt.contains("Maintainer: Now"),
+            "the message being sent is not part of its own seed: {prompt}"
+        );
+        let log = chat.log();
+        let divider = LogEntry::Divider {
+            text: "Couldn't resume, started a new session".to_owned(),
+        };
+        assert_eq!(log.iter().filter(|entry| **entry == divider).count(), 1);
     }
 
     #[test]

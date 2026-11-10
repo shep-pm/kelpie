@@ -20,7 +20,7 @@ use std::time::Duration;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
-use kelpie_engine::session::{Session, SessionId};
+use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,11 @@ const PM_FOLDER: &str = "pm";
 
 /// The PM's log, by name, in its state folder
 const PM_LOG_FILE: &str = "log.jsonl";
+
+/// The PM's standing-decisions file, by name, in its state folder
+///
+/// The PM's own instructions name it, and a new session is seeded from it.
+const DECISIONS_FILE: &str = "decisions.md";
 
 /// How long a quit gives each process to stop before the ladder goes on
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -206,6 +211,13 @@ pub struct Opening<'a> {
 /// scripted agent. The text of an error is for the maintainer to read.
 pub type Opener = Box<dyn Fn(&Opening<'_>) -> Result<Session, String> + Send + Sync>;
 
+/// What the PM's open session runs on, kept to say what a switch left
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
+    harness: Harness,
+    model: Option<String>,
+}
+
 /// What Tauri manages: the process tree, the projects and the PM's session
 pub struct AppState {
     data_dir: PathBuf,
@@ -215,7 +227,7 @@ pub struct AppState {
     projects: Arc<Mutex<Projects>>,
     /// The first project's PM and the harness it was opened on, `None` until
     /// the first send. Held only for a look or a swap, never while the opener runs.
-    session: Mutex<Option<(Harness, Arc<Session>)>>,
+    session: Mutex<Option<(Held, Arc<Session>)>>,
     /// Held while the PM is opened or the project replaced, so two sends open
     /// one session and a replaced project never keeps the old one
     opening: Mutex<()>,
@@ -358,16 +370,20 @@ impl AppState {
     ///
     /// What the PM runs on is resolved from the settings on every call, so a
     /// model or effort changed since the last message applies to this one, on
-    /// the same session. A changed harness does not move a session that is
-    /// open: that is a session of its own (#31), and until then the new one is
-    /// used when the next one is opened.
+    /// the same session. A changed harness cannot move a session: the old
+    /// session's process is stopped, a divider goes into the log, and a new
+    /// session is built that has the seed ahead of its first message
+    /// (`docs/design/pm-chat.md`, Switching harness or model). The divider's
+    /// text is the third thing returned, `None` when nothing was switched.
+    ///
+    /// A new session that cannot be built leaves the old one running.
     ///
     /// # Errors
     ///
     /// No project is picked yet, the settings or the PM's agent file cannot be
-    /// used, or the opener could not build the session. The text is for the
-    /// maintainer to read.
-    pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle), String> {
+    /// used, the opener could not build the session, or the divider could not
+    /// be written. The text is for the maintainer to read.
+    pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
         let project = lock(&self.projects)
             .first()
@@ -378,26 +394,55 @@ impl AppState {
             projects: Arc::clone(&self.projects),
         };
         let plan = pm::plan(&self.config, &project.id)?;
-        if let Some((_, session)) = lock(&self.session).as_ref() {
+        let held = lock(&self.session).clone();
+        if let Some((was, session)) = &held
+            && was.harness == plan.harness
+        {
             session.choose(plan.choice.clone());
-            return Ok((Arc::clone(session), handle));
+            return Ok((Arc::clone(session), handle, None));
         }
         let state_dir = self.pm_dir(&project.id);
         let log = Log::open(state_dir.join(PM_LOG_FILE))
             .map_err(|error| format!("could not open the PM's log: {error}"))?;
-        let session = Arc::new(
-            (self.opener)(&Opening {
-                tree: &self.tree,
-                data_dir: &self.data_dir,
-                project: &project,
-                state_dir: &state_dir,
-                logins: &self.logins,
-                pm: &plan,
-            })?
-            .with_log(log),
-        );
-        *lock(&self.session) = Some((plan.harness, Arc::clone(&session)));
-        Ok((session, handle))
+        let decisions = state_dir.join(DECISIONS_FILE);
+        // Another harness cannot resume the old harness's session id
+        let on = Project {
+            pm_session: held.as_ref().map_or(project.pm_session.clone(), |_| None),
+            ..project
+        };
+        let session = (self.opener)(&Opening {
+            tree: &self.tree,
+            data_dir: &self.data_dir,
+            project: &on,
+            state_dir: &state_dir,
+            logins: &self.logins,
+            pm: &plan,
+        })?
+        .with_log(log.clone());
+        let now = Held {
+            harness: plan.harness,
+            model: plan.choice.model.clone(),
+        };
+        let mut divider = None;
+        let session = match held {
+            None => session.with_seed(decisions),
+            Some((was, old)) => {
+                // The new session is built, so a failure above kept the old one
+                old.stop();
+                let text = format!(
+                    "Switched from {} to {}",
+                    pm::describe(was.harness, was.model.as_deref()),
+                    pm::describe(now.harness, now.model.as_deref())
+                );
+                log.append(&LogEntry::Divider { text: text.clone() })
+                    .map_err(|error| format!("could not write the PM's log: {error}"))?;
+                divider = Some(text);
+                session.with_seed_at_start(decisions)
+            }
+        };
+        let session = Arc::new(session);
+        *lock(&self.session) = Some((now, Arc::clone(&session)));
+        Ok((session, handle, divider))
     }
 
     /// The folder of the PM's harness state and log for the project `id`

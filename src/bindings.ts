@@ -28,8 +28,14 @@ export const commands = {
 	 *  session id is saved to `projects.json` when the session starts, so the next
 	 *  launch resumes it. A failure before the session exists is the turn's only
 	 *  event, a `Failed`.
+	 * 
+	 *  A send whose settings name another harness than the session runs on stops
+	 *  that session and starts a new one with a seed ahead of the message. It
+	 *  returns the divider's text, which is in the log already, and `None` for any
+	 *  other send. A resume the harness refuses does the same, and its divider is
+	 *  in the log and not returned: the turn's `Failed` says it live.
 	 */
-	pmSend: (text: string, onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<void>("pm_send", { text, onEvent }),
+	pmSend: (text: string, onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<string | null>("pm_send", { text, onEvent }),
 	/**
 	 *  Stop the turn in flight
 	 * 
@@ -57,8 +63,9 @@ export const commands = {
 	 *  For a turn a quit cut off. The message is read from kelpie's log and goes
 	 *  through the same path as [`pm_send`], so the log gets it again and the
 	 *  session resumes. Nothing in the log to send is a `Failed` on the channel.
+	 *  Returns what [`pm_send`] does.
 	 */
-	pmRetry: (onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<void>("pm_retry", { onEvent }),
+	pmRetry: (onEvent: Channel<SessionEvent>) => __TAURI_INVOKE<string | null>("pm_retry", { onEvent }),
 	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
@@ -183,7 +190,16 @@ text: string } |
 /**  An event the session streamed */
 {
 	entry: "event",
-} & SessionEvent;
+} & SessionEvent | 
+/**
+ *  A line kelpie wrote between two sessions, such as a switch of harness
+ * 
+ *  The history above it stays, and the session below it starts from a
+ *  seed instead of from what is above.
+ */
+{ entry: "divider"; 
+/**  What the line says */
+text: string };
 
 /**
  *  What a harness says it offers, listed by the harness itself
