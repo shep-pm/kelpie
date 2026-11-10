@@ -411,7 +411,13 @@ id: string;
 /**  One line saying what the call does */
 title: string; 
 /**  How far the call got */
-status: ToolStatus } | 
+status: ToolStatus; 
+/**
+ *  Why kelpie refused the call, on a refused step
+ * 
+ *  Absent on every other step, and on a call refused with no reason given.
+ */
+reason?: string | null } | 
 /**  The turn is over */
 { kind: "turn_ended"; 
 /**  Why it ended */

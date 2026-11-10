@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use semver::Version;
 
+use crate::permission::ReadCall;
 use crate::session::Harness;
 use crate::settings::BridgeUpdates;
 use crate::tree::ProcessTree;
@@ -180,6 +181,8 @@ fn probe_harness(pin: &Pin<'_>, command: PathBuf) -> Result<Harness, String> {
         installs: Vec::new(),
         global_reads: Vec::new(),
         unprompted: None,
+        prompting: None,
+        read_call: ReadCall::standard(),
         // A probe that fails is recorded with the bridge's own words, so nothing
         // here has to name the harness the person installed
         outdated: None,

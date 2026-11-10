@@ -110,6 +110,7 @@ fn step(id: &str, title: &str, status: ToolStatus) -> SessionEvent {
         id: id.to_owned(),
         title: title.to_owned(),
         status,
+        reason: None,
     }
 }
 
@@ -156,6 +157,114 @@ fn a_permission_request_is_refused() {
         agent.params("session/request_permission"),
         [json!({"outcome": {"outcome": "selected", "optionId": "reject"}})]
     );
+}
+
+/// A session whose worker may write in `/project`, and whose harness is judged by that
+fn judged(agent: &FakeAgent) -> Session {
+    session(agent).with_judge(Judge::new("/project", vec![PathBuf::from("/project")]))
+}
+
+/// What a mode setting looks like on the wire
+fn set_mode(value: &str) -> serde_json::Value {
+    json!({"sessionId": "fake-1", "configId": "mode", "value": value})
+}
+
+#[test]
+fn a_judged_session_starts_its_harness_in_its_prompting_mode() {
+    let agent = FakeAgent::new()
+        .offers_modes("bypassPermissions", &["default", "bypassPermissions"])
+        .prompting("default")
+        // A sandbox would set the mode that stops the prompts, which no judge could see
+        .sandboxed("bypassPermissions");
+
+    say(&judged(&agent), "Hello");
+
+    assert_eq!(
+        agent.params("session/set_config_option"),
+        [set_mode("default")]
+    );
+}
+
+#[test]
+fn a_judged_session_leaves_the_mode_of_a_harness_with_no_prompting_mode() {
+    let agent = FakeAgent::new().offers_modes("default", &["default", "bypassPermissions"]);
+
+    say(&judged(&agent), "Hello");
+
+    assert!(agent.params("session/set_config_option").is_empty());
+}
+
+#[test]
+fn a_refused_call_keeps_its_reason_on_the_step() {
+    let agent = FakeAgent::new().turn(Turn::new().permission_to_write(
+        "t1",
+        "Write /etc/hosts",
+        "/etc/hosts",
+    ));
+
+    let heard = say(&judged(&agent), "Write it");
+
+    let [_, SessionEvent::ToolStep { status, reason, .. }, _] = heard.as_slice() else {
+        panic!("{heard:?}");
+    };
+    assert_eq!(*status, ToolStatus::Refused);
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|why| why.contains("/etc/hosts is outside the folders")),
+        "{reason:?}"
+    );
+    assert_eq!(
+        agent.params("session/request_permission"),
+        [json!({"outcome": {"outcome": "selected", "optionId": "reject"}})]
+    );
+}
+
+#[test]
+fn a_write_inside_the_worktree_is_answered_with_the_allow_option() {
+    let agent = FakeAgent::new().turn(
+        Turn::new()
+            .tool_call("t1", "Write src/lib.rs")
+            .permission_to_write("t1", "Write src/lib.rs", "src/lib.rs"),
+    );
+
+    let heard = say(&judged(&agent), "Write it");
+
+    assert_eq!(
+        heard,
+        [
+            started("fake-1"),
+            step("t1", "Write src/lib.rs", ToolStatus::Pending),
+            step("t1", "Write src/lib.rs", ToolStatus::Done),
+            ended(),
+        ]
+    );
+    assert_eq!(
+        agent.params("session/request_permission"),
+        [json!({"outcome": {"outcome": "selected", "optionId": "allow"}})]
+    );
+}
+
+#[test]
+fn a_shell_call_is_refused_naming_guard() {
+    let agent = FakeAgent::new().turn(Turn::new().permission_to_run("t1", "Run ls", "ls"));
+
+    let heard = say(&judged(&agent), "List it");
+
+    assert!(
+        matches!(&heard[1], SessionEvent::ToolStep { status: ToolStatus::Refused, reason: Some(why), .. } if why.contains("guard")),
+        "{heard:?}"
+    );
+}
+
+#[test]
+fn a_session_with_no_judge_refuses_every_request_with_no_reason() {
+    let agent =
+        FakeAgent::new().turn(Turn::new().permission_to_write("t1", "Write notes.md", "notes.md"));
+
+    let heard = say(&session(&agent), "Write it");
+
+    assert_eq!(heard[1], step("t1", "Write notes.md", ToolStatus::Refused));
 }
 
 #[test]
@@ -497,7 +606,7 @@ fn a_harness_shows_the_names_of_its_environment_and_no_values() {
         concat!(
             r#"Harness { program: "agent", args: [], env: ["TOKEN"], "#,
             r#"new_session_meta: true, extensions: [], hosts: [], installs: [], "#,
-            r#"global_reads: [], unprompted: None, outdated: None }"#
+            r#"global_reads: [], unprompted: None, prompting: None, read_call: ReadCall { .. }, outdated: None }"#
         )
     );
 }
