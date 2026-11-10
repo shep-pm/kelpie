@@ -93,13 +93,29 @@ pub(super) fn start(setup: &Setup, swap: Option<Swap>) -> Result<(Attempt, Link)
             };
             let Started { harness, launch } = (bridge.start)(&version).map_err(not_started)?;
             let mut launch = launch;
-            let link = launch
-                .launch()
-                .map_err(|error| not_started(format!("could not start the harness: {error}")))?;
             let mode = setup
                 .mode
                 .clone()
                 .or_else(|| unprompted(&*launch, &harness));
+            let Link {
+                transport,
+                explain,
+                stop,
+            } = launch
+                .launch()
+                .map_err(|error| not_started(format!("could not start the harness: {error}")))?;
+            // What launched the agent owns what confines it, such as a sandbox
+            // whose proxy stops with it, so it stays until the agent has been
+            // stopped, not until this function returns (ADR 0005)
+            let link = Link {
+                transport,
+                explain,
+                stop: Box::new(move |grace| {
+                    let how = stop(grace);
+                    drop(launch);
+                    how
+                }),
+            };
             Ok((
                 Attempt {
                     harness,

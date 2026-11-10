@@ -1,6 +1,8 @@
 //! A session in a sandbox sets the harness's mode that stops its own prompts
 
 use super::*;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
 use crate::session::fake::FakeBridge;
 
 /// What a sandboxed agent's mode setting looks like on the wire
@@ -137,4 +139,84 @@ fn a_bridge_version_that_does_not_run_in_a_sandbox_keeps_its_prompts() {
     say(&session, "second");
 
     assert!(new.params("session/set_config_option").is_empty());
+}
+
+/// A launcher that notes when it is dropped, and how many times its agent had
+/// been stopped by then, as a sandbox is dropped with the launcher that owns it
+struct Confining {
+    agent: FakeAgent,
+    dropped: Arc<AtomicBool>,
+    stopped_by_then: Arc<AtomicUsize>,
+}
+
+impl Launch for Confining {
+    fn launch(&mut self) -> io::Result<Link> {
+        self.agent.launch()
+    }
+
+    fn sandboxed(&self) -> bool {
+        true
+    }
+}
+
+impl Drop for Confining {
+    fn drop(&mut self) {
+        self.stopped_by_then
+            .store(self.agent.stopped(), Ordering::SeqCst);
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn what_confines_a_bridge_version_lasts_until_its_agent_is_stopped() {
+    let agent = confined().turn(Turn::new().text("hi"));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let stopped_by_then = Arc::new(AtomicUsize::new(0));
+    let (started_agent, flag, count) = (
+        agent.clone(),
+        Arc::clone(&dropped),
+        Arc::clone(&stopped_by_then),
+    );
+    let bridge = Bridge {
+        id: "fake-bridge".to_owned(),
+        current: Box::new(|| Swap {
+            version: Version::new(1, 0, 0),
+            from: None,
+        }),
+        start: Box::new(move |_| {
+            Ok(Started {
+                harness: started_agent.harness(),
+                launch: Box::new(Confining {
+                    agent: started_agent.clone(),
+                    dropped: Arc::clone(&flag),
+                    stopped_by_then: Arc::clone(&count),
+                }),
+            })
+        }),
+        failed: Box::new(|_, _| None),
+    };
+    let session = Session::on_bridge(bridge, PathBuf::from("/project"), None, Choice::default());
+
+    say(&session, "Hello");
+
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "the launcher, and the sandbox it owns, was dropped while its agent ran"
+    );
+    drop(session);
+    for _ in 0..200 {
+        if dropped.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the launcher was never dropped"
+    );
+    assert_eq!(
+        stopped_by_then.load(Ordering::SeqCst),
+        1,
+        "the launcher was dropped before its agent was stopped"
+    );
 }
