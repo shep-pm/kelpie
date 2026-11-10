@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::network::REQUEST_NETWORK;
 use super::relay::{is_relay, relay, settings};
 use super::*;
-use crate::sandbox::{Project, Sandbox};
+use crate::sandbox::{Project, Reads, Sandbox};
 use crate::session::fake::{FakeAgent, Turn};
 use crate::session::{Choice, Harness, SandboxAnswer, SessionEvent};
 
@@ -830,7 +830,8 @@ fn allow_once_widens_the_running_sandbox() {
     let project = Project {
         folder: &scratch.0,
         network_allowlist: &allowed,
-        read_anywhere: false,
+        reads: Reads::Project,
+        sessions_root: &scratch.0.join("sessions"),
     };
     // A real sandbox, started as a session's is, whose lists the answer widens
     let sandbox = Sandbox::start(&Harness::new("/bin/sh"), &project, &scratch.0.join("state"))

@@ -799,6 +799,7 @@ fn an_allowed_host_is_reached_by_a_running_sandbox() {
         &scratch,
         "an_allowed_host_is_reached_by_a_running_sandbox",
         &exe,
+        Reads::Project,
     ) else {
         return;
     };
