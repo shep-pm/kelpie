@@ -37,7 +37,7 @@ use std::sync::atomic::Ordering;
 use kelpie_engine::sandbox::{Project, Reads, Sandbox};
 use kelpie_engine::session::Harness;
 
-use super::{SKIPPED, host_can_run};
+use super::host::{SKIPPED, host_can_run};
 
 /// The logins of Claude Code and goose in the home folder, as a person has them
 /// (`sandbox::denied`)
@@ -491,7 +491,7 @@ const CASES: &[(&str, fn())] = &[
     ("nest", a_nested_claude_folder),
     ("read", the_pm_reads),
     ("net", a_host_and_a_socket),
-    ("mask", super::a_denied_folder_under_an_allowed_one),
+    ("mask", super::files::a_denied_folder_under_an_allowed_one),
     #[cfg(target_os = "linux")]
     ("sock", a_listed_socket),
 ];
