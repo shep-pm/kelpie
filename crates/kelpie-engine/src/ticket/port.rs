@@ -1,4 +1,4 @@
-//! The port a project's tickets are read through
+//! The port a project's tickets are read, commented on and closed through
 
 use super::{ForgeError, Issue, Listed, OpenPull, TicketId};
 use crate::github::Timestamp;
@@ -23,6 +23,22 @@ pub trait Tickets: Send + Sync {
     ///
     /// [`ForgeError`] when the source cannot be asked or its answer read.
     fn ready_issues(&self, label: &str) -> Result<Vec<Listed>, ForgeError>;
+
+    /// Adds a comment with `body` to the ticket `id`, as the maintainer
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError`] when the source cannot be asked or refuses, and
+    /// [`ForgeError::NoIssue`] for a ticket that is no issue of this source's.
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError>;
+
+    /// Closes the ticket `id`, as the maintainer
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError`] when the source cannot be asked or refuses, and
+    /// [`ForgeError::NoIssue`] for a ticket that is no issue of this source's.
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError>;
 }
 
 /// The reads only a GitHub source answers

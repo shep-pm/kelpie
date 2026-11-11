@@ -1,6 +1,6 @@
 //! Calls to GitHub as the maintainer, one `gh` child per call
 //!
-//! Every read and the draft pull request go out as the login `gh` holds
+//! Every read, the draft pull request, and a ticket's comment and close go out as the login `gh` holds
 //! (`docs/design/tickets.md`, GitHub). The login's token never leaves the `gh`
 //! child: kelpie never reads it, and it is not in a call's arguments or
 //! environment. [`Gh`] runs each call through the process tree (ADR 0001) with
@@ -28,6 +28,7 @@ mod checks;
 pub mod conditional;
 mod failed;
 pub mod hold;
+mod issues;
 mod listing;
 pub mod pulls;
 mod pulls_read;
@@ -47,6 +48,8 @@ mod checks_tests;
 mod conditional_tests;
 #[cfg(test)]
 mod hold_tests;
+#[cfg(test)]
+mod issues_tests;
 #[cfg(test)]
 mod pulls_read_tests;
 #[cfg(test)]

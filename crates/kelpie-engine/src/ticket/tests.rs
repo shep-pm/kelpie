@@ -208,6 +208,28 @@ fn a_fake_of_the_pulls_port_answers_from_its_script_and_records_each_call() {
 }
 
 #[test]
+fn the_fake_records_each_comment_and_close() {
+    let fake = FakeTickets::new();
+    let seven = id("7");
+
+    fake.comment(&seven, "merged without a closing line")
+        .unwrap();
+    fake.close(&seven).unwrap();
+    fake.script_write(Err(ForgeError::Failed("refused".to_owned())));
+    let refused = fake.close(&id("8"));
+
+    assert_eq!(refused, Err(ForgeError::Failed("refused".to_owned())));
+    assert_eq!(
+        fake.asked(),
+        [
+            Asked::Comment(seven, "merged without a closing line".to_owned()),
+            Asked::Close(seven),
+            Asked::Close(id("8")),
+        ]
+    );
+}
+
+#[test]
 fn the_fake_records_each_write_and_answers_a_merge_as_scripted() {
     let fake = FakePulls::new();
     let pulls: &dyn Pulls = &fake;

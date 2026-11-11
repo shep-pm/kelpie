@@ -19,6 +19,10 @@ pub enum Asked {
     Issue(TicketId),
     /// [`Tickets::ready_issues`], and the label
     Ready(String),
+    /// [`Tickets::comment`], with the ticket and the text
+    Comment(TicketId, String),
+    /// [`Tickets::close`], and the ticket
+    Close(TicketId),
     /// [`GithubTickets::open_issues`]
     Open,
     /// [`GithubTickets::closed_issues`], and its `since`
@@ -37,6 +41,7 @@ struct Script {
     open: Option<Listing>,
     closed: Option<Listing>,
     pulls: Option<PullListing>,
+    written: Option<Result<(), ForgeError>>,
     asked: Vec<Asked>,
 }
 
@@ -81,6 +86,13 @@ impl FakeTickets {
         self.script().pulls = Some(answer);
     }
 
+    /// What [`Tickets::comment`] and [`Tickets::close`] answer
+    ///
+    /// With none scripted, each succeeds.
+    pub fn script_write(&self, answer: Result<(), ForgeError>) {
+        self.script().written = Some(answer);
+    }
+
     /// What it was asked, in order
     #[must_use]
     pub fn asked(&self) -> Vec<Asked> {
@@ -109,6 +121,18 @@ impl Tickets for FakeTickets {
         let mut script = self.script();
         script.asked.push(Asked::Ready(label.to_owned()));
         script.ready.clone().unwrap_or_else(|| Ok(Vec::new()))
+    }
+
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(Asked::Comment(*id, body.to_owned()));
+        script.written.clone().unwrap_or(Ok(()))
+    }
+
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(Asked::Close(*id));
+        script.written.clone().unwrap_or(Ok(()))
     }
 }
 
