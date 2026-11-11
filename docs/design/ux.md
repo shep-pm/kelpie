@@ -83,7 +83,7 @@ First interactions:
 
 ## Workers
 
-1. Click a ticket that's building, or its overlay on the graph, to open the worker's session in the same chat view the PM uses: its live stream, its diff so far, its processes, and a message box.
+1. Click a ticket that's building, or its overlay on the graph, to open the worker's session in the same chat view the PM uses: its live stream, its diff so far, its processes, and a message box. A ticket in Review whose worker waits on the maintainer opens it the same way, since a ruling is answered with a Note there; its pull request is read on GitHub.
 2. **Note** is the default send. The agent reads it at its next tool boundary, or at the end of its turn on a harness that cannot take one mid-turn. **Stop and tell** interrupts the turn.
 3. A note goes into the ticket's record. When it changes the scope, the PM updates the ticket's text so review checks the new ask. The PM gets one line saying what the maintainer told the worker.
 
