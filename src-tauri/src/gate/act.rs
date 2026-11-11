@@ -52,21 +52,35 @@ impl Gate {
         };
         match step {
             Step::Done => return Carried::Forget,
-            Step::Rule(ruling) => self.rule(work, kept, &ruling, head),
+            Step::Rule(ruling) => {
+                self.rule(work, kept, &ruling, head);
+            }
             Step::Red(checks) => {
                 let ruling = still_red(head, &checks);
                 self.rule(work, kept, &ruling, head);
             }
             other => {
-                // The gate has something to do, so a worker waiting on an old ruling is
-                // back in play
-                self.reinstated(work, kept);
-                match other {
+                let ruled = match other {
                     Step::CatchUp => self.catch_up(work, kept, head),
-                    Step::Conflict(prompt) => self.send_conflict(work, kept, head, "", &prompt),
-                    Step::Rerun(runs) => self.rerun(&runs, kept, head, now),
-                    Step::Yes => kept.ready_at(head),
-                    _ => {}
+                    Step::Conflict(prompt) => {
+                        self.send_conflict(work, kept, head, "", &prompt);
+                        false
+                    }
+                    Step::Rerun(runs) => {
+                        self.rerun(&runs, kept, head, now);
+                        false
+                    }
+                    Step::Yes => {
+                        kept.ready_at(head);
+                        false
+                    }
+                    _ => false,
+                };
+                // The gate has something to do, so a worker waiting on an old ruling is
+                // back in play. A ruling the step came to is written over that wait
+                // while the record is as the pass began it, so it is not reinstated first.
+                if !ruled {
+                    self.reinstated(work, kept);
                 }
             }
         }
@@ -74,7 +88,9 @@ impl Gate {
     }
 
     /// Rebase the branch onto the latest base and push it, and say what the push left
-    fn catch_up(&self, work: &Work, kept: &mut Kept, head: &str) {
+    ///
+    /// `true` when the catch-up came to a ruling.
+    fn catch_up(&self, work: &Work, kept: &mut Kept, head: &str) -> bool {
         let worktree = self.paths.worktree(&work.ticket);
         let checkout = lock(&self.checkout);
         let caught = worktree::rebase(
@@ -94,18 +110,19 @@ impl Gate {
                 Step::Conflict(prompt) => self.send_conflict(work, kept, head, &base, &prompt),
                 Step::Rule(ruling) => {
                     self.give_up_merge(work);
-                    self.rule(work, kept, &ruling, head);
+                    return self.rule(work, kept, &ruling, head);
                 }
                 _ => {}
             },
             Ok(Rebase::Refused(why)) => {
-                self.rule(work, kept, &Ruling::CatchUpRefused { why }, head);
+                return self.rule(work, kept, &Ruling::CatchUpRefused { why }, head);
             }
             Err(why) => eprintln!(
                 "kelpie: ticket {} was not caught up with its base: {why}",
                 work.ticket
             ),
         }
+        false
     }
 
     /// Send the worker back to resolve the merge catch-up left in progress
@@ -153,9 +170,9 @@ impl Gate {
     /// The reason goes with the status under one hold of the records' lock, as the engine's
     /// own settling does. A record the maintainer moved while the pass was at work is left
     /// as they left it, and the head is not marked ruled: that worker is not waiting.
-    fn rule(&self, work: &Work, kept: &mut Kept, ruling: &Ruling, head: &str) {
+    fn rule(&self, work: &Work, kept: &mut Kept, ruling: &Ruling, head: &str) -> bool {
         let Some(records) = self.records() else {
-            return;
+            return false;
         };
         let mut records = lock(&records);
         if records
@@ -166,18 +183,20 @@ impl Gate {
                 "kelpie: ticket {} is not where its pass left it, so its ruling is not recorded",
                 work.ticket
             );
-            return;
+            return false;
         }
+        let reason = ruling.reason();
         let written = records
             .set_status(&work.ticket, Status::WaitingOnMaintainer)
-            .and_then(|()| records.set_reason(&work.ticket, Some(ruling.reason())));
+            .and_then(|()| records.set_reason(&work.ticket, Some(reason.clone())));
         drop(records);
         self.lost(&work.ticket, written, "the gate's ruling");
-        kept.ruled_at(head);
+        kept.ruled_at(head, &reason);
         if matches!(ruling, Ruling::Closed) {
             // Nothing is left to read once the pull request is closed
             kept.pull = None;
         }
+        true
     }
 
     /// Set the worker Ended and clear the reason, when it was waiting on a ruling of the gate's

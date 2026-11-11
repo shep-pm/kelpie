@@ -122,6 +122,10 @@ pub struct Kept {
     /// pass for until its head moves
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruled: Option<String>,
+    /// The reason the gate put on the worker's record when it ruled, which tells the
+    /// gate's wait from one of the worker's own
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruled_for: Option<String>,
     /// The head the gate found ready to merge, which the ticket's needs-you line says
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<String>,
@@ -197,15 +201,26 @@ impl Kept {
         });
     }
 
-    /// Records that the gate ruled at `head`, which is no longer ready
-    pub fn ruled_at(&mut self, head: &str) {
+    /// Records that the gate ruled at `head` with `reason`, which is no longer ready
+    pub fn ruled_at(&mut self, head: &str, reason: &str) {
         self.ruled = Some(head.to_owned());
+        self.ruled_for = Some(reason.to_owned());
         self.ready = None;
     }
 
     /// Gives up the ruling, so the gate passes over the ticket again
     pub fn unruled(&mut self) {
         self.ruled = None;
+        self.ruled_for = None;
+    }
+
+    /// Whether a worker waiting with `reason` is waiting on the gate's ruling
+    ///
+    /// A worker that waits for another reason, such as a question or a hand-over's
+    /// ruling, is not, whatever the gate ruled before.
+    #[must_use]
+    pub fn rules_with(&self, reason: Option<&str>) -> bool {
+        self.ruled.is_some() && self.ruled_for.is_some() && self.ruled_for.as_deref() == reason
     }
 
     /// Whether the gate ruled at `head` and nothing has moved it since

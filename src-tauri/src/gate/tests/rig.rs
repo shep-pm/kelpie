@@ -315,6 +315,16 @@ impl Rig {
             .unwrap();
     }
 
+    /// The worker on `ticket` waits on the maintainer for `reason`, as a question or a hand-over's ruling would
+    pub(super) fn park(&self, ticket: &str, reason: &str) {
+        let records = self.state.workers().records(&self.project).unwrap();
+        let mut records = records.lock().unwrap_or_else(PoisonError::into_inner);
+        records
+            .set_status(ticket, Status::WaitingOnMaintainer)
+            .unwrap();
+        records.set_reason(ticket, Some(reason.to_owned())).unwrap();
+    }
+
     /// `main` takes a commit that sets `text` at `file`
     pub(super) fn main_moves(&self, file: &str, text: &str) {
         let other = self.root.join("other");

@@ -218,13 +218,13 @@ fn a_ruled_ticket_gets_no_pass_until_its_head_moves() {
     let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
     rig.read(std::slice::from_ref(&pull));
     assert_eq!(rig.record(TICKET).status, Status::WaitingOnMaintainer);
-    // A pass clears this, so a pass that ran again would show
-    rig.gate
-        .keep_for_test(TICKET, |kept| kept.ready = Some("planted".to_owned()));
+    // A pass sets this to the listing's number, so a pass that ran again would show
+    rig.gate.keep_for_test(TICKET, |kept| kept.pull = Some(999));
 
     rig.read(std::slice::from_ref(&pull));
-    assert!(
-        rig.gate.ready().contains(TICKET),
+    assert_eq!(
+        rig.gate.kept(TICKET).and_then(|kept| kept.pull),
+        Some(999),
         "no pass ran at the head it ruled on"
     );
 
@@ -232,9 +232,11 @@ fn a_ruled_ticket_gets_no_pass_until_its_head_moves() {
     let worktree = rig.worktree(TICKET);
     git(&worktree, &["rm", "--quiet", ".claude/settings.json"]);
     let moved = rig.commit_staged(TICKET);
-    rig.read(&[rig.pull(TICKET, &moved, HeadStatus::Passed)]);
-    assert!(
-        !rig.gate.ready().contains(TICKET),
+    let pull = rig.pull(TICKET, &moved, HeadStatus::Passed);
+    rig.read(&[pull.clone()]);
+    assert_eq!(
+        rig.gate.kept(TICKET).and_then(|kept| kept.pull),
+        Some(pull.number.get()),
         "a pass ran at the new head"
     );
     assert_eq!(
@@ -242,6 +244,85 @@ fn a_ruled_ticket_gets_no_pass_until_its_head_moves() {
         Status::Ended,
         "the ruling is given up, and the ticket is back in the gate"
     );
+}
+
+#[test]
+fn a_worker_waiting_for_another_reason_than_the_gates_ruling_gets_no_pass() {
+    let rig = rig();
+    let head = fenced(&rig);
+    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
+    assert_eq!(rig.record(TICKET).status, Status::WaitingOnMaintainer);
+
+    // The maintainer resumed the worker, which took the file out and then asked a question
+    let worktree = rig.worktree(TICKET);
+    git(&worktree, &["rm", "--quiet", ".claude/settings.json"]);
+    let moved = rig.commit_staged(TICKET);
+    rig.park(TICKET, "Which of the two should it be?");
+
+    rig.read(&[rig.pull(TICKET, &moved, HeadStatus::Passed)]);
+
+    let record = rig.record(TICKET);
+    assert_eq!(record.status, Status::WaitingOnMaintainer);
+    assert_eq!(
+        record.reason.as_deref(),
+        Some("Which of the two should it be?"),
+        "the question stays for the maintainer"
+    );
+}
+
+#[test]
+fn a_ready_mark_goes_when_the_worker_runs_again() {
+    let rig = rig();
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.read(std::slice::from_ref(&pull));
+    rig.clock.advance(SETTLE);
+    rig.read(std::slice::from_ref(&pull));
+    assert!(rig.gate.ready().contains(TICKET));
+
+    // A Note from the maintainer has the worker running again
+    rig.set_status(TICKET, Status::Running);
+    rig.read(std::slice::from_ref(&pull));
+
+    assert!(
+        rig.gate.ready().is_empty(),
+        "the head the gate checked is not the one the worker is on"
+    );
+}
+
+#[test]
+fn a_conflict_ruling_on_a_ticket_whose_head_moved_while_ruled_is_recorded() {
+    let rig = rig();
+    let head = fenced(&rig);
+    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
+    assert_eq!(rig.record(TICKET).status, Status::WaitingOnMaintainer);
+
+    // The head moves by a hand push that conflicts with the base, and the turns are used up
+    let worktree = rig.worktree(TICKET);
+    git(&worktree, &["rm", "--quiet", ".claude/settings.json"]);
+    std::fs::write(worktree.join("shared.txt"), "mine\n").unwrap();
+    git(&worktree, &["add", "shared.txt"]);
+    let moved = rig.commit_staged(TICKET);
+    rig.main_moves("shared.txt", "theirs\n");
+    rig.gate.keep_for_test(TICKET, |kept| {
+        for turn in 0..3 {
+            kept.conflict_sent(&format!("head-{turn}"), &format!("base-{turn}"));
+        }
+    });
+
+    rig.read(&[rig.pull(TICKET, &moved, HeadStatus::Passed)]);
+
+    let record = rig.record(TICKET);
+    assert_eq!(record.status, Status::WaitingOnMaintainer);
+    assert!(
+        record
+            .reason
+            .as_deref()
+            .is_some_and(|why| why.contains("shared.txt")),
+        "{:?}",
+        record.reason
+    );
+    assert!(!merging(&rig, TICKET), "the merge was given up");
 }
 
 #[test]
@@ -329,13 +410,11 @@ fn a_running_or_paused_worker_gets_no_pass() {
         let rig = rig();
         let head = rig.worker_on(TICKET, "work.txt", "mine\n");
         rig.set_status(TICKET, status);
-        rig.gate
-            .keep_for_test(TICKET, |kept| kept.ready = Some("planted".to_owned()));
 
         rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
 
         assert!(
-            rig.gate.ready().contains(TICKET),
+            rig.gate.kept(TICKET).is_none(),
             "a {status:?} worker got a pass"
         );
     }

@@ -9,6 +9,7 @@ use crate::ticket::TicketId;
 
 const HEAD: &str = "aaaaaaa1111111111111111111111111111111aa";
 const OTHER: &str = "bbbbbbb2222222222222222222222222222222bb";
+const REASON: &str = "The pull request has a ruling at this head.";
 
 fn at(secs: u64) -> Timestamp {
     Timestamp::from_secs(secs)
@@ -775,7 +776,7 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
     kept.merge_refused();
     kept.removals_seen(2);
     kept.pull = Some(12);
-    kept.ruled_at(OTHER);
+    kept.ruled_at(OTHER, REASON);
     kept.ready_at(HEAD);
     book.entry(local).pushed(OTHER);
     book.save().unwrap();
@@ -796,6 +797,7 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
     assert_eq!(kept.queued.as_ref().unwrap().runs, [9]);
     assert_eq!(kept.pull, Some(12));
     assert!(kept.rules_at(OTHER) && !kept.rules_at(HEAD));
+    assert!(kept.rules_with(Some(REASON)));
     assert_eq!(kept.ready.as_deref(), Some(HEAD));
 }
 
@@ -803,10 +805,20 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
 fn a_ruling_withdraws_ready_and_a_new_pass_gives_the_ruling_up() {
     let mut kept = Kept::default();
     kept.ready_at(HEAD);
-    kept.ruled_at(HEAD);
+    kept.ruled_at(HEAD, REASON);
     assert_eq!(kept.ready, None);
+    assert!(kept.rules_with(Some(REASON)));
     kept.unruled();
     assert!(!kept.rules_at(HEAD));
+    assert!(!kept.rules_with(Some(REASON)));
+}
+
+#[test]
+fn a_wait_for_another_reason_is_not_the_gates_ruling() {
+    let mut kept = Kept::default();
+    kept.ruled_at(HEAD, REASON);
+    assert!(!kept.rules_with(Some("A question: which way?")));
+    assert!(!kept.rules_with(None));
 }
 
 #[test]

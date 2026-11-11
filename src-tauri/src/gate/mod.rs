@@ -247,6 +247,7 @@ impl Gate {
     /// of the gate's gets a pass once its head moves, or its pull request is no longer
     /// open.
     pub fn after_read(self: &Arc<Self>, records: &[Record], pulls: &[OpenPull]) {
+        self.withdraw_stale_ready(records);
         for record in records {
             let Some(work) = self.work_for(record, pulls) else {
                 continue;
@@ -259,6 +260,30 @@ impl Gate {
                 let _at_work = at_work;
                 gate.pass(&work);
             });
+        }
+    }
+
+    /// Take the ready mark off each ticket whose worker is no longer Ended
+    ///
+    /// A worker the maintainer sent a Note or resumed is running and pushing again, so the
+    /// head the gate found ready is not the one to merge. The gate gives such a worker no
+    /// pass, so the mark would stay until the worker ended.
+    fn withdraw_stale_ready(&self, records: &[Record]) {
+        let mut book = lock(&self.book);
+        let mut changed = false;
+        for record in records.iter().filter(|r| r.status != Status::Ended) {
+            let Ok(id) = record.ticket.parse::<TicketId>() else {
+                continue;
+            };
+            if let Some(kept) = book.get(id).filter(|kept| kept.ready.is_some()) {
+                let mut kept = kept.clone();
+                kept.ready = None;
+                *book.entry(id) = kept;
+                changed = true;
+            }
+        }
+        if changed && let Err(why) = book.save() {
+            eprintln!("kelpie: the gate's facts did not keep: {why}");
         }
     }
 
@@ -312,8 +337,11 @@ impl Gate {
         let id: TicketId = record.ticket.parse().ok()?;
         let book = lock(&self.book);
         let kept = book.get(id);
+        // Waiting on the gate's own ruling, which is the reason it put on the record. A
+        // worker that waits for another reason (a question, a hand-over's ruling) waits on
+        // the maintainer for that, and is no business of the gate's.
         let ruled = record.status == Status::WaitingOnMaintainer
-            && kept.is_some_and(|kept| kept.ruled.is_some());
+            && kept.is_some_and(|kept| kept.rules_with(record.reason.as_deref()));
         if record.status != Status::Ended && !ruled {
             return None;
         }
