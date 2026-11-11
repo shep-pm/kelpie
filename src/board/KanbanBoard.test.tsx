@@ -102,18 +102,12 @@ afterEach(() => {
 });
 
 /**
- * Wait until the board's status line says exactly `text`.
- *
- * The line is on the page from the first render, empty until there is something
- * to say. `findByRole("status")` waits for the element, which is already there,
- * so it answers with the empty line whenever `onMove` has not answered yet.
- * What it takes to answer depends on how loaded the machine is.
+ * Wait for the board's status line to say `text`. The line is always on the
+ * page, empty until a move or a notice sets it, so reading it at once can see
+ * it empty, and how long `onMove` takes to answer depends on the machine.
  */
-const said = async (text: string) => {
-  await waitFor(() =>
-    expect(screen.getByRole("status").textContent).toBe(text),
-  );
-};
+const statusLine = (text: string) =>
+  waitFor(() => expect(screen.getByRole("status").textContent).toBe(text));
 
 const pickUp = (title: string, pointerType: "mouse" | "touch" = "mouse") =>
   pickUpCard(card(title), pointerType);
@@ -233,7 +227,7 @@ describe("<KanbanBoard>", () => {
 
     await dragTo("Write it", "In progress");
 
-    await said("Ready first: nothing starts from Draft.");
+    await statusLine("Ready first: nothing starts from Draft.");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
@@ -248,7 +242,7 @@ describe("<KanbanBoard>", () => {
 
     await dragTo("Write it", "In progress");
 
-    await said("the window lost the engine");
+    await statusLine("the window lost the engine");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
@@ -482,7 +476,7 @@ describe("<KanbanBoard>", () => {
     fireEvent.keyDown(trigger, { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Done" }));
 
-    await said("No.");
+    await statusLine("No.");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
