@@ -9,7 +9,11 @@ describe("the No sandbox badge", () => {
 
   it("reads No sandbox while the session runs unsandboxed", () => {
     useChat.setState({
-      sandbox: { refusal: "no_capabilities", unsandboxed: true },
+      sandbox: {
+        refusal: "no_capabilities",
+        unsandboxed: true,
+        install: "package_only",
+      },
     });
     render(<NoSandboxBadge />);
 
@@ -25,7 +29,9 @@ describe("the No sandbox badge", () => {
   });
 
   it("shows nothing for a session that runs in its sandbox", () => {
-    useChat.setState({ sandbox: { refusal: null, unsandboxed: false } });
+    useChat.setState({
+      sandbox: { refusal: null, unsandboxed: false, install: "package_only" },
+    });
     const { container } = render(<NoSandboxBadge />);
 
     expect(container.textContent).toBe("");
@@ -33,7 +39,11 @@ describe("the No sandbox badge", () => {
 
   it("shows nothing for a refusal the project has not allowed running past", () => {
     useChat.setState({
-      sandbox: { refusal: "no_namespaces", unsandboxed: false },
+      sandbox: {
+        refusal: "no_namespaces",
+        unsandboxed: false,
+        install: "package_only",
+      },
     });
     const { container } = render(<NoSandboxBadge />);
 

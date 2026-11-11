@@ -50,6 +50,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             pm::pm_retry,
             pm::pm_answer,
             sandbox_setup::pm_sandbox,
+            sandbox_setup::sandbox_install,
             settings::login_set,
             settings::login_status,
             settings::login_clear,

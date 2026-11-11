@@ -1,5 +1,10 @@
 //! Tests for what the app holds
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use kelpie_engine::sandbox::Refusal;
+use kelpie_engine::session::{Choice, Harness as SessionHarness};
+
 use super::*;
 
 /// A folder of its own for one test
@@ -175,6 +180,62 @@ fn a_session_waits_for_a_project() {
         dir.0.join("run.json").exists(),
         "the tree wrote its run file"
     );
+}
+
+#[test]
+fn ending_the_pm_session_makes_the_next_send_open_a_new_one() {
+    let dir = Dir::new();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        {
+            let opened = Arc::clone(&opened);
+            Box::new(move |opening| {
+                opened.fetch_add(1, Ordering::SeqCst);
+                // Found by this start, so the end of the session drops it
+                opening
+                    .sandbox_setup
+                    .record_unsandboxed(Refusal::NoCapabilities);
+                Ok(Session::new(
+                    Arc::clone(opening.tree),
+                    SessionHarness::new("kelpie-test-no-such-harness"),
+                    opening.project.path.clone(),
+                    None,
+                    Choice::default(),
+                ))
+            })
+        },
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap();
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+
+    let (first, ..) = state.pm_session().unwrap();
+    let (again, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &again),
+        "a send reuses the held session"
+    );
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    assert!(state.sandbox_setup().view().unsandboxed);
+
+    state.end_pm_session();
+    assert!(state.held_session().is_none());
+    assert!(!state.sandbox_setup().view().unsandboxed);
+
+    let (next, ..) = state.pm_session().unwrap();
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    assert!(
+        !Arc::ptr_eq(&first, &next),
+        "the next send has a new session"
+    );
+
+    // Ending a session that is not open is no error
+    state.end_pm_session();
+    state.end_pm_session();
 }
 
 /// Run the checks on a thread, counting what each one is asked, until `quit` drops

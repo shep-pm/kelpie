@@ -406,7 +406,7 @@ impl AppState {
             opener,
             picker,
             tools,
-            sandbox_setup: SandboxSetup::default(),
+            sandbox_setup: SandboxSetup::detected(),
             bridge_checks: Mutex::new(None),
         })
     }
@@ -652,6 +652,27 @@ impl AppState {
         let session = Arc::new(session);
         *lock(&self.session) = Some((now, Arc::clone(&session)));
         Ok((session, handle, divider))
+    }
+
+    /// Stop the held PM session, even one running without a sandbox, so the
+    /// next send opens a new one
+    ///
+    /// For an Install that loaded the profile: the new session probes the
+    /// sandbox again and starts sandboxed (`docs/design/sandbox-setup.md`,
+    /// Install). It waits for a session being opened, and abandons a turn in
+    /// flight, so the chat disables Install while a turn runs. The saved
+    /// session id and the PM's log stay, so the new session resumes, or is
+    /// seeded from the log when the harness refuses the resume. What the last
+    /// start found about the sandbox is dropped with the session it belonged to.
+    ///
+    /// Does nothing before the first send.
+    pub fn end_pm_session(&self) {
+        let _opening = lock(&self.opening);
+        let held = lock(&self.session).take();
+        if let Some((_, session)) = held {
+            session.stop();
+        }
+        self.sandbox_setup.record(None);
     }
 
     /// Keep `ran` as what the project `id`'s PM runs on

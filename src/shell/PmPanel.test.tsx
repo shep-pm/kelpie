@@ -49,7 +49,11 @@ describe("the PM panel", () => {
 
     act(() =>
       useChat.setState({
-        sandbox: { refusal: "no_capabilities", unsandboxed: true },
+        sandbox: {
+          refusal: "no_capabilities",
+          unsandboxed: true,
+          install: "package_only",
+        },
       }),
     );
 

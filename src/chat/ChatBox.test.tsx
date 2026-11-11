@@ -47,6 +47,7 @@ const pmSandbox =
     () => Promise<{
       refusal: "no_capabilities" | "no_namespaces" | null;
       unsandboxed: boolean;
+      install: "available" | "package_only";
     }>
   >();
 
@@ -115,7 +116,11 @@ beforeEach(() => {
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
   pmSandbox.mockReset();
-  pmSandbox.mockResolvedValue({ refusal: null, unsandboxed: false });
+  pmSandbox.mockResolvedValue({
+    refusal: null,
+    unsandboxed: false,
+    install: "package_only",
+  });
   useChat.getState().reset();
 });
 
@@ -282,6 +287,7 @@ describe("the chat box", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: false,
+      install: "package_only",
     });
     await sendMessage("hello");
     emit({ kind: "failed", message: "bwrap: loopback: Failed RTM_NEWADDR" });
@@ -296,6 +302,7 @@ describe("the chat box", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: true,
+      install: "package_only",
     });
     await sendMessage("hello");
     emit({ kind: "failed", message: "the model is overloaded" });
