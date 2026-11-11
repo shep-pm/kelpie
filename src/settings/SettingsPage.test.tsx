@@ -39,6 +39,7 @@ const loginSet = vi.fn<(harness: string, value: string) => Promise<unknown>>();
 const loginClear = vi.fn<(harness: string) => Promise<unknown>>();
 const bridgeStatus = vi.fn<(id: string) => Promise<unknown>>();
 const bridgeApprove = vi.fn<(id: string) => Promise<unknown>>();
+const githubStatus = vi.fn<() => Promise<unknown>>();
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -54,6 +55,7 @@ vi.mock("@/bindings", () => ({
     loginClear: (harness: string) => loginClear(harness),
     bridgeStatus: (id: string) => bridgeStatus(id),
     bridgeApprove: (id: string) => bridgeApprove(id),
+    githubStatus: () => githubStatus(),
   },
 }));
 
@@ -232,6 +234,7 @@ beforeEach(() => {
   loginClear.mockResolvedValue(ok(null));
   bridgeStatus.mockResolvedValue(ok(bridge()));
   bridgeApprove.mockResolvedValue(ok(null));
+  githubStatus.mockResolvedValue(ok({ kind: "signed_in", login: "octocat" }));
 });
 
 afterEach(() => {
@@ -372,7 +375,9 @@ describe("the settings page", () => {
     await openPage();
     await waitFor(() => expect(harnessOptions).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /refresh models and efforts/i }),
+    );
 
     await waitFor(() =>
       expect(harnessOptions).toHaveBeenLastCalledWith("claude", true),
@@ -471,6 +476,20 @@ describe("the theme", () => {
 
     await screen.findByRole("group", { name: "PM model" });
     expect(screen.queryByRole("group", { name: "Theme" })).toBeNull();
+  });
+});
+
+describe("the GitHub row", () => {
+  it("the Global tab says whose gh login kelpie acts as, after the login row", async () => {
+    await openPage();
+
+    const login = await screen.findByRole("group", { name: "Login" });
+    const github = await screen.findByRole("group", { name: "GitHub" });
+
+    expect(within(github).getByText("octocat")).toBeTruthy();
+    expect(
+      login.compareDocumentPosition(github) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 
