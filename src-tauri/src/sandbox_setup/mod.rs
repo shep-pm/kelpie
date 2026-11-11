@@ -7,6 +7,9 @@
 //! it found, and [`pm_sandbox`] hands that to the chat, which says why the
 //! first message failed in the note's words instead of showing bwrap's.
 //!
+//! The refusal is kept in `sandbox-refusal.json` in the data folder too, so a
+//! relaunch's chat says it before the next send opens the PM again.
+//!
 //! Only a [`Refusal`] is kept. The home-folder refusal and every other error
 //! are no setup a person can make, so the chat shows them as it always did.
 //! When the project lets the PM run without a sandbox, the refusal stays
@@ -22,20 +25,25 @@
 //! [`pm::open`]: crate::pm::open
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use kelpie_engine::sandbox::{Refusal, SandboxError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::state::AppState;
 
 pub mod install;
 
+/// The file in the data folder that keeps the last refusal for the next launch
+pub const REFUSAL_FILE: &str = "sandbox-refusal.json";
+
 /// Why a sandbox cannot start, as the webview tells the two apart
 // wire format: the bindings hold these two strings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum RefusalView {
     /// The namespace has no capabilities in it, which kelpie's AppArmor profile fixes
@@ -117,15 +125,36 @@ pub struct SandboxView {
 pub struct SandboxSetup {
     found: Mutex<SandboxView>,
     install: Install,
+
+    /// Where the refusal is kept for the next launch, `None` for a record that keeps no file
+    file: Option<PathBuf>,
 }
 
 impl SandboxSetup {
     /// A record for this machine: Install is on offer where the package put the profile
     ///
-    /// [`SandboxSetup::default`] offers none, which is what a test wants.
+    /// It starts from the refusal [`REFUSAL_FILE`] in `data_dir` holds, so the
+    /// chat can say why a send failed before the PM opens again. The file is the
+    /// machine's: every record afterwards rewrites it, or removes it when there
+    /// is no refusal. A file that is missing or holds no refusal reads as none.
+    /// [`SandboxSetup::default`] offers no install and keeps no file, which is
+    /// what a test wants.
     #[must_use]
-    pub fn detected() -> Self {
-        Self::offering(Install::here())
+    pub fn detected(data_dir: &Path) -> Self {
+        let install = Install::here();
+        let file = data_dir.join(REFUSAL_FILE);
+        let refusal = fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<RefusalView>(&bytes).ok());
+        Self {
+            found: Mutex::new(SandboxView {
+                refusal,
+                unsandboxed: false,
+                install,
+            }),
+            install,
+            file: Some(file),
+        }
     }
 
     /// A record that offers `install`
@@ -137,6 +166,7 @@ impl SandboxSetup {
                 ..SandboxView::default()
             }),
             install,
+            file: None,
         }
     }
 
@@ -164,7 +194,29 @@ impl SandboxSetup {
         });
     }
 
+    /// Keep `view` for the run, and its refusal for the next launch
+    ///
+    /// Only the refusal is written: a launch has no session running without a
+    /// sandbox. A file that cannot be written or removed is said on stderr and
+    /// changes nothing else.
     fn keep(&self, view: SandboxView) {
+        if let Some(file) = &self.file {
+            let written = match view.refusal {
+                Some(refusal) => serde_json::to_vec(&refusal)
+                    .map_err(io::Error::other)
+                    .and_then(|bytes| fs::write(file, bytes)),
+                None => fs::remove_file(file).or_else(|error| match error.kind() {
+                    io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(error),
+                }),
+            };
+            if let Err(error) = written {
+                eprintln!(
+                    "kelpie: could not keep the sandbox refusal in {}: {error}",
+                    file.display()
+                );
+            }
+        }
         *self.found.lock().unwrap_or_else(PoisonError::into_inner) = view;
     }
 

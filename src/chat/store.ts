@@ -312,8 +312,8 @@ function begin(user: string, dividers: string[] = []): Turn {
 
 /**
  * Fold a log into turns: a user entry starts one, the events after it fill it
- * in. A turn the log never ends was cut off, so it is `interrupted`, and a turn
- * the maintainer retried shows once, as the retry.
+ * in. A turn the log never ends was cut off, so it is `interrupted`. A turn the
+ * maintainer retried, cut off or failed, shows once, as the retry.
  *
  * A divider belongs to the turn whose message started the new session. A
  * switch of harness is logged just before that message, so a divider followed
@@ -335,7 +335,10 @@ export function fold(entries: LogEntry[]): Turn[] {
       }
     } else if (entry.entry === "user") {
       let dividers = waiting;
-      if (last?.state === "running" && last.user === entry.text) {
+      if (
+        (last?.state === "running" || last?.state === "failed") &&
+        last.user === entry.text
+      ) {
         dividers = [...(turns.pop()?.dividers ?? []), ...waiting];
       }
       waiting = [];
@@ -492,6 +495,8 @@ export function createChat(transport: Transport): ChatStore {
             for (const event of held.splice(0)) {
               set((s) => ({ turns: follow(s.turns, event) }));
             }
+            // A relaunch shows the refusal that failed the last send, as a live failure does
+            if (get().turns.at(-1)?.state === "failed") void lookAtSandbox();
           } catch (error) {
             set({ historyError: String(error) });
           } finally {
