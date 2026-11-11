@@ -43,6 +43,7 @@ pub use feed::Feed;
 use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
 
+use crate::board::poll::Requests;
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -88,7 +89,7 @@ pub struct Workers {
     /// The channels watching each worker, by project and ticket
     ///
     /// A feed outlives its worker's turns, so a tab stays attached across a Resume.
-    feeds: Mutex<BTreeMap<(String, String), Arc<Feed>>>,
+    feeds: Arc<Mutex<BTreeMap<(String, String), Arc<Feed>>>>,
     sources: Mutex<BTreeMap<String, Arc<GithubSource>>>,
 }
 
@@ -124,7 +125,7 @@ impl Workers {
             leases: OnceLock::new(),
             records: Mutex::default(),
             sessions: Mutex::default(),
-            feeds: Mutex::default(),
+            feeds: Arc::default(),
             sources: Mutex::default(),
         }
     }
@@ -301,6 +302,28 @@ impl Workers {
                 Arc::new(Feed::new(Feed::logged(&past)))
             });
         Arc::clone(feed)
+    }
+
+    /// What reads the hosts each worker of the project `project_id` waits to reach, by ticket
+    ///
+    /// The host of each sandbox request still waiting on the maintainer, oldest
+    /// first. A worker with none is left out. The reader holds the feeds and not
+    /// the app's state, so the board's poller keeps it on its own thread.
+    #[must_use]
+    pub fn requests_of(&self, project_id: &str) -> Requests {
+        let feeds = Arc::clone(&self.feeds);
+        let project = project_id.to_owned();
+        Box::new(move || {
+            let mine: Vec<(String, Arc<Feed>)> = lock(&feeds)
+                .iter()
+                .filter(|((owner, _), _)| *owner == project)
+                .map(|((_, ticket), feed)| (ticket.clone(), Arc::clone(feed)))
+                .collect();
+            mine.into_iter()
+                .map(|(ticket, feed)| (ticket, feed.waiting()))
+                .filter(|(_, hosts)| !hosts.is_empty())
+                .collect()
+        })
     }
 
     /// The past of the worker on `ticket`, and `send` attached to follow it live

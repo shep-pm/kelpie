@@ -14,6 +14,7 @@
 //! ones, so the engine gains no specta dependency. Kelpie polls while it runs
 //! and nothing polls once it quits: [`BoardHost::stop`] ends the poller.
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -23,6 +24,7 @@ use kelpie_engine::github::gh::GithubSource;
 use kelpie_engine::github::{Clock, ForgeSlug, SystemClock, Timestamp};
 use kelpie_engine::settings::Settings;
 use kelpie_engine::ticket::ForgeError;
+use kelpie_engine::worker::{Record, Status};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::State;
@@ -95,6 +97,8 @@ pub struct TicketView {
     pub url: String,
     /// The page of the pull request closing it, `None` when none is open
     pub pull_url: Option<String>,
+    /// One line for each wait on the maintainer, empty when its worker waits on nothing
+    pub needs_you: Vec<String>,
 }
 
 /// Every ticket of the project, column by column, as the window shows them
@@ -105,12 +109,53 @@ pub struct BoardView {
     pub tickets: Vec<TicketView>,
     /// While a rate limit is used up, the Unix second the hold lifts
     pub held_until: Option<u64>,
+    /// How many lines the tickets' `needs_you` hold in all
+    pub needs_you: u32,
+}
+
+/// What a Paused worker waits for
+const PAUSED: &str = "Paused, resumes when you say so";
+
+/// What a held record says when it has no reason, as one from before reasons does
+const HELD: &str = "Waiting on you";
+
+/// Each wait on the maintainer of the worker on `ticket`, one line each
+///
+/// A record that waits on the maintainer gives its reason, and a Paused one says
+/// so. Each sandbox request still waiting on the worker's feed gives the host it
+/// wants. `requests` holds those hosts by ticket.
+fn needs_you(
+    ticket: &str,
+    records: &[Record],
+    requests: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let record = records.iter().find(|record| record.ticket == ticket);
+    let own = record.and_then(|record| match record.status {
+        Status::WaitingOnMaintainer => {
+            Some(record.reason.clone().unwrap_or_else(|| HELD.to_owned()))
+        }
+        Status::Paused => Some(PAUSED.to_owned()),
+        _ => None,
+    });
+    let asked = requests.get(ticket).into_iter().flatten();
+    own.into_iter()
+        .chain(asked.map(|host| format!("Wants to reach {host}")))
+        .collect()
 }
 
 impl BoardView {
     /// The view of `board`, whose tickets live in `repo`
+    ///
+    /// `records` and `requests` (the hosts each ticket's worker waits to reach, by
+    /// ticket) say which tickets wait on the maintainer.
     #[must_use]
-    pub fn of(board: &Board, repo: &ForgeSlug, held_until: Option<Timestamp>) -> Self {
+    pub fn of(
+        board: &Board,
+        repo: &ForgeSlug,
+        held_until: Option<Timestamp>,
+        records: &[Record],
+        requests: &BTreeMap<String, Vec<String>>,
+    ) -> Self {
         let page = |kind: &str, number: &dyn std::fmt::Display| {
             format!("https://github.com/{repo}/{kind}/{number}")
         };
@@ -124,11 +169,17 @@ impl BoardView {
                 column: placed.column.into(),
                 url: page("issues", &placed.id),
                 pull_url: placed.pull.map(|number| page("pull", &number)),
+                needs_you: needs_you(&placed.id.to_string(), records, requests),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let waits = tickets
+            .iter()
+            .map(|ticket| ticket.needs_you.len())
+            .sum::<usize>();
         Self {
             tickets,
             held_until: held_until.map(Timestamp::secs),
+            needs_you: u32::try_from(waits).unwrap_or(u32::MAX),
         }
     }
 }
@@ -292,6 +343,7 @@ fn poller_of(
     source: Arc<GithubSource>,
 ) -> Result<Poller<GithubSource>, String> {
     let records = state.workers().records(project)?;
+    let waiting = state.workers().requests_of(project);
     let config = state.config().clone();
     let project = project.to_owned();
     let choose = Box::new(move || {
@@ -303,7 +355,7 @@ fn poller_of(
         })
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    Ok(Poller::new(source, choose, records, clock))
+    Ok(Poller::new(source, choose, records, waiting, clock))
 }
 
 /// Stream the project's board to the window, and keep it current

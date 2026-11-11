@@ -1,5 +1,6 @@
 //! The poller: one read of GitHub a minute, one placing every two seconds
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -42,6 +43,12 @@ pub struct Choices {
 /// Where a read finds the project's choices
 pub type Choose = Box<dyn Fn() -> Result<Choices, String> + Send>;
 
+/// Where a placing finds the hosts each ticket's worker waits to reach
+///
+/// A sandbox request lives in its worker's feed and not in its record, so the
+/// poller asks for the feeds' side each time it places.
+pub type Requests = Box<dyn Fn() -> BTreeMap<String, Vec<String>> + Send>;
+
 const DAY: u64 = 24 * 60 * 60;
 
 /// What the window says when `gh` is missing or holds no login
@@ -83,6 +90,7 @@ pub struct Poller<F> {
     feed: Arc<F>,
     choose: Choose,
     records: Arc<Mutex<Records>>,
+    requests: Requests,
     clock: Arc<dyn Clock>,
     last: Option<Last>,
     held: Option<Timestamp>,
@@ -96,17 +104,20 @@ impl<F> std::fmt::Debug for Poller<F> {
 }
 
 impl<F: Feed> Poller<F> {
-    /// A poller of `feed`'s board, with the workers' `records`
+    /// A poller of `feed`'s board, with the workers' `records` and the sandbox
+    /// requests their feeds hold (`requests`)
     pub fn new(
         feed: Arc<F>,
         choose: Choose,
         records: Arc<Mutex<Records>>,
+        requests: Requests,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             feed,
             choose,
             records,
+            requests,
             clock,
             last: None,
             held: None,
@@ -179,20 +190,18 @@ impl<F: Feed> Poller<F> {
     pub fn place(&mut self) -> Option<BoardEvent> {
         let now = self.clock.now();
         let held = self.held.filter(|until| *until > now);
+        // Asked before the records lock is held: the feeds' locks are never taken under it
+        let requests = (self.requests)();
+        let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
         let board = match &self.last {
-            Some(last) => {
-                let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
-                place(&last.read, records.list(), &last.rules)
-            }
+            Some(last) => place(&last.read, records.list(), &last.rules),
             // Held before any board was read: an empty one, with the time
             None if held.is_some() => Board::default(),
             None => return None,
         };
-        self.show(BoardEvent::Board(BoardView::of(
-            &board,
-            self.feed.repo(),
-            held,
-        )))
+        let view = BoardView::of(&board, self.feed.repo(), held, records.list(), &requests);
+        drop(records);
+        self.show(BoardEvent::Board(view))
     }
 
     fn show(&mut self, event: BoardEvent) -> Option<BoardEvent> {

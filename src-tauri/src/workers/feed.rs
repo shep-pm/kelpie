@@ -15,6 +15,12 @@
 //! the read returned that are still on their way, and the new channel skips
 //! exactly those. An event is in the entries or on the channel, never both.
 //!
+//! The feed also keeps the sandbox requests its worker waits on, which the
+//! board's ticket carries as a needs-you line (`docs/design/tickets.md`, The
+//! board). A request comes in with its [`SessionEvent::SandboxRequest`] and goes
+//! out when it is answered ([`Feed::answered`]), or when a turn ends or fails,
+//! since a turn that ends answers it denied.
+//!
 //! A channel's send succeeds while its webview lives, closed tab or not, so a
 //! failed send is not how a tab is forgotten: the window says so with
 //! [`Feed::unwatch`], and a channel watching again replaces its earlier watch.
@@ -40,6 +46,9 @@ struct Watcher {
 #[derive(Default)]
 struct Inner {
     watchers: Vec<Watcher>,
+
+    /// The sandbox requests waiting on the maintainer, as (id, host), oldest first
+    requests: Vec<(String, String)>,
 
     /// The events the log held when the feed began, plus the ones forwarded since
     seen: usize,
@@ -77,6 +86,7 @@ impl Feed {
         Self {
             inner: Mutex::new(Inner {
                 watchers: Vec::new(),
+                requests: Vec::new(),
                 seen: logged,
             }),
         }
@@ -98,6 +108,16 @@ impl Feed {
     pub fn forward(&self, event: SessionEvent) {
         let mut inner = self.lock();
         inner.seen += 1;
+        match &event {
+            SessionEvent::SandboxRequest { id, host, .. } => {
+                inner.requests.push((id.clone(), host.clone()));
+            }
+            // A turn that ends, or a session that fails, answers each request denied
+            SessionEvent::TurnEnded { .. } | SessionEvent::Failed { .. } => {
+                inner.requests.clear();
+            }
+            _ => {}
+        }
         inner.watchers.retain_mut(|watcher| {
             if watcher.skip > 0 {
                 watcher.skip -= 1;
@@ -105,6 +125,22 @@ impl Feed {
             }
             (watcher.send)(event.clone())
         });
+    }
+
+    /// The hosts the worker's sandbox requests wait on the maintainer for, oldest first
+    #[must_use]
+    pub fn waiting(&self) -> Vec<String> {
+        let inner = self.lock();
+        inner
+            .requests
+            .iter()
+            .map(|(_, host)| host.clone())
+            .collect()
+    }
+
+    /// Forget the sandbox request `id`, which the maintainer answered
+    pub fn answered(&self, id: &str) {
+        self.lock().requests.retain(|(asked, _)| asked != id);
     }
 
     /// Read the worker's past with `read`, then attach the channel `id` to follow it live

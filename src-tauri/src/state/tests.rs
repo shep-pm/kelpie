@@ -504,6 +504,7 @@ fn a_launch_marks_every_worker_mid_turn_as_paused() {
                 status: Status::Paused,
                 seat: Seat::Without,
                 notes: Vec::new(),
+                reason: None,
             },
             Record {
                 ticket: "75".to_owned(),
@@ -512,6 +513,7 @@ fn a_launch_marks_every_worker_mid_turn_as_paused() {
                 status: Status::Running,
                 seat: Seat::Waiting,
                 notes: Vec::new(),
+                reason: None,
             },
             Record {
                 ticket: "76".to_owned(),
@@ -520,6 +522,7 @@ fn a_launch_marks_every_worker_mid_turn_as_paused() {
                 status: Status::Paused,
                 seat: Seat::Without,
                 notes: Vec::new(),
+                reason: None,
             },
         ],
         "the worker mid-turn is Paused and holds no slot; the one waiting for a \
