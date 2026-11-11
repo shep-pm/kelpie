@@ -66,9 +66,11 @@ pub fn note(
 /// Cancel `ticket`'s turn over ACP and send `text` as the next prompt
 ///
 /// The cancelled turn's end settles nothing, so the worker stays Running and keeps
-/// its slot, and the new turn's end settles it as any other. Notes already queued
-/// stay in the record and go out when the new turn ends. A worker with no turn to
-/// interrupt is told as [`note`] tells it.
+/// its slot, and that end starts the new turn, whose end settles it as any other.
+/// Until then a Stop pauses the worker with the text kept as a note, and a second
+/// Stop and tell goes out in the same prompt. Notes already queued stay in the
+/// record and go out when the new turn ends. A worker with no turn to interrupt is
+/// told as [`note`] tells it.
 ///
 /// # Errors
 ///
@@ -84,19 +86,23 @@ pub fn stop_and_tell(
         Standing::Idle => send_next(project, session, ticket, text, records),
         Standing::Away => queue(&mut records, ticket, text),
         Standing::Turn => {
-            let Some(turns) = Turns::resume(project, ticket, session, &records) else {
+            let Some(turn) = records.watch_of(ticket) else {
                 return queue(&mut records, ticket, text);
             };
-            if let Some(turn) = records.watch_of(ticket) {
-                turn.replace();
+            // The turn's end sends the text, since a prompt sent now would only wait
+            // behind the turn still cancelling, out of reach of a Stop that follows
+            if turn.replace() {
+                records.redirect(ticket, text);
+                drop(records);
+                session.cancel();
+                Ok(Noted::Sent)
+            } else if turn.replaced() {
+                // Still cancelling: this goes out with the first redirect
+                records.redirect(ticket, text);
+                Ok(Noted::Sent)
+            } else {
+                queue(&mut records, ticket, text)
             }
-            let watch = Watch::new();
-            records.keep_watch(ticket, watch.clone());
-            drop(records);
-            // The cancel goes first, so it lands on the turn and not on the next one
-            session.cancel();
-            turns.dispatch(session, text.to_owned(), watch, ceiling_of(project));
-            Ok(Noted::Sent)
         }
     }
 }
@@ -104,7 +110,8 @@ pub fn stop_and_tell(
 /// Cancel `ticket`'s turn and leave its worker Paused
 ///
 /// As the turn ceiling does: the worker's slot goes to the next in line, and the
-/// maintainer resumes the worker by hand. Notes in its record stay for that turn.
+/// maintainer resumes the worker by hand. Notes in its record stay for that turn, and
+/// so does what a Stop and tell said that the cancelled turn had not yet sent.
 /// Does nothing when no turn is running.
 ///
 /// # Errors
@@ -119,8 +126,12 @@ pub fn stop(project: &Project<'_>, session: &Arc<Session>, ticket: &str) -> io::
     if !turn.stop() {
         return Ok(());
     }
-    let paused = records
-        .set_status(ticket, Status::Paused)
+    // A redirect that waited for this turn's end is not sent: it is kept for the next start
+    let told = records
+        .take_redirect(ticket)
+        .map_or(Ok(false), |text| records.add_note(ticket, &text));
+    let paused = told
+        .and_then(|_| records.set_status(ticket, Status::Paused))
         .and_then(|()| records.seat(project.slots).map(drop));
     drop(records);
     session.cancel();
@@ -178,10 +189,19 @@ fn send_next(
     if records.get(ticket).map(|record| record.seat) != Some(Seat::Held) {
         return queue(&mut records, ticket, text);
     }
+    // Notes the record still holds go first: a turn's end that could not send them
+    // left them, and the worker's next prompt is the one that carries them
+    let mut prompt = records.take_notes(ticket).unwrap_or_else(|error| {
+        eprintln!(
+            "kelpie: the record of ticket {ticket} did not keep which notes it sent: {error}"
+        );
+        Vec::new()
+    });
+    prompt.push(text.to_owned());
     let watch = Watch::new();
     records.keep_watch(ticket, watch.clone());
     drop(records);
-    turns.dispatch(session, text.to_owned(), watch, ceiling_of(project));
+    turns.dispatch(session, prompt.join("\n\n"), watch, ceiling_of(project));
     Ok(Noted::Sent)
 }
 

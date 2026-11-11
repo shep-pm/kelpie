@@ -175,10 +175,17 @@ impl Turns {
             _ => {}
         }
         // A turn the ceiling cancelled stays as the ceiling left it: Paused
-        let settled = ending
-            .as_ref()
-            .filter(|_| watch.turn_ended() == Verdict::Ended);
-        let next = settled.and_then(|ending| self.continued(&mut records, ending));
+        let verdict = ending.as_ref().map(|_| watch.turn_ended());
+        let settled = ending.as_ref().filter(|_| verdict == Some(Verdict::Ended));
+        // A turn Stop and tell cancelled hands over to the redirect, whether it ended
+        // or the harness failed under it
+        let redirected = verdict == Some(Verdict::Replaced)
+            || (matches!(event, SessionEvent::Failed { .. }) && watch.replaced());
+        let next = if redirected {
+            self.redirected(&mut records)
+        } else {
+            settled.and_then(|ending| self.continued(&mut records, ending))
+        };
         if let Some(ending) = settled
             && next.is_none()
         {
@@ -201,6 +208,27 @@ impl Turns {
                 Ceiling::from_grant(Instant::now(), self.timeout),
             );
         }
+    }
+
+    /// The turn that sends what Stop and tell said, when the cancelled turn's end finds any
+    ///
+    /// Its clock is kept under the lock the caller holds, so a Stop or another Stop and
+    /// tell from here on finds the turn that runs. A worker whose session is gone keeps
+    /// the text as a note for its next start.
+    fn redirected(&self, records: &mut Records) -> Option<(Arc<Session>, String, Watch)> {
+        let ticket = self.ticket.as_str();
+        let text = records.take_redirect(ticket)?;
+        let Some(session) = self.session.upgrade() else {
+            lost(
+                ticket,
+                records.add_note(ticket, &text).map(drop),
+                "what it was told",
+            );
+            return None;
+        };
+        let watch = Watch::new();
+        records.keep_watch(ticket, watch.clone());
+        Some((session, text, watch))
     }
 
     /// The turn that sends the record's notes, when the one that ended leaves any to send

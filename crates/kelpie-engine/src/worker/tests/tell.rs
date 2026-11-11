@@ -3,6 +3,8 @@
 //! Each test runs a worker on a [`FakeAgent`] whose first turn waits to be
 //! cancelled, so the test decides when the turn ends.
 
+use std::io;
+
 use super::*;
 use crate::worker::{Noted, note, stop, stop_and_tell};
 
@@ -281,4 +283,84 @@ fn stop_leaves_the_worker_paused_and_gives_its_slot_back() {
         (Status::Paused, Seat::Without),
         "the turn's end leaves it Paused, holding no slot"
     );
+}
+
+#[test]
+fn a_stop_while_a_redirect_waits_for_the_cancelled_turn_starts_no_turn() {
+    let rig = Rig::new("stop in the gap");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("working").until_cancelled())
+        .turn(Turn::new().text("redirected").until_cancelled());
+    let turn = mid_turn(&rig, &agent);
+    until_working(&turn);
+
+    told(&rig, |project| {
+        stop_and_tell(project, &turn.session, "74", "do the other thing")?;
+        stop(project, &turn.session, "74")
+    })
+    .unwrap();
+    until_turn_ends(&turn.heard);
+
+    // The redirect never starts: the maintainer stopped the worker
+    let more = turn.heard.recv_timeout(Duration::from_millis(500));
+    assert!(more.is_err(), "a turn started after the stop: {more:?}");
+    assert_eq!(prompts(&agent).len(), 1);
+    assert_eq!(standing(&rig), (Status::Paused, Seat::Without));
+    assert_eq!(
+        kept(&rig)[0].notes,
+        ["do the other thing"],
+        "what the maintainer said is kept for the next start"
+    );
+}
+
+#[test]
+fn two_redirects_before_the_cancelled_turn_ends_go_out_as_one_prompt() {
+    let rig = Rig::new("two redirects");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("working").until_cancelled())
+        .turn(Turn::new().text("redirected"));
+    let turn = mid_turn(&rig, &agent);
+    until_working(&turn);
+
+    told(&rig, |project| {
+        for text in ["do the other thing", "and add a test"] {
+            let noted = stop_and_tell(project, &turn.session, "74", text)?;
+            assert_eq!(noted, Noted::Sent);
+        }
+        Ok::<_, io::Error>(())
+    })
+    .unwrap();
+    until_turn_ends(&turn.heard);
+    until_turn_ends(&turn.heard);
+
+    assert_eq!(
+        prompts(&agent)[1..],
+        ["do the other thing\n\nand add a test"]
+    );
+    assert_eq!(standing(&rig), (Status::Ended, Seat::Without));
+}
+
+#[test]
+fn a_note_to_an_idle_worker_carries_the_notes_already_in_its_record() {
+    let rig = Rig::new("note idle stranded");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    let turn = mid_turn(&rig, &agent);
+    until_turn_ends(&turn.heard);
+    // A note a turn's end could not send, as a failed write leaves it
+    rig.records
+        .lock()
+        .unwrap()
+        .add_note("74", "from before")
+        .unwrap();
+
+    told(&rig, |project| {
+        note(project, &turn.session, "74", "one more thing")
+    })
+    .unwrap();
+    until_turn_ends(&turn.heard);
+
+    assert_eq!(prompts(&agent)[1..], ["from before\n\none more thing"]);
+    assert!(kept(&rig)[0].notes.is_empty());
 }

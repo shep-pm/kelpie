@@ -120,14 +120,24 @@ impl Watch {
     /// Mark the turn stopped, `false` when it already ended
     ///
     /// Its end then leaves the record as the caller set it, as a ceiling's does.
+    /// A turn replaced and not yet over is stopped too: it is the one still
+    /// cancelling, and its end starts no redirect after this.
     /// Call it with the records locked, so no end of the turn settles them between.
     pub(super) fn stop(&self) -> bool {
-        self.leave(State::Expired)
+        let (state, changed) = &*self.shared;
+        let mut state = lock(state);
+        if !matches!(*state, State::Counting | State::Replaced) {
+            return false;
+        }
+        *state = State::Expired;
+        changed.notify_all();
+        true
     }
 
-    /// Mark the turn replaced by the next one, `false` when it already ended
+    /// Mark the turn replaced by the next one, `false` when it already ended or was replaced
     ///
-    /// Its end then settles nothing: the worker is still Running and holds its slot.
+    /// Its end then settles nothing: the worker is still Running and holds its slot,
+    /// and the end starts the redirect ([`super::turn_events`]).
     pub(super) fn replace(&self) -> bool {
         self.leave(State::Replaced)
     }

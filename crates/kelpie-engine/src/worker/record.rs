@@ -91,6 +91,10 @@ pub struct Records {
     watches: HashMap<String, Watch>,
     /// Where each ticket's turns send their events, which is never written
     events: HashMap<String, Events>,
+    /// What Stop and tell said to a ticket whose cancelled turn has not ended yet,
+    /// which the turn's end sends as the next prompt. Never written: a launch has no
+    /// turn cancelling.
+    redirects: HashMap<String, String>,
 }
 
 impl Records {
@@ -115,6 +119,7 @@ impl Records {
             list,
             watches: HashMap::new(),
             events: HashMap::new(),
+            redirects: HashMap::new(),
         })
     }
 
@@ -167,6 +172,23 @@ impl Records {
     /// Where `ticket`'s turns send their events, `None` before its first turn this launch
     pub(super) fn events_of(&self, ticket: &str) -> Option<Events> {
         self.events.get(ticket).cloned()
+    }
+
+    /// Keep `text` as what `ticket`'s cancelled turn's end sends next, after
+    /// whatever was kept before it, one to a paragraph
+    pub(super) fn redirect(&mut self, ticket: &str, text: &str) {
+        self.redirects
+            .entry(ticket.to_owned())
+            .and_modify(|kept| {
+                kept.push_str("\n\n");
+                kept.push_str(text);
+            })
+            .or_insert_with(|| text.to_owned());
+    }
+
+    /// Take what `ticket`'s cancelled turn's end sends next
+    pub(super) fn take_redirect(&mut self, ticket: &str) -> Option<String> {
+        self.redirects.remove(ticket)
     }
 
     /// Add `text` to `ticket`'s notes and write the file, `false` when it has no record

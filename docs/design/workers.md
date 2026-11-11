@@ -88,7 +88,7 @@ Other forges bring their own token through the forge adapter. The cost: a token 
 As `docs/design/ux.md` (Workers) has it:
 
 1. **Note** is queued in the ticket's record. Phase 2 delivers it when the turn ends, on every harness: the notes go out together as the next prompt, one to a paragraph, and the worker stays Running with its slot. A worker whose turn ended takes the note as its next turn. A turn that ends held or Paused keeps its notes for the next start. Steering a turn in flight follows per harness (Claude Code's queued second prompt, goose's `_goose/unstable/session/steer`), so the behaviour is the same on each until then and `docs/parity.toml` needs no row.
-2. **Stop and tell** cancels the turn over ACP and sends the message as the next prompt. The cancelled turn's end settles nothing, so the worker stays Running and keeps its slot. **Stop** with no message cancels the turn and leaves the worker Paused, as the turn ceiling does, and the maintainer resumes it by hand.
+2. **Stop and tell** cancels the turn over ACP and sends the message as the next prompt. The cancelled turn's end settles nothing, so the worker stays Running and keeps its slot, and that end starts the new turn. A Stop before it keeps the message as a note, and a second Stop and tell before it goes out in the same prompt. **Stop** with no message cancels the turn and leaves the worker Paused, as the turn ceiling does, and the maintainer resumes it by hand.
 3. A note goes into the ticket's record. When it changes the scope, the PM updates the ticket's text. The PM gets one line saying what the maintainer told the worker.
 
 ### Slots, pacing and leases
