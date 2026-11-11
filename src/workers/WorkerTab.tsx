@@ -66,7 +66,7 @@ function Header({ ticket }: { ticket: WorkerTicket }) {
 
 /**
  * A worker's tab in the PM panel: the PM's chat view over the worker's session,
- * read-only until a worker takes messages (#153).
+ * with the composer that steers it (#153).
  *
  * The chat is made once the tab mounts and closed when it unmounts, so a
  * closed tab stops following the worker, which keeps running. Opening the tab
@@ -85,8 +85,8 @@ export function WorkerTab({ ticket }: { ticket: WorkerTicket }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <Header ticket={ticket} />
       {store && (
-        <ChatProvider store={store}>
-          <ChatBox picker={false} readOnly />
+        <ChatProvider store={store} who="Worker">
+          <ChatBox picker={false} steer to={`the worker on #${ticket.id}`} />
         </ChatProvider>
       )}
     </div>

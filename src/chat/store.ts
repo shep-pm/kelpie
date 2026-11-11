@@ -28,6 +28,26 @@ export type SandboxRequest = {
   error?: string;
 };
 
+/**
+ * A message the maintainer sent to a session that is not a turn of its own.
+ *
+ * A worker's Note sent while its turn runs waits in the ticket's record, and shows
+ * under the turn it waits behind. `error` is why the message never reached the
+ * session, in kelpie's own words.
+ */
+export type Note = {
+  text: string;
+  /** What kelpie did with it, in one line. */
+  line: string;
+  error?: string;
+};
+
+/** A Note the worker reads when the turn it is running ends. */
+const QUEUED = "Queued, the worker reads it when its turn ends";
+
+/** What a Stop and tell sent as the prompt of the turn that follows. */
+const NEXT_PROMPT = "Sent as the worker's next prompt";
+
 /** `interrupted`: the log has the message and no end, because kelpie quit mid-turn. */
 export type TurnState =
   | "running"
@@ -47,6 +67,8 @@ export type Turn = {
   reply: string;
   steps: Step[];
   sandboxRequests: SandboxRequest[];
+  /** Notes sent while this turn ran, oldest first. */
+  notes: Note[];
   usage: Usage | null;
   state: TurnState;
   error?: string;
@@ -74,6 +96,21 @@ export type Chat = {
   load: () => Promise<void>;
   /** Send `text` to the PM. Does nothing while a turn runs or an install waits. */
   send: (text: string) => Promise<void>;
+  /**
+   * Send `text` to a session the maintainer steers.
+   *
+   * While a turn runs it is a Note under that turn, which the worker reads when the
+   * turn ends. Between turns it is a plain message, and the turn it starts.
+   */
+  note: (text: string) => Promise<void>;
+  /**
+   * Interrupt the turn in flight and send `text` as the next one.
+   *
+   * The text shows under the turn it interrupts. A session that has no turn to
+   * interrupt is told as a Note, and a transport that cannot be steered sends
+   * nothing.
+   */
+  stopAndTell: (text: string) => Promise<void>;
   /** Send the interrupted last message again, in place of the interrupted turn. */
   retry: () => Promise<void>;
   /**
@@ -224,6 +261,7 @@ function begin(user: string, dividers: string[] = []): Turn {
     reply: "",
     steps: [],
     sandboxRequests: [],
+    notes: [],
     usage: null,
     state: "running",
   };
@@ -297,6 +335,28 @@ export function createChat(transport: Transport): ChatStore {
         if (look === lookedAt) set({ sandbox });
       } catch {
         // The turn's own error is still on screen, which is all the chat showed before this
+      }
+    }
+
+    /** Show `note` under the turn `id`, then send it with `call`, which says so when it fails. */
+    async function tell(id: number, note: Note, call: () => Promise<unknown>) {
+      set((s) => ({
+        turns: patch(s.turns, id, (t) => ({ ...t, notes: [...t.notes, note] })),
+      }));
+      try {
+        await call();
+      } catch (error) {
+        // The message is on the screen and the session never got it, so the note
+        // says what kelpie could not do instead of what it did with it.
+        set((s) => ({
+          turns: patch(s.turns, id, (t) => {
+            const notes = [...t.notes];
+            const last = notes.pop();
+            return last
+              ? { ...t, notes: [...notes, { ...last, error: String(error) }] }
+              : t;
+          }),
+        }));
       }
     }
 
@@ -384,6 +444,34 @@ export function createChat(transport: Transport): ChatStore {
         if (get().installing) return;
         if (get().turns.some((turn) => turn.state === "running")) return;
         await run(begin(text), (channel) => transport.send(text, channel));
+      },
+
+      async note(text) {
+        await get().load();
+        if (get().installing) return;
+        const running = get().turns.at(-1);
+        if (running?.state !== "running") {
+          // Between turns there is nothing to wait behind, so the note is the
+          // worker's next turn and shows as a plain message.
+          await run(begin(text), (channel) => transport.send(text, channel));
+          return;
+        }
+        await tell(running.id, { text, line: QUEUED }, () =>
+          // A steered session streams on the channel its `watch` was given, and a
+          // note starts no turn of its own to stream into a fresh one.
+          transport.send(text, watching ?? new Channel<SessionEvent>()),
+        );
+      },
+
+      async stopAndTell(text) {
+        await get().load();
+        const running = get().turns.at(-1);
+        if (running?.state !== "running") return get().note(text);
+        const steered = transport.stopAndTell;
+        if (!steered) return;
+        await tell(running.id, { text, line: NEXT_PROMPT }, () =>
+          steered(text),
+        );
       },
 
       async retry() {

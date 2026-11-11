@@ -165,6 +165,23 @@ describe("the chat box", () => {
     expect(pmSend).not.toHaveBeenCalled();
   });
 
+  it("without steer the PM's composer is unchanged: Send, then Stop, and never Note", async () => {
+    const box = await openBox();
+
+    expect(await screen.findByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Note" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop and tell" })).toBeNull();
+
+    fireEvent.change(box, { target: { value: "hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(pmSend).toHaveBeenCalledTimes(1));
+
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Note" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop and tell" })).toBeNull();
+  });
+
   it("Stop replaces Send while a turn runs", async () => {
     await sendMessage("hello");
 

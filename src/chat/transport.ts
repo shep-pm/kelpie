@@ -17,7 +17,14 @@ export type Transport = {
   history: () => Promise<
     { status: "ok"; data: LogEntry[] } | { status: "error"; error: string }
   >;
-  /** Send `text` and stream the turn into `channel`. Answers the divider the send logged, if any. */
+  /**
+   * Send `text` to the session, streaming what the turn it starts says into
+   * `channel`.
+   *
+   * A session that streams on the channel its `watch` was given is sent that one,
+   * and a send that starts no turn of its own answers nothing. Answers the divider
+   * the send logged, if any.
+   */
   send: (
     text: string,
     channel: Channel<SessionEvent>,
@@ -26,6 +33,13 @@ export type Transport = {
   retry: (channel: Channel<SessionEvent>) => Promise<string | null | undefined>;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
+  /**
+   * Interrupt the turn in flight and send `text` as the next one.
+   *
+   * Only a session the maintainer steers has it: a transport without one leaves the
+   * chat's Stop and tell out.
+   */
+  stopAndTell?: (text: string) => Promise<void>;
   /** Answer the sandbox request `id`. */
   answer: (
     id: string,

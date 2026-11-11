@@ -2,15 +2,18 @@ import { Channel } from "@tauri-apps/api/core";
 import { commands, type SessionEvent } from "@/bindings";
 import type { Transport } from "@/chat/transport";
 
-const WAITS = "Sending to a worker waits for #153.";
+/** Why a call a worker does not have says so. */
+function refused(error: string): never {
+  throw new Error(error);
+}
 
 /**
  * The session of the worker on `ticket`, over `workerWatch`.
  *
- * `workerWatch` answers the log and follows the worker live on the channel it
- * is given, so `watch` makes that one call and `history` answers from it. A
- * worker's own `send`, `retry`, `cancel` and `answer` wait for #153: each says
- * so, and none reaches a `pm_*` command.
+ * `workerWatch` answers the log and follows the worker live on the channel it is
+ * given, so `watch` makes that one call and `history` reads from it. Every event of
+ * the worker's turns arrives there, including the ones a Note starts, so `send` is
+ * `worker_note` and streams nothing of its own.
  */
 export function workerTransport(ticket: string): Transport {
   let read: ReturnType<typeof commands.workerWatch> | null = null;
@@ -28,15 +31,24 @@ export function workerTransport(ticket: string): Transport {
       read ??= commands.workerWatch(ticket, new Channel<SessionEvent>());
       return read;
     },
-    send: async () => {
-      throw new Error(WAITS);
+    send: async (text) => {
+      const told = await commands.workerNote(ticket, text);
+      if (told.status === "error") refused(told.error);
+      // A note starts no turn of its own to stream, and logs no divider
+      return undefined;
     },
-    retry: async () => {
-      throw new Error(WAITS);
-    },
+    retry: () =>
+      refused(
+        "A worker whose turn was cut off resumes with Resume, not with its message again.",
+      ),
     cancel: async () => {
-      throw new Error(WAITS);
+      const stopped = await commands.workerCancel(ticket);
+      if (stopped.status === "error") refused(stopped.error);
     },
-    answer: async () => ({ status: "error", error: WAITS }),
+    stopAndTell: async (text) => {
+      const told = await commands.workerStopAndTell(ticket, text);
+      if (told.status === "error") refused(told.error);
+    },
+    answer: (id, answer) => commands.workerAnswer(ticket, id, answer),
   };
 }

@@ -25,7 +25,7 @@ const DECIDED: Record<SandboxAnswer, string> = {
 };
 
 /**
- * One host the PM's sandbox refused, in the turn that asked for it.
+ * One host a session's sandbox refused, in the turn that asked for it.
  *
  * While it waits the maintainer answers in one click (`docs/design/system/`,
  * SandboxRequest): *Allow once* and *Allow for this project* both let the host
@@ -39,11 +39,14 @@ const DECIDED: Record<SandboxAnswer, string> = {
 export function SandboxRequest({
   request,
   queued = 0,
+  who = "PM",
   onAnswer,
 }: {
   request: Asked;
   /** Requests waiting behind this one. */
   queued?: number;
+  /** Who is asking to reach the host. */
+  who?: string;
   onAnswer: (answer: SandboxAnswer) => void;
 }) {
   if (request.error) {
@@ -87,7 +90,9 @@ export function SandboxRequest({
     <div className="flex flex-col gap-2 rounded-lg bg-status-needs-soft p-3 text-sm">
       <div className="flex items-center gap-2">
         <NeedsYou />
-        <span className="font-semibold">PM wants to reach {request.host}</span>
+        <span className="font-semibold">
+          {who} wants to reach {request.host}
+        </span>
         {queued > 0 && (
           <span className="text-xs font-medium text-muted-foreground">
             +{queued} more
