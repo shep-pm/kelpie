@@ -23,7 +23,12 @@
 //! Dropping the [`Tools`] closes the door.
 //!
 //! The tools on the route are `network`'s `request_network`, which asks the
-//! maintainer for a host the sandbox refuses.
+//! maintainer for a host the sandbox refuses, and `start_worker`, which starts a
+//! worker on a ticket. Which of them a session's agent is given is its role:
+//! [`Tools::session`] is a worker's, the least a session gets, and
+//! [`Tools::pm_session`] is the PM's, which has `start_worker` as well. A tool
+//! no session's role has is no tool at all: it is not listed, and calling it is
+//! the answer an unknown name gets.
 //!
 //! # Quick start
 //!
@@ -53,6 +58,7 @@ pub use door::Door;
 pub(crate) use network::Asks;
 pub use network::{Reach, SandboxOutcome};
 pub use relay::{DOOR_VAR, TOKEN_VAR, run_from_args};
+pub use start_worker::WorkerStarter;
 use tokio_util::sync::CancellationToken;
 
 // `pub(crate)` for the lease socket, which binds and accepts on the same door
@@ -61,6 +67,9 @@ pub(crate) mod door;
 pub mod fake;
 mod network;
 mod relay;
+mod start_worker;
+#[cfg(test)]
+mod start_worker_tests;
 #[cfg(test)]
 mod tests;
 
@@ -98,8 +107,23 @@ struct Live {
     key: SessionKey,
     /// The session's waiting requests
     asks: Asks,
+    /// Which tools this session's agent is given
+    role: Role,
     /// Cancelled when the session's tools are dropped
     ended: CancellationToken,
+}
+
+/// Which of kelpie's tools a session's agent is given
+///
+/// The role rides the token, so it is the session that is privileged and never a
+/// connection that brings its token.
+#[derive(Debug, Clone)]
+enum Role {
+    /// A worker's, and the least a session is ever given: `request_network` alone
+    Worker,
+
+    /// The PM's: a worker's tools, plus `start_worker` through `starter`
+    Pm { starter: Arc<dyn WorkerStarter> },
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -212,11 +236,35 @@ impl Tools {
 
     /// Tools for one more session, with a token of its own
     ///
+    /// The agent is given a worker's tools, the least a session is ever given.
+    ///
     /// # Panics
     ///
     /// When the system has no random bytes to draw a token from.
     #[must_use]
+    #[track_caller]
     pub fn session(&self) -> SessionTools {
+        self.session_with(Role::Worker)
+    }
+
+    /// Tools for the PM's session: a worker's, plus `start_worker`, which starts
+    /// a worker through `starter`
+    ///
+    /// The PM is the only session given `start_worker`, and a worker's session
+    /// calling it is told kelpie has no such tool.
+    ///
+    /// # Panics
+    ///
+    /// When the system has no random bytes to draw a token from.
+    #[must_use]
+    #[track_caller]
+    pub fn pm_session(&self, starter: Arc<dyn WorkerStarter>) -> SessionTools {
+        self.session_with(Role::Pm { starter })
+    }
+
+    /// A session's tools under `role`, with a token of its own
+    #[track_caller]
+    fn session_with(&self, role: Role) -> SessionTools {
         let token = hex128().unwrap_or_else(|error| panic!("cannot draw a token: {error}"));
         let key = SessionKey(self.shared.next.fetch_add(1, Ordering::SeqCst));
         let ended = self.stop.child_token();
@@ -226,6 +274,7 @@ impl Tools {
             Live {
                 key,
                 asks: asks.clone(),
+                role: role.clone(),
                 ended: ended.clone(),
             },
         );
@@ -319,7 +368,8 @@ mod serve {
 
     use super::door::{Accepted, Listener};
     use super::network::REQUEST_NETWORK;
-    use super::{Asks, SessionKey, Shared, locked};
+    use super::start_worker::{self, START_WORKER};
+    use super::{Asks, Role, SessionKey, Shared, locked};
 
     /// How long a connection has to send its token
     const TOKEN_WITHIN: Duration = Duration::from_secs(5);
@@ -332,6 +382,9 @@ mod serve {
     struct Server {
         /// The session's waiting requests, which its tools act for
         asks: Asks,
+
+        /// The tools this session's agent is given
+        role: Role,
     }
 
     impl ServerHandler for Server {
@@ -344,7 +397,11 @@ mod serve {
             _request: Option<PaginatedRequestParams>,
             _context: RequestContext<RoleServer>,
         ) -> Result<ListToolsResult, ErrorData> {
-            Ok(ListToolsResult::with_all_items(vec![request_network()]))
+            let mut tools = vec![request_network()];
+            if matches!(self.role, Role::Pm { .. }) {
+                tools.push(start_worker::tool());
+            }
+            Ok(ListToolsResult::with_all_items(tools))
         }
 
         async fn call_tool(
@@ -352,17 +409,21 @@ mod serve {
             request: CallToolRequestParams,
             _context: RequestContext<RoleServer>,
         ) -> Result<CallToolResponse, ErrorData> {
+            let none = serde_json::Map::new();
+            let arguments = request.arguments.as_ref().unwrap_or(&none);
+            if request.name == START_WORKER {
+                let Role::Pm { starter } = &self.role else {
+                    return Err(no_tool(&request.name));
+                };
+                let started = start_worker::call(Arc::clone(starter), arguments).await;
+                return Ok(said(started));
+            }
             if request.name != REQUEST_NETWORK {
-                return Err(ErrorData::invalid_params(
-                    format!("kelpie has no tool named {}", request.name),
-                    None,
-                ));
+                return Err(no_tool(&request.name));
             }
             let argument = |name: &str| {
-                request
-                    .arguments
-                    .as_ref()
-                    .and_then(|arguments| arguments.get(name))
+                arguments
+                    .get(name)
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned)
             };
@@ -373,6 +434,11 @@ mod serve {
             };
             Ok(said(self.asks.request(&host, &why).await))
         }
+    }
+
+    /// The answer a tool the session is not given gets
+    fn no_tool(name: &str) -> ErrorData {
+        ErrorData::invalid_params(format!("kelpie has no tool named {name}"), None)
     }
 
     /// A tool's answer, which the agent reads as one line
@@ -446,7 +512,11 @@ mod serve {
         let ended = live.ended;
         // A harness that connects and never says hello holds nothing open: the
         // handshake ends with the session's tools, and with its deadline
-        let hello = (Server { asks: live.asks }).serve_with_ct((read, write), ended.child_token());
+        let server = Server {
+            asks: live.asks,
+            role: live.role,
+        };
+        let hello = server.serve_with_ct((read, write), ended.child_token());
         let running = tokio::select! {
             () = ended.cancelled() => return,
             started = tokio::time::timeout(shared.hello_within, hello) => match started {

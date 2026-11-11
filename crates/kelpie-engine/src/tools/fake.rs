@@ -1,23 +1,29 @@
 //! The agent's side of kelpie's tools, for a test
 //!
-//! [`FakeTools`] dials a session's door with its token and calls
-//! `request_network` over MCP, as a harness's relay and the agent behind it do
+//! [`FakeTools`] dials a session's door with its token and calls its tools over
+//! MCP, as a harness's relay and the agent behind it do
 //! (`docs/design/kelpie-tools.md`, The route out). A test of a session, or of a
 //! command that answers one, needs no MCP client and no door code of its own.
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::SessionTools;
 use super::door::Stream;
+use super::network::REQUEST_NETWORK;
+use super::start_worker::START_WORKER;
 
 /// How long a fake waits for a line kelpie should have sent
 const WAIT: Duration = Duration::from_secs(10);
 
 /// The id of every call a fake makes, so the line it reads back is its own
 const CALL: u64 = 1;
+
+/// The id of the `tools/list` a fake makes
+const LIST: u64 = 2;
 
 /// The MCP version a fake says it speaks
 const VERSION: &str = "2025-06-18";
@@ -60,13 +66,60 @@ impl FakeTools {
     ///
     /// The door closes before taking the call.
     pub fn ask(&mut self, host: &str, why: &str) -> io::Result<()> {
+        self.call(REQUEST_NETWORK, json!({"host": host, "why": why}))
+    }
+
+    /// Call `start_worker` on `ticket`, as text or as a number
+    ///
+    /// # Errors
+    ///
+    /// The door closes before taking the call.
+    pub fn start_worker(&mut self, ticket: impl Serialize) -> io::Result<()> {
+        self.call(START_WORKER, json!({"ticket": ticket}))
+    }
+
+    /// Call `name` with `arguments`, as the agent's client sends them
+    ///
+    /// # Errors
+    ///
+    /// The door closes before taking the call.
+    pub fn call(&mut self, name: &str, arguments: Value) -> io::Result<()> {
         self.say(json!({
             "jsonrpc": "2.0", "id": CALL, "method": "tools/call",
-            "params": {"name": "request_network", "arguments": {"host": host, "why": why}},
+            "params": {"name": name, "arguments": arguments},
         }))
     }
 
+    /// The tools kelpie lists for this session, in the order it lists them
+    ///
+    /// # Errors
+    ///
+    /// The door closes before answering, or its answer is not a tool list.
+    pub fn listed(&mut self) -> io::Result<Vec<String>> {
+        self.say(json!({"jsonrpc": "2.0", "id": LIST, "method": "tools/list"}))?;
+        let reply = self.line()?;
+        if reply["id"] != json!(LIST) {
+            return Err(not_an_answer(&reply));
+        }
+        let Some(tools) = reply["result"]["tools"].as_array() else {
+            return Err(not_an_answer(&reply));
+        };
+        let mut names = Vec::new();
+        for tool in tools {
+            names.push(
+                tool["name"]
+                    .as_str()
+                    .ok_or_else(|| not_an_answer(&reply))?
+                    .to_owned(),
+            );
+        }
+        Ok(names)
+    }
+
     /// The one line the tool answered with, and whether it was an error
+    ///
+    /// A tool name the session is not given is answered as a refused request, so
+    /// its message is read as the error line it is to the agent.
     ///
     /// # Errors
     ///
@@ -75,6 +128,9 @@ impl FakeTools {
         let reply = self.line()?;
         if reply["id"] != json!(CALL) {
             return Err(not_an_answer(&reply));
+        }
+        if let Some(message) = reply["error"]["message"].as_str() {
+            return Ok((message.to_owned(), true));
         }
         let result = &reply["result"];
         let Some(line) = result["content"][0]["text"].as_str() else {
