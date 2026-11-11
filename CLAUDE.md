@@ -68,7 +68,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `pnpm tauri icon docs/design/system/assets/logos/kelpie-app-icon.svg`: regenerates `src-tauri/icons/` from the app icon.
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
-- CI runs on the maintainer's self-hosted runner pool, not GitHub's: every job uses `runs-on: [self-hosted]`, or `[self-hosted, X64]` to pin it to the x86 box. The runner image has no node or system libraries, so jobs install what they need with `setup-*` actions and apt.
+- CI runs on GitHub's hosted runners (`runs-on: ubuntu-latest`), free since the repo is public. Every required workflow also runs on `merge_group`: `main` takes pull requests through a merge queue, so a pull request is never rebased just to catch up with `main`.
 - CI posts the window's light and dark screenshots in the body of a pull request that changes `src/`, `index.html` or `e2e/` (`.github/workflows/screenshots.yml`), from the e2e test's `test-results/window-light.png` and `window-dark.png`. An issue asks no worker for a screenshot, and a pull request author posts none.
 
 ## Where things live
@@ -90,7 +90,6 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 
 - `CMM` is codebase-memory-mcp (github.com/DeusData/codebase-memory-mcp), the code graph tool whose viewer inspired kelpie's graph.
 - When writing about shep, use shep's vocabulary: a `sheep` is one managed process, the plural is `flock`, dogs are plugin processes, and the daemon is only ever "the shepherd". Kelpie's own processes are not sheep.
-- Public text in other shep-pm repos never names kelpie while this repo is private.
 - Committed text says "the maintainer", never a name, and uses repo-relative paths.
 
 ## Commits and pull requests
