@@ -14,8 +14,10 @@
 //!
 //! The command runs through the process tree (ADR 0001). [`outcome`] reads how
 //! it ended, in `pkexec`'s own terms (`pkexec(1)`): 126 is a prompt the person
-//! dismissed, and 127 with "No authentication agent found" is a desktop with no
-//! polkit agent, which leaves the person the two commands to run in a terminal.
+//! dismissed, and 127 saying no agent could ask is a desktop with no polkit agent,
+//! which leaves the person the two commands to run in a terminal. `pkexec` says so
+//! either by finding no agent, or by failing to open a terminal for the text agent
+//! it falls back to.
 
 use std::io;
 use std::process::Command;
@@ -45,6 +47,11 @@ const APPARMOR_PARSER: &str = "/usr/sbin/apparmor_parser";
 
 /// What `pkexec` prints when no polkit agent runs to ask for the password
 const NO_AGENT: &str = "No authentication agent found";
+
+/// What `pkexec` prints when it falls back to its own text agent and has no terminal to ask in
+///
+/// polkit 124's `pkexec` prints this, and exits 127, outside a desktop session.
+const NO_TEXTUAL_AGENT: &str = "Error creating textual authentication agent";
 
 /// What `pkexec` exits with when the person dismissed the prompt
 const DISMISSED: i32 = 126;
@@ -117,7 +124,9 @@ pub fn outcome(code: Option<i32>, stderr: &str) -> InstallOutcome {
     match code {
         Some(0) => InstallOutcome::Installed,
         Some(DISMISSED) => InstallOutcome::Dismissed,
-        Some(NOT_RUN) if said.contains(NO_AGENT) => InstallOutcome::no_agent(),
+        Some(NOT_RUN) if said.contains(NO_AGENT) || said.contains(NO_TEXTUAL_AGENT) => {
+            InstallOutcome::no_agent()
+        }
         Some(code) => InstallOutcome::Failed {
             message: if said.is_empty() {
                 format!("pkexec exited with code {code}")
@@ -221,6 +230,19 @@ mod tests {
             "no_agent",
             "the outcome is tagged by kind"
         );
+    }
+
+    #[test]
+    fn no_textual_agent_shows_the_two_terminal_commands() {
+        // polkit 124's pkexec with no agent and no terminal falls back to its
+        // own text agent, fails to open /dev/tty and exits 127 saying so
+        let found = outcome(
+            Some(127),
+            "Error creating textual authentication agent: Error opening current \
+             controlling terminal for the process (`/dev/tty'): No such device or address\n",
+        );
+
+        assert_eq!(found, InstallOutcome::no_agent());
     }
 
     #[test]
