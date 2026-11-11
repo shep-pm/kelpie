@@ -1,6 +1,33 @@
 use super::*;
 use std::ffi::OsStr;
 
+/// A profiles folder holding `names`, for one test
+fn profiles_folder(names: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for name in names {
+        fs::write(dir.path().join(name), "").unwrap();
+    }
+    dir
+}
+
+#[test]
+fn a_loaded_kelpie_profile_is_found() {
+    let dir = profiles_folder(&["bwrap.4", "kelpie.12", "kelpie_bwrap.13"]);
+    assert!(loaded_in(dir.path()));
+}
+
+#[test]
+fn other_profiles_are_not_kelpies() {
+    let dir = profiles_folder(&["kelpie_bwrap.3"]);
+    assert!(!loaded_in(dir.path()), "bwrap's profile is not kelpie's");
+
+    let dir = profiles_folder(&["kelpie.", "kelpie.x"]);
+    assert!(!loaded_in(dir.path()), "the name after the dot is digits");
+
+    let dir = profiles_folder(&[]);
+    assert!(!loaded_in(dir.path()), "no folder entry is no profile");
+}
+
 #[test]
 fn an_unconfined_app_with_the_profile_loaded_hops() {
     assert!(needed(

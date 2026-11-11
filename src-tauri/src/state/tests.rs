@@ -1,6 +1,6 @@
 //! Tests for what the app holds
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use kelpie_engine::sandbox::Refusal;
 use kelpie_engine::session::{Choice, Harness as SessionHarness};
@@ -236,6 +236,122 @@ fn ending_the_pm_session_makes_the_next_send_open_a_new_one() {
     // Ending a session that is not open is no error
     state.end_pm_session();
     state.end_pm_session();
+}
+
+/// An opener that counts its runs and records `refusal` as what its start found
+///
+/// `None` is a start that made a sandbox. Each one builds a session that starts
+/// no harness, since these tests send nothing.
+fn counting_opener(opened: &Arc<AtomicUsize>, refusal: Option<Refusal>) -> Opener {
+    let opened = Arc::clone(opened);
+    Box::new(move |opening: &Opening<'_>| {
+        opened.fetch_add(1, Ordering::SeqCst);
+        match refusal {
+            Some(refusal) => opening.sandbox_setup.record_unsandboxed(refusal),
+            None => opening.sandbox_setup.record(None),
+        }
+        Ok(Session::new(
+            Arc::clone(opening.tree),
+            SessionHarness::new("kelpie-test-no-such-harness"),
+            opening.project.path.clone(),
+            None,
+            Choice::default(),
+        ))
+    })
+}
+
+#[test]
+fn an_unsandboxed_session_is_reopened_once_the_profile_is_loaded() {
+    let dir = Dir::new();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        counting_opener(&opened, Some(Refusal::NoCapabilities)),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap()
+    .with_profile_check(Box::new(|| true));
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+
+    let (first, ..) = state.pm_session().unwrap();
+    assert!(state.sandbox_setup().view().unsandboxed);
+
+    let (next, ..) = state.pm_session().unwrap();
+    assert_eq!(opened.load(Ordering::SeqCst), 2, "the opener runs again");
+    assert!(
+        !Arc::ptr_eq(&first, &next),
+        "the unsandboxed session is dropped for a new one"
+    );
+    let held = state.held_session().expect("the new session is held");
+    assert!(Arc::ptr_eq(&next, &held), "the new session is the held one");
+    assert!(
+        !Arc::ptr_eq(&first, &held),
+        "the stopped session is held no more"
+    );
+}
+
+#[test]
+fn an_unsandboxed_session_is_kept_while_no_profile_is_loaded() {
+    let dir = Dir::new();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        counting_opener(&opened, Some(Refusal::NoCapabilities)),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap()
+    .with_profile_check(Box::new(|| false));
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+
+    let (first, ..) = state.pm_session().unwrap();
+    let (again, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &again),
+        "no profile is no reason to reopen"
+    );
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_sandboxed_session_is_kept_when_the_profile_is_loaded() {
+    let dir = Dir::new();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::new(AtomicBool::new(false));
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        counting_opener(&opened, None),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap()
+    .with_profile_check({
+        let asked = Arc::clone(&asked);
+        Box::new(move || {
+            asked.store(true, Ordering::SeqCst);
+            true
+        })
+    });
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+
+    let (first, ..) = state.pm_session().unwrap();
+    let (again, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &again),
+        "a sandboxed session carries on"
+    );
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    assert!(
+        !asked.load(Ordering::SeqCst),
+        "no check for a sandboxed one"
+    );
 }
 
 #[test]

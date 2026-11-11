@@ -67,6 +67,7 @@ mod policy;
 pub mod refusal;
 pub mod worker;
 
+pub use hop::profile_loaded;
 pub use policy::{Project, Reads, denied, policy, policy_with_door};
 pub use refusal::Refusal;
 pub use worker::Worker;

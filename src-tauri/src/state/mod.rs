@@ -309,6 +309,12 @@ pub struct Opening<'a> {
 /// scripted agent. The text of an error is for the maintainer to read.
 pub type Opener = Box<dyn Fn(&Opening<'_>) -> Result<Session, String> + Send + Sync>;
 
+/// What says whether this machine has a `kelpie` AppArmor profile loaded
+///
+/// The app asks the engine ([`kelpie_engine::sandbox::profile_loaded`]); a test
+/// answers for it, since loading a profile needs root.
+pub type ProfileCheck = Box<dyn Fn() -> bool + Send + Sync>;
+
 /// What the PM runs on: the harness and the model, kept to say what a switch left
 // wire format: `projects.json` holds this as `pm_ran`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +356,8 @@ pub struct AppState {
     tools: Option<Arc<Tools>>,
     /// What the PM's last start found about its sandbox
     sandbox_setup: SandboxSetup,
+    /// What says whether a `kelpie` profile is loaded on this machine
+    profile_check: ProfileCheck,
     /// Whether an Install is waiting on its password prompt, which ends the
     /// session when it loads the profile
     installing: AtomicBool,
@@ -432,11 +440,21 @@ impl AppState {
             picker,
             tools,
             sandbox_setup,
+            profile_check: Box::new(kelpie_engine::sandbox::profile_loaded),
             installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
             workers,
             board: BoardHost::default(),
         })
+    }
+
+    /// Ask `check` whether a `kelpie` profile is loaded, in place of the engine
+    ///
+    /// A test sets it, since loading a profile needs root.
+    #[must_use]
+    pub fn with_profile_check(mut self, check: ProfileCheck) -> Self {
+        self.profile_check = check;
+        self
     }
 
     /// Look for a newer version of each installed bridge now, and again every 24 hours
@@ -582,7 +600,12 @@ impl AppState {
     /// (`docs/design/pm-chat.md`, Switching harness or model). The divider's
     /// text is the third thing returned, `None` when nothing was switched.
     ///
-    /// A new session that cannot be built leaves the old one running.
+    /// A session running without a sandbox ends once a `kelpie` profile is
+    /// loaded, by Install or at a terminal, before this send opens one that
+    /// probes the sandbox again (`docs/design/sandbox-setup.md`, Install).
+    ///
+    /// A new session that cannot be built leaves the old one running, unless
+    /// this send ended it for a loaded profile.
     ///
     /// # Errors
     ///
@@ -592,10 +615,9 @@ impl AppState {
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
         // A refusal belongs to the start that found it: whatever fails before
-        // the opener probes the sandbox again must not leave it on the chat.
-        // A session already held keeps its own record, since it still runs as
-        // that start left it, unsandboxed or not, and a send that reuses it
-        // probes nothing.
+        // the opener probes the sandbox again must not leave it on the chat. A
+        // held session keeps its own record, since it still runs as that start
+        // left it, and a send that reuses it probes nothing.
         if lock(&self.session).is_none() {
             self.sandbox_setup.record(None);
         }
@@ -616,14 +638,24 @@ impl AppState {
         if let Some((was, session)) = &held
             && was.harness == plan.harness
         {
-            session.choose(plan.choice.clone());
-            if *was != now {
-                self.keep_ran(&project.id, &now)?;
-                if let Some((ran, _)) = lock(&self.session).as_mut() {
-                    *ran = now;
+            if self.sandbox_setup.view().unsandboxed && (self.profile_check)() {
+                // A profile loaded at a terminal cannot reach a session already
+                // running: it ends, with its record, and the send below opens one
+                // that probes again. A failed open leaves nothing held, and the
+                // next send resumes from the saved session id.
+                session.stop();
+                *lock(&self.session) = None;
+                self.sandbox_setup.record(None);
+            } else {
+                session.choose(plan.choice.clone());
+                if *was != now {
+                    self.keep_ran(&project.id, &now)?;
+                    if let Some((ran, _)) = lock(&self.session).as_mut() {
+                        *ran = now;
+                    }
                 }
+                return Ok((Arc::clone(session), handle, None));
             }
-            return Ok((Arc::clone(session), handle, None));
         }
         // What the PM ran on before this send: the open session, or what the
         // last launch kept. A session id belongs to the harness that gave it.
