@@ -44,6 +44,7 @@ use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
 use kelpie_engine::tools::{Tools, WorkerStarter};
 use kelpie_engine::tree::ProcessTree;
+use kelpie_engine::usage::{InFlight, Timestamp};
 use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Status, Ticket};
 use kelpie_protocol::{LogEntry, SessionEvent};
 use serde::Serialize;
@@ -120,6 +121,7 @@ struct Standing {
     plan: WorkerPlan,
     paths: Paths,
     records: Arc<Mutex<Records>>,
+    usage: InFlight,
 }
 
 /// What the app keeps for its workers, across starts
@@ -134,6 +136,11 @@ pub struct Workers {
     /// Built on the first start, from the settings of the project it is for
     leases: OnceLock<Arc<Leases>>,
     records: Mutex<BTreeMap<String, Arc<Mutex<Records>>>>,
+    /// Each project's ledger of worker turns, by project, built on the first ask
+    ///
+    /// One per project, so the drafts a start opened are still reachable when kelpie
+    /// quits and writes the turns it cut off.
+    usage: Mutex<BTreeMap<String, InFlight>>,
     /// The sessions of the workers that hold a slot, by project and ticket
     ///
     /// The engine holds a worker's session only weakly, so this map is what keeps
@@ -188,6 +195,7 @@ impl Workers {
             gh: worker::login::helper_on_path(),
             leases: OnceLock::new(),
             records: Mutex::default(),
+            usage: Mutex::default(),
             sessions: Arc::default(),
             feeds: Arc::default(),
             sources: Mutex::default(),
@@ -333,6 +341,17 @@ impl Workers {
     pub fn close_logs(&self) {
         for session in lock(&self.sessions).values() {
             session.close_log();
+        }
+    }
+
+    /// Write a stopped line for every worker turn kelpie is cutting off
+    ///
+    /// Run before the process tree stops, so the quit writes these turns and no
+    /// `Failed` from a stopped harness writes one after it.
+    pub fn stop_usage(&self) {
+        let ledgers: Vec<InFlight> = lock(&self.usage).values().cloned().collect();
+        for usage in ledgers {
+            usage.stop_all(Timestamp::now());
         }
     }
 
@@ -507,11 +526,25 @@ impl Workers {
     ///
     /// The settings cannot be used, or the records file cannot be read.
     fn standing(&self, project_id: &str) -> Result<Standing, String> {
+        let paths = Paths::new(&self.data_dir, project_id);
         Ok(Standing {
+            // Read before `paths` goes into the list, which it names the ledger in
+            usage: self.ledger(&paths, project_id),
             plan: plan(&self.config, project_id)?,
-            paths: Paths::new(&self.data_dir, project_id),
+            paths,
             records: self.records(project_id)?,
         })
+    }
+
+    /// The ledger of the project `project_id`'s worker turns, made on the first ask
+    fn ledger(&self, paths: &Paths, project_id: &str) -> InFlight {
+        let mut kept = lock(&self.usage);
+        if let Some(usage) = kept.get(project_id) {
+            return usage.clone();
+        }
+        let usage = InFlight::new(paths.usage());
+        kept.insert(project_id.to_owned(), usage.clone());
+        usage
     }
 
     /// The engine's [`worker::Project`] for `standing`, whose workers it opens with `open`
@@ -539,6 +572,7 @@ impl Workers {
             tokens: Some(&self.tokens),
             gh: self.gh.as_deref(),
             leases: Some(leases.as_ref()),
+            usage: Some(&standing.usage),
             open,
         })
     }

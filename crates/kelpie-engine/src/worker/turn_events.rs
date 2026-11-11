@@ -6,8 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use crate::session::{Session, SessionEvent};
+use crate::session::{Session, SessionEvent, SessionId};
+use crate::settings::Harness;
 use crate::tree::ProcessTree;
+use crate::usage::{Draft, Ended, InFlight, Role, Timestamp, TurnId};
+use kelpie_protocol::{StopReason, Usage};
 
 use super::ceiling::{Ceiling, Verdict, Watch};
 use super::start::{Project, lock};
@@ -42,6 +45,44 @@ impl fmt::Debug for Events {
     }
 }
 
+/// What every turn of one worker spends, as its ledger draft starts
+///
+/// Held as a handle on the project's [`InFlight`], so a turn can be metered
+/// without the project it started in.
+#[derive(Debug, Clone)]
+struct Meter {
+    usage: InFlight,
+    harness: Option<Harness>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+impl Meter {
+    /// What `project` meters its worker's turns against, `None` where it meters none
+    fn of(project: &Project<'_>) -> Option<Self> {
+        let usage = project.usage?;
+        Some(Self {
+            usage: usage.clone(),
+            harness: project.binding.harness.value,
+            model: project.binding.model.value.clone(),
+            effort: project.binding.effort.value.clone(),
+        })
+    }
+
+    /// The draft of a turn on `ticket` that starts now in `session`
+    fn opened(&self, ticket: &str, session: Option<SessionId>) -> TurnId {
+        self.usage.open(Draft {
+            ticket: ticket.to_owned(),
+            role: Role::Worker,
+            harness: self.harness,
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            session,
+            started: Timestamp::now(),
+        })
+    }
+}
+
 /// What a worker's turns need to read themselves into its record and start the next
 ///
 /// Cloned into each turn's sink, which holds the session by a weak reference: the
@@ -58,6 +99,7 @@ pub(super) struct Turns {
     timeout: Duration,
     session: Weak<Session>,
     events: Events,
+    meter: Option<Meter>,
 }
 
 impl Turns {
@@ -99,13 +141,15 @@ impl Turns {
             timeout: project.turn_timeout,
             session: Arc::downgrade(session),
             events,
+            meter: Meter::of(project),
         }
     }
 
     /// Send `text` as the turn `watch` clocks, held to `ceiling`
     ///
     /// The caller kept `watch` in the records already, so nothing sees a worker
-    /// that is running with no clock.
+    /// that is running with no clock. Every turn's ledger draft opens here, so no
+    /// turn goes unmetered.
     pub(super) fn dispatch(
         &self,
         session: &Arc<Session>,
@@ -113,7 +157,9 @@ impl Turns {
         watch: Watch,
         ceiling: Ceiling,
     ) {
-        session.send(text, self.sink(watch.clone()));
+        // Opened before the send, so a turn that fails at once has a draft to write
+        let turn = self.opened();
+        session.send(text, self.sink(watch.clone(), turn));
         watch.hold_to(
             ceiling,
             Arc::clone(session),
@@ -121,6 +167,18 @@ impl Turns {
             self.ticket.clone(),
             self.slots,
         );
+    }
+
+    /// The ledger's draft of the turn about to be sent, `None` where nothing is metered
+    ///
+    /// Its session is the one the record holds, which for a ticket's first turn is
+    /// none until its harness gives it an id.
+    fn opened(&self) -> Option<TurnId> {
+        let meter = self.meter.as_ref()?;
+        let session = lock(&self.records)
+            .get(&self.ticket)
+            .and_then(|record| record.session.clone());
+        Some(meter.opened(&self.ticket, session))
     }
 
     /// The sink of one turn, which reads the record from every event that changes it
@@ -138,12 +196,20 @@ impl Turns {
     /// notes is not done: the notes go out together as the next prompt, one to a
     /// paragraph, and the worker stays Running with its slot. A held branch or a
     /// Paused worker keeps its notes for its next turn.
-    fn sink(&self, watch: Watch) -> impl FnMut(SessionEvent) + Send + 'static {
-        let turns = self.clone();
-        move |event| turns.hear(&watch, event)
+    fn sink(
+        &self,
+        watch: Watch,
+        turn: Option<TurnId>,
+    ) -> impl FnMut(SessionEvent) + Send + 'static {
+        let sink = TurnSink {
+            turns: self.clone(),
+            watch,
+            turn,
+        };
+        move |event| sink.turns.hear(&sink.watch, sink.turn, event)
     }
 
-    fn hear(&self, watch: &Watch, event: SessionEvent) {
+    fn hear(&self, watch: &Watch, turn: Option<TurnId>, event: SessionEvent) {
         let ticket = self.ticket.as_str();
         // The fence runs git, so it answers before the records lock is held
         let ending = match &event {
@@ -200,6 +266,19 @@ impl Turns {
             );
         }
         drop(records);
+        // The ledger is written outside the records' lock, so a file that will not
+        // open costs a line and not the turn's end
+        match &event {
+            SessionEvent::Started { session_id } => {
+                if let (Some(meter), Some(turn)) = (self.meter.as_ref(), turn) {
+                    meter.usage.set_session(turn, session_id);
+                }
+            }
+            SessionEvent::TurnEnded { stop_reason, usage } => {
+                self.wrote(turn, *stop_reason, *usage);
+            }
+            _ => {}
+        }
         self.events.hear(event);
         if let Some((session, notes, watch)) = next {
             self.dispatch(
@@ -261,6 +340,58 @@ impl Turns {
         let watch = Watch::new();
         records.keep_watch(ticket, watch.clone());
         Some((session, notes.join("\n\n"), watch))
+    }
+
+    /// Write `turn`'s ledger line for a turn that ended, from its stop reason and what it spent
+    fn wrote(&self, turn: Option<TurnId>, stop_reason: StopReason, usage: Option<Usage>) {
+        let (Some(meter), Some(turn)) = (self.meter.as_ref(), turn) else {
+            return;
+        };
+        let ended = match stop_reason {
+            StopReason::Cancelled => Ended::Cancelled,
+            // Any other reason is the harness ending its own turn
+            _ => Ended::Done,
+        };
+        lost(
+            &self.ticket,
+            meter
+                .usage
+                .end(turn, Timestamp::now(), ended, usage)
+                .map(drop),
+            "its usage line",
+        );
+    }
+
+    /// Write `turn`'s line as [`Ended::Failed`], when its sink ended with no `TurnEnded`
+    fn failed(&self, turn: Option<TurnId>) {
+        let (Some(meter), Some(turn)) = (self.meter.as_ref(), turn) else {
+            return;
+        };
+        lost(
+            &self.ticket,
+            meter
+                .usage
+                .end(turn, Timestamp::now(), Ended::Failed, None)
+                .map(drop),
+            "its failed line",
+        );
+    }
+}
+
+/// One turn's sink, which writes its ledger line when the turn ends with no `TurnEnded`
+///
+/// A send ends with a `TurnEnded`, or with a `Failed` when the harness could not
+/// carry on, and the session's worker drops the sink either way. Which one a
+/// `Failed` was is known only from here, where the draft is still open.
+struct TurnSink {
+    turns: Turns,
+    watch: Watch,
+    turn: Option<TurnId>,
+}
+
+impl Drop for TurnSink {
+    fn drop(&mut self) {
+        self.turns.failed(self.turn);
     }
 }
 

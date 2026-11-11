@@ -51,6 +51,7 @@ use kelpie_engine::session::Session;
 use kelpie_engine::settings::ConfigDir;
 use kelpie_engine::ticket::{ForgeError, GithubTickets, Pulls};
 use kelpie_engine::tree::ProcessTree;
+use kelpie_engine::usage::InFlight;
 use kelpie_engine::worker::{self, Opening, Paths, Record, Records, Status};
 use kelpie_protocol::SessionEvent;
 
@@ -235,6 +236,12 @@ pub struct Hands {
 
     /// Where the project's workers live
     paths: Paths,
+
+    /// The project's ledger, which a note's turn writes its line to
+    ///
+    /// The same handle the project's starts meter into, so a turn a hand-over tells
+    /// the worker to run is metered, and written, like any other.
+    usage: InFlight,
 
     /// The project's checkout, which holds the remote each branch was cut from
     folder: PathBuf,
@@ -523,6 +530,7 @@ impl Hands {
             tokens: Some(&*self.tokens),
             gh: self.gh.as_deref(),
             leases: Some(&*self.leases),
+            usage: Some(&self.usage),
             open: &opener,
         };
         if let Err(why) = worker::note(&project, &session, ticket, text) {
@@ -683,12 +691,14 @@ impl Workers {
         // [`Hands::hand_over`] says so when a turn ends.
         let forge = self.forge(project_id, folder).ok();
         let records = self.records(project_id)?;
+        let paths = Paths::new(&self.data_dir, project_id);
         Ok(Hands {
             project_id: project_id.to_owned(),
             data_dir: self.data_dir.clone(),
             config: self.config.clone(),
             logins: self.logins.clone(),
-            paths: Paths::new(&self.data_dir, project_id),
+            usage: self.ledger(&paths, project_id),
+            paths,
             folder: folder.to_owned(),
             tree: Arc::clone(&self.tree),
             records: Arc::downgrade(&records),

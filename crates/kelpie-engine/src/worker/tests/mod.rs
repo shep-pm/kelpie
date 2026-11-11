@@ -206,6 +206,7 @@ impl Rig {
             tokens: self.tokens.as_ref(),
             gh: self.gh.as_deref(),
             leases,
+            usage: None,
             open,
         }
     }
@@ -939,3 +940,4 @@ mod lease;
 mod needs_you;
 
 mod tell;
+mod usage;

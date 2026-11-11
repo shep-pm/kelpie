@@ -21,7 +21,8 @@
 //! folder a worker can write, and follows no link there. [`tools`] serves kelpie's
 //! own tools to each session over MCP, through a relay and the one door its
 //! sandbox leaves open. [`ticket`] names a ticket and reads a project's tickets
-//! through the port its source answers. [`board`] puts each of those tickets in a
+//! through the port its source answers. [`usage`] keeps one line for each of a
+//! project's worker turns, and the drafts of the turns running now. [`board`] puts each of those tickets in a
 //! column and says what a drop on a column does. The crate has no Tauri
 //! dependency, so the app crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
@@ -48,7 +49,8 @@
 //! is spent; [`worker`] counts how many of a project's workers may run at once;
 //! [`worktree`] reads a ticket's worktree; [`worker_folder`] reads and writes a
 //! worker's folder without following a link; [`ticket`] holds a ticket's id and the
-//! port a project's tickets are read through; [`board`] holds the rule that
+//! port a project's tickets are read through; [`usage`] holds one line of a
+//! project's ledger of worker turns; [`board`] holds the rule that
 //! puts a ticket in a column and the move table a drop runs; [`tools`] opens
 //! the door each session's `kelpie tools` relay reaches kelpie by.
 
@@ -75,6 +77,7 @@ pub mod settings;
 pub mod ticket;
 pub mod tools;
 pub mod tree;
+pub mod usage;
 pub mod worker;
 pub mod worker_folder;
 pub mod worktree;

@@ -45,6 +45,7 @@ use crate::session::log::Log;
 use crate::session::{Choice, Harness, Session, SessionEvent, SessionId};
 use crate::tools::{SessionTools, Tools};
 use crate::tree::ProcessTree;
+use crate::usage::InFlight;
 use crate::worker_folder;
 use crate::worktree::{self, Remote, clone};
 
@@ -119,6 +120,14 @@ impl Paths {
     #[must_use]
     pub fn records(&self) -> PathBuf {
         self.project().join(RECORDS_FILE)
+    }
+
+    /// `<data_dir>/projects/<id>/usage.jsonl`, the ledger of its worker turns
+    ///
+    /// It is kept beside the records, out of reach of every worker's sandbox.
+    #[must_use]
+    pub fn usage(&self) -> PathBuf {
+        self.project().join(crate::usage::FILE)
     }
 
     /// `<data_dir>/projects/<id>/worktrees/<ticket>`, the ticket's worktree
@@ -234,6 +243,10 @@ pub struct Project<'a> {
     /// kelpie's leases, whose socket each worker's session gets. `None` where the
     /// platform has no lease socket, which leaves every worker unleased.
     pub leases: Option<&'a Leases>,
+
+    /// The project's ledger, which every turn of a worker writes its line to.
+    /// `None` where the project keeps no ledger.
+    pub usage: Option<&'a InFlight>,
 
     /// Build the worker's session on the harness the binding names, inside the
     /// sandbox [`Opening::sandbox`] starts. The text of an error is for the
