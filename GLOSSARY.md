@@ -189,6 +189,18 @@ _Avoid_: seat, lane
 A turn at something only a few may use at once, such as a test run, held while the command runs and handed back when it ends.
 _Avoid_: lock, mutex
 
+**Gate**:
+The checks a worker's pull request passes between its draft and the merge: on the latest base branch, CI green on its head, then the maintainer's yes.
+_Avoid_: pipeline, checks (CI's own)
+
+**Catch-up**:
+Bringing a pull request's branch up to the latest base branch, so the head CI passed on is the head that merges.
+_Avoid_: sync, update branch
+
+**Fix turn**:
+A worker's turn spent on what the gate sent back: a red CI run or a conflict from catch-up.
+_Avoid_: retry, rework turn
+
 ## Building kelpie
 
 **Lift**:
