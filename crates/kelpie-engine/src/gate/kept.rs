@@ -286,6 +286,11 @@ impl Book {
         self.tickets.get(&ticket)
     }
 
+    /// Every ticket with something kept, in ticket order
+    pub fn iter(&self) -> impl Iterator<Item = (TicketId, &Kept)> {
+        self.tickets.iter().map(|(ticket, kept)| (*ticket, kept))
+    }
+
     /// What is kept about `ticket`, to read and change, started empty when none is
     pub fn entry(&mut self, ticket: TicketId) -> &mut Kept {
         self.tickets.entry(ticket).or_default()

@@ -23,6 +23,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
+use kelpie_engine::ci::Ci;
+use kelpie_engine::ci::fake::FakeCi;
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::settings::PickUp;
@@ -352,6 +354,7 @@ impl Rig {
             Arc::new(Forge::new(
                 Arc::clone(tickets) as Arc<dyn GithubTickets>,
                 Arc::clone(pulls) as Arc<dyn Pulls>,
+                Arc::new(FakeCi::new()) as Arc<dyn Ci>,
             )),
         );
     }
@@ -436,7 +439,7 @@ impl Rig {
         });
         let requests = Box::new(BTreeMap::new);
         let hands = hands.clone();
-        let retry: Retry = Box::new(move |records: &[Record]| hands.retry(records));
+        let retry: Retry = Box::new(move |records: &[Record], _: &[OpenPull]| hands.retry(records));
         Poller::new(
             Arc::new(Board {
                 tickets: Arc::clone(tickets),

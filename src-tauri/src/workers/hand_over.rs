@@ -44,6 +44,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
+use kelpie_engine::ci::Ci;
 use kelpie_engine::github::AppTokens;
 use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
@@ -108,13 +109,31 @@ pub struct Forge {
 
     /// The drafts of the project's repo, opened as the maintainer
     pulls: Arc<dyn Pulls>,
+
+    /// The project's CI, which the gate reruns a stuck run through
+    ci: Arc<dyn Ci>,
 }
 
 impl Forge {
-    /// What a project's hand-overs ask of `tickets` and `pulls`
+    /// What a project's hand-overs and its gate ask of `tickets`, `pulls` and `ci`
     #[must_use]
-    pub fn new(tickets: Arc<dyn GithubTickets>, pulls: Arc<dyn Pulls>) -> Self {
-        Self { tickets, pulls }
+    pub fn new(tickets: Arc<dyn GithubTickets>, pulls: Arc<dyn Pulls>, ci: Arc<dyn Ci>) -> Self {
+        Self { tickets, pulls, ci }
+    }
+
+    /// The project's tickets
+    pub(crate) fn tickets(&self) -> &Arc<dyn GithubTickets> {
+        &self.tickets
+    }
+
+    /// The project's pull requests
+    pub(crate) fn pulls(&self) -> &Arc<dyn Pulls> {
+        &self.pulls
+    }
+
+    /// The project's CI
+    pub(crate) fn ci(&self) -> &Arc<dyn Ci> {
+        &self.ci
     }
 }
 
@@ -636,7 +655,7 @@ impl Workers {
     /// # Errors
     ///
     /// The checkout's origin is not a GitHub repo, or there is no `gh` to ask.
-    fn forge(&self, project_id: &str, folder: &Path) -> Result<Arc<Forge>, String> {
+    pub(super) fn forge(&self, project_id: &str, folder: &Path) -> Result<Arc<Forge>, String> {
         {
             let kept = lock(&self.forges);
             if let Some(forge) = kept.get(project_id) {
@@ -647,6 +666,7 @@ impl Workers {
         let forge = Arc::new(Forge::new(
             Arc::clone(&calls.source) as Arc<dyn GithubTickets>,
             Arc::clone(&calls.pulls) as Arc<dyn Pulls>,
+            Arc::clone(&calls.ci) as Arc<dyn Ci>,
         ));
         lock(&self.forges).insert(project_id.to_owned(), Arc::clone(&forge));
         Ok(forge)

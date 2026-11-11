@@ -179,7 +179,7 @@ impl Rig {
         });
         // These tests read the board; the hand-overs a read owes the forge are
         // `workers::tests::hand_over`'s to test.
-        let retry = Box::new(|_: &[Record]| {});
+        let retry = Box::new(|_: &[Record], _: &[OpenPull]| {});
         Poller::new(
             Arc::clone(source),
             choose,

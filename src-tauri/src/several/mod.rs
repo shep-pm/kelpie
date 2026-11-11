@@ -19,13 +19,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use kelpie_engine::ci::Ci;
+use kelpie_engine::ci::fake::FakeCi;
 use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
 use kelpie_engine::settings::{ConfigDir, Field, LayerFile, PickUp, Settings};
-use kelpie_engine::ticket::{GithubTickets, Pulls, TicketId, Tickets};
+use kelpie_engine::ticket::{GithubTickets, OpenPull, Pulls, TicketId, Tickets};
 use kelpie_engine::worker::{Opening, Paths, Record, Status, Ticket};
 use kelpie_protocol::SessionEvent;
 use serde_json::json;
@@ -145,6 +147,7 @@ impl Rig {
             Arc::new(Forge::new(
                 Arc::clone(&github) as Arc<dyn GithubTickets>,
                 Arc::clone(&github) as Arc<dyn Pulls>,
+                Arc::new(FakeCi::new()) as Arc<dyn Ci>,
             )),
         );
         Self {
@@ -343,7 +346,7 @@ impl Rig {
             })
         });
         let hands = self.hands();
-        let retry: Retry = Box::new(move |records: &[Record]| hands.retry(records));
+        let retry: Retry = Box::new(move |records: &[Record], _: &[OpenPull]| hands.retry(records));
         Poller::new(
             Arc::clone(&self.github),
             choose,

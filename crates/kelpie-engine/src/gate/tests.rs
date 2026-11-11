@@ -810,6 +810,22 @@ fn a_ruling_withdraws_ready_and_a_new_pass_gives_the_ruling_up() {
 }
 
 #[test]
+fn a_book_lists_each_ticket_it_keeps_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Book::load(dir.path().join(FILE)).unwrap();
+    let (seven, three): (TicketId, TicketId) = ("7".parse().unwrap(), "3".parse().unwrap());
+    book.entry(seven).ready_at(HEAD);
+    book.entry(three);
+
+    let listed: Vec<_> = book
+        .iter()
+        .map(|(ticket, kept)| (ticket, kept.ready.is_some()))
+        .collect();
+
+    assert_eq!(listed, [(three, false), (seven, true)]);
+}
+
+#[test]
 fn a_refused_catch_up_names_why() {
     let ruling = Ruling::CatchUpRefused {
         why: "its worktree is in the middle of a merge".to_owned(),
