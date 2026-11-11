@@ -11,8 +11,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use kelpie_engine::session::SandboxAnswer;
 use kelpie_engine::session::fake::{FakeAgent, FakeNetwork, Turn};
+use kelpie_engine::session::{SandboxAnswer, Session};
 use kelpie_engine::tools::SessionTools;
 use kelpie_engine::tools::fake::FakeTools;
 use kelpie_engine::worker::{Opening, Record, Seat, Status, Ticket};
@@ -25,33 +25,39 @@ use crate::workers::{NoteOutcome, OpenOn, answer_on, cancel_on, lock, note_on, s
 const WAIT: Duration = Duration::from_secs(20);
 
 /// The ticket every test here starts
-const TICKET: &str = "12";
+pub(super) const TICKET: &str = "12";
 
 /// The feed watch id these tests attach under
 const WATCH: u32 = 1;
 
 /// Every event a worker's feed carried
-type Heard = Arc<Mutex<Vec<SessionEvent>>>;
+pub(super) type Heard = Arc<Mutex<Vec<SessionEvent>>>;
 
 /// The kelpie tools the worker's session was handed, which a test dials as a relay does
-type Kept = Arc<Mutex<Option<SessionTools>>>;
+pub(super) type Kept = Arc<Mutex<Option<SessionTools>>>;
 
 /// The events and the tools of one worker's session
-fn session() -> (Heard, Kept) {
+pub(super) fn session() -> (Heard, Kept) {
     (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(None)))
 }
 
-/// Start ticket 12's worker on `agent`, keeping what its session was handed
+/// The opener of ticket 12's worker on `agent`, keeping what its session was handed
 ///
 /// `network` stands for the sandbox the session runs in, which an answer widens. `heard`
 /// keeps every event the worker's feed carried, which is why the feed is watched from
 /// inside the opener: the turn is in flight as soon as the session exists. `kept` holds the
 /// session's own kelpie tools.
-fn started(rig: &Rig, agent: &FakeAgent, network: &FakeNetwork, heard: &Heard, kept: &Kept) {
+pub(super) fn opener<'a>(
+    rig: &'a Rig,
+    agent: &FakeAgent,
+    network: &FakeNetwork,
+    heard: &Heard,
+    kept: &Kept,
+) -> impl Fn(&OpenOn<'_>, &Opening<'_>) -> Result<Session, String> + 'a {
     let (state, project) = (&rig.state, &rig.project);
     let (agent, network) = (agent.clone(), network.clone());
     let (heard, kept) = (Arc::clone(heard), Arc::clone(kept));
-    let opener = &|_on: &OpenOn<'_>, opening: &Opening<'_>| {
+    move |_on: &OpenOn<'_>, opening: &Opening<'_>| {
         *lock(&kept) = opening.tools.clone();
         let send = {
             let heard = Arc::clone(&heard);
@@ -69,20 +75,32 @@ fn started(rig: &Rig, agent: &FakeAgent, network: &FakeNetwork, heard: &Heard, k
             opening.resume.clone(),
             opening.choice.clone(),
         ))
-    };
-    let folder = state.project_path_of(project).unwrap();
+    }
+}
+
+/// Start ticket 12's worker on `agent`, as [`opener`] builds its session
+pub(super) fn started(
+    rig: &Rig,
+    agent: &FakeAgent,
+    network: &FakeNetwork,
+    heard: &Heard,
+    kept: &Kept,
+) {
+    let state = &rig.state;
+    let opener = opener(rig, agent, network, heard, kept);
+    let folder = state.project_path_of(&rig.project).unwrap();
     let ticket = Ticket {
         id: TICKET.to_owned(),
         text: "Build the thing.\n\nOne turn.".to_owned(),
     };
     state
         .workers()
-        .start(project, &folder, state.tools(), &ticket, opener)
+        .start(&rig.project, &folder, state.tools(), &ticket, &opener)
         .expect("the worker starts");
 }
 
 /// Wait for `ask` to answer true
-fn until(mut ask: impl FnMut() -> bool) {
+pub(super) fn until(mut ask: impl FnMut() -> bool) {
     let since = Instant::now();
     loop {
         if ask() {
@@ -107,7 +125,7 @@ fn until_some<T>(mut ask: impl FnMut() -> Option<T>) -> T {
 
 /// Wait for the worker's turn to have said something, which it does once its harness has
 /// the prompt
-fn until_working(heard: &Heard) {
+pub(super) fn until_working(heard: &Heard) {
     until(|| {
         lock(heard)
             .iter()
@@ -116,7 +134,7 @@ fn until_working(heard: &Heard) {
 }
 
 /// Wait for `n` of the worker's turns to have ended
-fn until_turns(heard: &Heard, n: usize) {
+pub(super) fn until_turns(heard: &Heard, n: usize) {
     until(|| {
         lock(heard)
             .iter()
@@ -137,7 +155,7 @@ fn until_request(heard: &Heard) -> String {
 }
 
 /// The text of each prompt the harness was sent, oldest first
-fn prompts(agent: &FakeAgent) -> Vec<String> {
+pub(super) fn prompts(agent: &FakeAgent) -> Vec<String> {
     agent
         .params("session/prompt")
         .iter()
@@ -146,14 +164,14 @@ fn prompts(agent: &FakeAgent) -> Vec<String> {
 }
 
 /// Ticket 12's record, as the app keeps it
-fn record(rig: &Rig) -> Record {
+pub(super) fn record(rig: &Rig) -> Record {
     let records = rig.state.workers().records(&rig.project).unwrap();
     let records = records.lock().unwrap();
     records.get(TICKET).expect("ticket 12 has a record").clone()
 }
 
 /// What ticket 12's record says it is doing, and what it holds
-fn standing(rig: &Rig) -> (Status, Seat) {
+pub(super) fn standing(rig: &Rig) -> (Status, Seat) {
     let record = record(rig);
     (record.status, record.seat)
 }
@@ -327,4 +345,121 @@ fn an_answer_reaches_the_workers_session_and_not_the_pms() {
             .is_empty(),
         "the answered request is no longer a needs-you line on the ticket"
     );
+}
+
+/// What the worker on ticket 12 is told as a Note, with `agent` to open its session if it needs one
+///
+/// No source is given: ticket 12's worker has had a turn, so its text is never read.
+fn noted(rig: &Rig, agent: &FakeAgent, text: &str) -> Result<NoteOutcome, String> {
+    let (heard, kept) = session();
+    let open = opener(rig, agent, &FakeNetwork::default(), &heard, &kept);
+    let folder = rig.state.project_path_of(&rig.project).unwrap();
+    rig.state.workers().note(
+        &rig.project,
+        &folder,
+        rig.state.tools(),
+        TICKET,
+        text,
+        Err("no ticket is read for a worker that has had a turn".to_owned()),
+        &open,
+    )
+}
+
+/// Park ticket 12's worker the way a ruling does: waiting on the maintainer, with `reason`
+fn ruled(rig: &Rig, reason: &str) {
+    let records = rig.state.workers().records(&rig.project).unwrap();
+    let mut records = lock(&records);
+    records
+        .set_status(TICKET, Status::WaitingOnMaintainer)
+        .unwrap();
+    records.set_reason(TICKET, Some(reason.to_owned())).unwrap();
+}
+
+#[test]
+fn a_note_to_a_worker_waiting_on_a_ruling_sends_it_back_with_the_text() {
+    let rig = Rig::new();
+    rig.with_origin();
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    let (heard, kept) = session();
+    started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    until_turns(&heard, 1);
+    ruled(&rig, "the pull request is still red");
+    assert!(
+        rig.state.workers().session(&rig.project, TICKET).is_none(),
+        "a worker waiting on the maintainer keeps no session"
+    );
+
+    let told = noted(&rig, &agent, "the failure is in the fixture, not the code").unwrap();
+
+    assert_eq!(told, NoteOutcome::Sent, "the text went out as a turn");
+    until_turns_in(&agent, 2);
+    let sent = &prompts(&agent)[1];
+    assert!(
+        sent.ends_with("the failure is in the fixture, not the code"),
+        "the worker's next prompt carries the maintainer's text: {sent:?}",
+    );
+    until(|| record(&rig).status == Status::Ended);
+    let record = record(&rig);
+    assert_eq!(
+        record.reason, None,
+        "the ruling's reason is gone with the ruling"
+    );
+    assert!(
+        record.notes.is_empty(),
+        "the text went out, not into the record"
+    );
+}
+
+#[test]
+fn a_note_to_a_paused_worker_is_kept_for_its_next_start() {
+    let rig = Rig::new();
+    rig.with_origin();
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("working").until_cancelled())
+        .turn(Turn::new().text("on it"));
+    let (heard, kept) = session();
+    started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    until_working(&heard);
+    cancel_on(&rig.state, TICKET).unwrap();
+    until_turns(&heard, 1);
+    assert_eq!(standing(&rig), (Status::Paused, Seat::Without));
+
+    let told = noted(&rig, &agent, "use the new name").unwrap();
+
+    assert_eq!(
+        told,
+        NoteOutcome::Queued,
+        "a Paused worker is not sent back"
+    );
+    assert_eq!(record(&rig).notes, ["use the new name"]);
+    assert_eq!(standing(&rig), (Status::Paused, Seat::Without));
+    assert_eq!(prompts(&agent).len(), 1, "no turn started");
+
+    let folder = rig.state.project_path_of(&rig.project).unwrap();
+    let (heard, kept) = session();
+    let open = opener(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    rig.state
+        .workers()
+        .resume(
+            &rig.project,
+            &folder,
+            rig.state.tools(),
+            TICKET,
+            Err("no ticket is read for a worker that has had a turn".to_owned()),
+            &open,
+        )
+        .unwrap();
+    until(|| prompts(&agent).len() == 2);
+    assert!(
+        prompts(&agent)[1].ends_with("Carry on from where you stopped.\n\nuse the new name"),
+        "its next start's prompt does not end with the note"
+    );
+    assert!(record(&rig).notes.is_empty());
+}
+
+/// Wait for `agent` to have been sent `n` prompts
+fn until_turns_in(agent: &FakeAgent, n: usize) {
+    until(|| prompts(agent).len() >= n);
 }
