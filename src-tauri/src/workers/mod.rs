@@ -352,14 +352,24 @@ pub fn start_on(
 #[tauri::command(async)]
 #[specta::specta]
 pub fn worker_start(state: State<'_, AppState>, ticket: String) -> Result<WorkerStarted, String> {
+    start_ticket(&state, &ticket)
+}
+
+/// Start a worker on the GitHub issue `ticket` of the project: what the Start
+/// button and a drop on Building both call
+///
+/// # Errors
+///
+/// As [`worker_start`].
+pub fn start_ticket(state: &AppState, ticket: &str) -> Result<WorkerStarted, String> {
     let project = state.project_id(None)?;
     let source = state.source(&project);
     let source = source.as_ref().map(|source| &**source as &dyn Tickets);
     start_on(
-        &state,
+        state,
         &project,
         source.map_err(Clone::clone),
-        &ticket,
+        ticket,
         &open::open,
     )
 }

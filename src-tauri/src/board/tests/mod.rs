@@ -16,8 +16,9 @@ use kelpie_engine::ticket::fake::FakeTickets;
 use kelpie_engine::ticket::{ForgeError, GithubTickets, Issue, Listed, OpenPull, TicketId, Tickets};
 use kelpie_engine::worker::{Record, Records, Status};
 
-use super::poll::{Choices, Feed, Poller};
-use super::{BoardEvent, BoardView, Column, TicketView};
+use super::poll::{Cadence, Choices, Feed, Poller};
+use super::{BoardEvent, BoardHost, BoardView, Column, MoveView, TicketView, move_ticket};
+use crate::workers::WorkerStarted;
 
 mod link;
 
@@ -126,6 +127,17 @@ impl Rig {
         fs::create_dir_all(&dir).unwrap();
         let records = Arc::new(Mutex::new(Records::load(dir.join("workers.json")).unwrap()));
         let source = Arc::new(source);
+        let poller = Self::poller(&source, &records);
+        Self {
+            dir,
+            source,
+            records,
+            poller,
+        }
+    }
+
+    /// A poller of `source`, on `records`, with the project's default choices
+    fn poller(source: &Arc<Source>, records: &Arc<Mutex<Records>>) -> Poller<Source> {
         let choose = Box::new(|| {
             Ok(Choices {
                 pick_up: PickUp::Me,
@@ -133,18 +145,12 @@ impl Rig {
                 done_days: 14,
             })
         });
-        let poller = Poller::new(
-            Arc::clone(&source),
+        Poller::new(
+            Arc::clone(source),
             choose,
-            Arc::clone(&records),
+            Arc::clone(records),
             Arc::new(Fixed(1_700_000_000)),
-        );
-        Self {
-            dir,
-            source,
-            records,
-            poller,
-        }
+        )
     }
 
     /// A worker on `ticket` that holds a slot
@@ -380,4 +386,84 @@ fn a_closed_channel_stops_the_poller() {
         .recv_timeout(std::time::Duration::from_secs(5))
         .expect("the poller kept running after its channel closed");
     assert_eq!(sent.load(Ordering::SeqCst), 1, "it sent once, and stopped");
+}
+
+/// A host watching a board of 12 Ready and 13 Draft, once its first board is out
+fn watching(rig: &Rig) -> BoardHost {
+    rig.source.tickets.script_ready(Ok(vec![listed(
+        12,
+        "Add the thing",
+        &["ready-for-agent"],
+        100,
+    )]));
+    rig.source.tickets.script_open(Ok(vec![
+        listed(12, "Add the thing", &["ready-for-agent"], 100),
+        listed(13, "Think about it", &[], 200),
+    ]));
+    let host = BoardHost::default();
+    let (sent, first) = std::sync::mpsc::channel();
+    host.watch(
+        Rig::poller(&rig.source, &rig.records),
+        Cadence {
+            place: std::time::Duration::from_millis(5),
+            read: std::time::Duration::from_secs(3600),
+        },
+        move |event| sent.send(event).is_ok(),
+    );
+    first
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the host sent no board");
+    host
+}
+
+#[test]
+fn a_move_from_ready_to_building_starts_the_worker_and_any_other_move_changes_nothing() {
+    let rig = Rig::new(Source::new());
+    let host = watching(&rig);
+    let started = Mutex::new(Vec::new());
+    let start = |ticket: &str| {
+        started.lock().unwrap().push(ticket.to_owned());
+        Ok(WorkerStarted {
+            ticket: ticket.to_owned(),
+            waiting: true,
+        })
+    };
+
+    let moved = move_ticket(&host, "12", Column::Building, start);
+    assert_eq!(moved, Ok(MoveView::Started { waiting: true }));
+    assert_eq!(*started.lock().unwrap(), ["12"]);
+
+    let stay = move_ticket(&host, "12", Column::Ready, start);
+    assert_eq!(stay, Ok(MoveView::Stay));
+
+    let ready = move_ticket(&host, "13", Column::Ready, start);
+    let Ok(MoveView::SnapBack { line }) = ready else {
+        panic!("expected a snap back, got {ready:?}");
+    };
+    assert!(line.contains("ready label"), "{line}");
+
+    let merge = move_ticket(&host, "12", Column::Done, start);
+    assert!(
+        matches!(merge, Ok(MoveView::SnapBack { .. })),
+        "{merge:?}"
+    );
+
+    assert_eq!(
+        *started.lock().unwrap(),
+        ["12"],
+        "only the first move started a worker"
+    );
+}
+
+#[test]
+fn a_move_of_a_ticket_not_on_the_board_is_refused() {
+    let rig = Rig::new(Source::new());
+    let host = watching(&rig);
+
+    let refused = move_ticket(&host, "99", Column::Building, |_| {
+        panic!("no worker should start")
+    });
+
+    let said = refused.unwrap_err();
+    assert!(said.contains("99") && said.contains("not on the board"), "{said}");
 }
