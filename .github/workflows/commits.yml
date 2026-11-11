@@ -13,7 +13,7 @@ permissions:
 jobs:
   conventional:
     name: conventional subjects
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # Full history: a subject is only checkable if it is fetched.

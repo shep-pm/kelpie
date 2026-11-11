@@ -68,7 +68,7 @@ The web frontend is at the repo root, and `src-tauri` loads it in the Tauri wind
 - `pnpm tauri icon docs/design/system/assets/logos/kelpie-app-icon.svg`: regenerates `src-tauri/icons/` from the app icon.
 - Biome covers the frontend only: `biome.json` excludes `docs/`, `map/` and all Markdown, which are prose its formatter would rewrite.
 - Module map of SK: see `README.md`, Build the map. Run Python with `-I`.
-- CI runs on GitHub's hosted runners (`runs-on: ubuntu-latest`), free since the repo is public. Every required workflow also runs on `merge_group`: `main` takes pull requests through a merge queue, so a pull request is never rebased just to catch up with `main`.
+- CI runs on GitHub's hosted runners (`runs-on: ubuntu-24.04`), free since the repo is public. The image is pinned, since `ubuntu-latest` moved to 26.04, which renames `webkit2gtk-driver` and refuses crabpot's user namespaces even with `kernel.apparmor_restrict_unprivileged_userns` at 0. Every required workflow also runs on `merge_group`: `main` takes pull requests through a merge queue, so a pull request is never rebased just to catch up with `main`.
 - CI posts the window's light and dark screenshots in the body of a pull request that changes `src/`, `index.html` or `e2e/` (`.github/workflows/screenshots.yml`), from the e2e test's `test-results/window-light.png` and `window-dark.png`. An issue asks no worker for a screenshot, and a pull request author posts none.
 
 ## Where things live

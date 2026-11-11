@@ -43,7 +43,7 @@ jobs:
     name: shots
     # Pull requests from a fork get a read-only token that cannot post.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     # A failure here fails no check. `post` reports it in the body instead.
     continue-on-error: true
@@ -109,7 +109,7 @@ jobs:
     # A run that was cancelled by a newer push posts nothing, and a fork's run
     # has no `shots` to post and no token that could.
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The only job that writes: it pushes `pr-shots` and edits the body.
     permissions:
