@@ -7,7 +7,8 @@
 //! `GH_DEBUG=api`, so a failure's stderr carries the response headers
 //! a rate limit's [`Cooldown`] is read from. [`Runner`] is the child, which a
 //! test scripts. [`GithubSource`] reads a repo's issues and open pull requests through a [`hold::Hold`]
-//! over it, and [`GithubActions`] reads a repo's checks and failed runs and reruns a run the same way.
+//! over it, [`GithubActions`] reads a repo's checks and failed runs and reruns a run the same way, and
+//! [`GithubQueue`] reads where a pull request stands in its merge queue.
 //!
 //! [`Cooldown`]: super::Cooldown
 
@@ -30,12 +31,14 @@ pub mod hold;
 mod listing;
 pub mod pulls;
 mod pulls_read;
+pub mod queue;
 mod runs;
 mod source;
 
 pub use account::{RateBucket, RateLimits};
 pub use actions::GithubActions;
 pub use pulls::GithubPulls;
+pub use queue::GithubQueue;
 pub use source::GithubSource;
 
 #[cfg(test)]
@@ -48,6 +51,8 @@ mod hold_tests;
 mod pulls_read_tests;
 #[cfg(test)]
 mod pulls_tests;
+#[cfg(test)]
+mod queue_tests;
 #[cfg(test)]
 mod runs_tests;
 #[cfg(test)]
