@@ -131,6 +131,20 @@ const titlesIn = (label: string) =>
 const dragTo = (title: string, label: string) => dragCardTo(card(title), label);
 const status = () => screen.getByRole("status");
 
+/**
+ * Wait until the board's status line says exactly `text`.
+ *
+ * The line is on the panel from its first render, empty until there is
+ * something to say. `findByRole("status")` waits for the element, which is
+ * already there, so it answers with the empty line whenever the panel has not
+ * yet answered the click or the drop. A Start, a move or a link is a command
+ * that answers on a later tick, and how far later depends on how loaded the
+ * machine is, so reading the line once is a race the test can win or lose.
+ */
+const said = async (text: string) => {
+  await waitFor(() => expect(status().textContent).toBe(text));
+};
+
 beforeEach(() => {
   channels.length = 0;
   useBoard.getState().reset();
@@ -200,9 +214,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "The ticket is closed.",
-    );
+    await said("The ticket is closed.");
   });
 
   it("a Start error stays in the line when a move that snaps back answers after it", async () => {
@@ -233,9 +245,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "#12 waits for a slot.",
-    );
+    await said("#12 waits for a slot.");
   });
 
   it("Start does not open the ticket", async () => {
@@ -290,9 +300,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No slot, and none will come.",
-    );
+    await said("No slot, and none will come.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
     expect(titlesIn("Building")).toEqual(["Open the draft"]);
   });
@@ -303,9 +311,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "#12 waits for a slot.",
-    );
+    await said("#12 waits for a slot.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -315,9 +321,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Ticket 12 is not on the board.",
-    );
+    await said("Ticket 12 is not on the board.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -330,7 +334,7 @@ describe("the Board panel", () => {
     await dragTo("Sketch the graph", "Ready");
 
     expect(boardMove).toHaveBeenCalledWith("11", "ready");
-    expect((await screen.findByRole("status")).textContent).toBe(line);
+    await said(line);
     await waitFor(() =>
       expect(titlesIn("Draft")).toEqual(["Sketch the graph"]),
     );
@@ -354,9 +358,7 @@ describe("the Board panel", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Draft" }));
 
     await waitFor(() => expect(boardMove).toHaveBeenCalledWith("15", "draft"));
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "A ticket's column follows its worker and its issue.",
-    );
+    await said("A ticket's column follows its worker and its issue.");
     await waitFor(() => expect(titlesIn("Done")).toEqual(["Lift the board"]));
   });
 
@@ -447,9 +449,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(card("Sketch the graph"));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "This system has no browser to open it: the link is copied.",
-    );
+    await said("This system has no browser to open it: the link is copied.");
     expect(writeText).toHaveBeenCalledWith("https://github.com/o/r/issues/11");
   });
 
@@ -459,9 +459,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(card("Sketch the graph"));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No project is picked.",
-    );
+    await said("No project is picked.");
   });
 
   it("a held limit shows when it lifts, with the board still there", async () => {
@@ -512,9 +510,7 @@ describe("the Board panel", () => {
 
     render(<Board onOpenWorker={() => {}} />);
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No project is picked.",
-    );
+    await said("No project is picked.");
     expect(screen.queryByRole("group")).toBeNull();
   });
 
