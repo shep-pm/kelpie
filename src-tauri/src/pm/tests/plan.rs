@@ -187,3 +187,24 @@ fn a_settings_file_that_cannot_be_used_reaches_the_chat_as_failed() {
 
     assert!(message.contains("settings.json"), "{message}");
 }
+
+#[test]
+fn a_send_that_fails_before_the_sandbox_is_tried_clears_the_refusal_an_earlier_one_kept() {
+    let chat = Chat::on(&FakeAgent::new());
+    chat.state()
+        .sandbox_setup()
+        .record(Some(kelpie_engine::sandbox::Refusal::NoCapabilities));
+    let file = chat.dir.join("config").join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "{ not json").unwrap();
+
+    let SessionEvent::Failed { .. } = chat.send("Hi").next() else {
+        panic!("the chat should hear a Failed");
+    };
+
+    assert_eq!(
+        chat.state().sandbox_setup().view().refusal,
+        None,
+        "the chat would tell the maintainer to install a profile for an unrelated failure"
+    );
+}

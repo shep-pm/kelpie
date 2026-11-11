@@ -85,6 +85,13 @@ export const commands = {
 	 */
 	pmAnswer: (id: string, answer: SandboxAnswer) => typedError<null, string>(__TAURI_INVOKE("pm_answer", { id, answer })),
 	/**
+	 *  What the PM's last start found about its sandbox
+	 * 
+	 *  The chat asks when a turn ends failed. Reads what the PM's last start kept,
+	 *  and starts nothing.
+	 */
+	pmSandbox: () => __TAURI_INVOKE<SandboxView>("pm_sandbox"),
+	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
 	 *  # Errors
@@ -386,6 +393,13 @@ export type ProjectView = {
 	fields: FieldView[],
 };
 
+/**  Why a sandbox cannot start, as the webview tells the two apart */
+export type RefusalView = 
+/**  The namespace has no capabilities in it, which kelpie's AppArmor profile fixes */
+"no_capabilities" | 
+/**  The kernel gives no namespace at all, which no profile fixes */
+"no_namespaces";
+
 /**  One version of a bridge kelpie did not use, and why */
 export type RejectedView = {
 	/**  The version, as a person reads it */
@@ -418,6 +432,15 @@ export type SandboxAnswer =
 "project" | 
 /**  Change nothing */
 "deny";
+
+/**  What the chat is told about the PM's sandbox */
+export type SandboxView = {
+	/**
+	 *  Why the PM's last start could not make its sandbox, `None` when it
+	 *  found no refusal
+	 */
+	refusal: RefusalView | null,
+};
 
 /**  One thing a session did, in the order it happened */
 export type SessionEvent = 

@@ -39,6 +39,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::pm::{self, PmPlan};
+use crate::sandbox_setup::SandboxSetup;
 
 /// The run file's name in the data folder
 const RUN_FILE: &str = "run.json";
@@ -287,6 +288,10 @@ pub struct Opening<'a> {
     /// kelpie's tools server, whose door each session's sandbox names and whose
     /// token each session's harness brings. `None` where the door could not open.
     pub tools: Option<&'a Tools>,
+
+    /// Where the start records why its sandbox could not make one, and clears
+    /// it when one can be made
+    pub sandbox_setup: &'a SandboxSetup,
 }
 
 /// Builds the PM's session for a project
@@ -331,6 +336,8 @@ pub struct AppState {
     /// kelpie's tools server, with its door open for the whole run. `None` when
     /// the door could not open, which leaves the sessions without it.
     tools: Option<Tools>,
+    /// What the PM's last start found about its sandbox
+    sandbox_setup: SandboxSetup,
     /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
     bridge_checks: Mutex<Option<Sender<()>>>,
 }
@@ -399,6 +406,7 @@ impl AppState {
             opener,
             picker,
             tools,
+            sandbox_setup: SandboxSetup::default(),
             bridge_checks: Mutex::new(None),
         })
     }
@@ -469,6 +477,12 @@ impl AppState {
     #[must_use]
     pub fn config(&self) -> &ConfigDir {
         &self.config
+    }
+
+    /// What the PM's last start found about its sandbox
+    #[must_use]
+    pub fn sandbox_setup(&self) -> &SandboxSetup {
+        &self.sandbox_setup
     }
 
     /// The tree every process of this run starts in
@@ -549,6 +563,9 @@ impl AppState {
     /// be written. The text is for the maintainer to read.
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
+        // A refusal belongs to the start that found it: whatever fails before
+        // the opener probes the sandbox again must not leave it on the chat
+        self.sandbox_setup.record(None);
         let project = lock(&self.projects)
             .first()
             .cloned()
@@ -603,6 +620,7 @@ impl AppState {
             config: &self.config,
             pm: &plan,
             tools: self.tools.as_ref(),
+            sandbox_setup: &self.sandbox_setup,
         })?
         .with_log(log.clone());
         // Kept before the old session stops, so a failed write leaves it running
