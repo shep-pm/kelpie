@@ -54,22 +54,52 @@ fn runs_on_a_pull_request(text: &str, base: &str) -> bool {
     names_event || runs_on_push(&text, base)
 }
 
-// Whether a push to a work branch runs a workflow. A `push` with `branches`
-// runs on a work branch only when the list matches more than `base`.
+// Whether a push to a work branch runs a workflow, by the filters under its
+// `push:` key. GitHub runs a push that sets only `tags` or `tags-ignore` on
+// tags alone. With `branches`, a work branch is run when the list matches more
+// than `base`. With `branches-ignore`, it is run unless a pattern ignores it.
 fn runs_on_push(text: &str, base: &str) -> bool {
     let triggers = text.split("\njobs:").next().unwrap_or("");
     let words = || triggers.split(|c: char| !(c.is_alphanumeric() || c == '_'));
     if !words().any(|word| word == "push") {
         return false;
     }
-    match push_branches(triggers) {
-        Some(branches) => branches.iter().any(|branch| branch != base),
-        None => true,
+    let list = |key| push_list(triggers, key);
+    if let Some(branches) = list("branches") {
+        branches.iter().any(|branch| branch != base)
+    } else if let Some(ignored) = list("branches-ignore") {
+        // Which work branch is not known here: one named by a ticket's id.
+        let sample = format!("{}1", crate::worker::start::BRANCH_PREFIX);
+        !ignored.iter().any(|pattern| glob_matches(pattern, &sample))
+    } else {
+        list("tags").is_none() && list("tags-ignore").is_none()
     }
 }
 
-// The `branches` list under a `push:` key, when it has one.
-fn push_branches(triggers: &str) -> Option<Vec<String>> {
+// Whether a branch filter's `pattern` matches `name`: `*` matches within a
+// path segment, `**` across them, and the other characters are themselves.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_prefix('*') {
+        Some(rest) => {
+            let (rest, across) = rest.strip_prefix('*').map_or((rest, false), |r| (r, true));
+            (0..=name.len())
+                .filter(|&at| name.is_char_boundary(at))
+                .take_while(|&at| across || !name[..at].contains('/'))
+                .any(|at| glob_matches(rest, &name[at..]))
+        }
+        None => match (pattern.chars().next(), name.chars().next()) {
+            (Some(p), Some(n)) if p == n => {
+                glob_matches(&pattern[p.len_utf8()..], &name[n.len_utf8()..])
+            }
+            (None, None) => true,
+            _ => false,
+        },
+    }
+}
+
+// The list under `key` in the `push:` key, when it has one.
+fn push_list(triggers: &str, key: &str) -> Option<Vec<String>> {
+    let key = format!("{key}:");
     let lines: Vec<&str> = triggers.lines().collect();
     let at = lines.iter().position(|l| l.trim().starts_with("push:"))?;
     let base = indent(lines[at]);
@@ -77,22 +107,20 @@ fn push_branches(triggers: &str) -> Option<Vec<String>> {
     let block = lines[at + 1..]
         .iter()
         .take_while(|l| l.trim().is_empty() || indent(l) > base);
-    let mut branches = None;
+    let mut found = None;
     let mut listing = false;
     for line in std::iter::once(&inline).chain(block) {
         let trimmed = line.trim().trim_start_matches('{').trim_start();
-        if let Some(rest) = trimmed.strip_prefix("branches:") {
+        if let Some(rest) = trimmed.strip_prefix(key.as_str()) {
             listing = rest.trim().is_empty();
-            branches.get_or_insert_with(Vec::new).extend(entries(rest));
+            found.get_or_insert_with(Vec::new).extend(entries(rest));
         } else if listing && trimmed.starts_with('-') {
-            branches
-                .get_or_insert_with(Vec::new)
-                .extend(entries(trimmed));
+            found.get_or_insert_with(Vec::new).extend(entries(trimmed));
         } else if !trimmed.is_empty() {
             listing = false;
         }
     }
-    branches
+    found
 }
 
 // The names in a list, inline or as one `- name` line.
@@ -182,5 +210,25 @@ mod tests {
     fn a_comment_naming_a_pull_request_does_not_count() {
         let commented = "on:\n  push:\n    branches: [main]\n# pull_request later\njobs:\n  t:\n";
         assert_eq!(runs(&[("ci.yml", commented)], "main"), Ok(false));
+    }
+
+    #[test]
+    fn a_push_filtered_by_tags_alone_does_not_count() {
+        let release = "on:\n  push:\n    tags: ['v*']\njobs:\n  t:\n";
+        let inline = "on:\n  push: { tags-ignore: [wip] }\njobs:\n  t:\n";
+        assert_eq!(runs(&[("release.yml", release)], "main"), Ok(false));
+        assert_eq!(runs(&[("release.yml", inline)], "main"), Ok(false));
+    }
+
+    #[test]
+    fn a_push_ignoring_the_work_branches_does_not_count() {
+        let ignoring = "on:\n  push:\n    branches-ignore: ['kelpie/**']\njobs:\n  t:\n";
+        assert_eq!(runs(&[("ci.yml", ignoring)], "main"), Ok(false));
+    }
+
+    #[test]
+    fn a_push_ignoring_other_branches_counts() {
+        let ignoring = "on:\n  push:\n    branches-ignore:\n      - 'docs/**'\njobs:\n  t:\n";
+        assert_eq!(runs(&[("ci.yml", ignoring)], "main"), Ok(true));
     }
 }
