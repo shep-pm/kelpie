@@ -1,0 +1,49 @@
+[
+  {
+    "number": 170,
+    "title": "feat(engine): closed after the cut-off",
+    "body": "",
+    "state": "closed",
+    "created_at": "2026-11-01T08:00:00Z",
+    "updated_at": "2026-11-09T10:00:00Z",
+    "closed_at": "2026-11-09T10:00:00Z",
+    "user": { "login": "octocat", "type": "User" },
+    "labels": [{ "name": "kind:feat" }]
+  },
+  {
+    "number": 167,
+    "title": "fix(engine): a merged pull request listed beside the issues",
+    "body": "",
+    "state": "closed",
+    "created_at": "2026-11-08T08:00:00Z",
+    "updated_at": "2026-11-09T09:00:00Z",
+    "closed_at": "2026-11-09T09:00:00Z",
+    "user": { "login": "octocat", "type": "User" },
+    "labels": [],
+    "pull_request": {
+      "url": "https://api.github.com/repos/shep-pm/kelpie/pulls/167"
+    }
+  },
+  {
+    "number": 169,
+    "title": "feat(engine): closed at the very second of the cut-off",
+    "body": "",
+    "state": "closed",
+    "created_at": "2026-10-20T08:00:00Z",
+    "updated_at": "2026-11-05T00:00:00Z",
+    "closed_at": "2026-11-05T00:00:00Z",
+    "user": { "login": "hubot", "type": "User" },
+    "labels": []
+  },
+  {
+    "number": 168,
+    "title": "feat(engine): closed a second before, commented on after",
+    "body": "",
+    "state": "closed",
+    "created_at": "2026-10-20T08:00:00Z",
+    "updated_at": "2026-11-08T08:00:00Z",
+    "closed_at": "2026-11-04T23:59:59Z",
+    "user": { "login": "hubot", "type": "User" },
+    "labels": []
+  }
+]
