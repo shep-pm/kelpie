@@ -24,11 +24,11 @@ use crate::gate::{Choose, Fix, Gate, Parts};
 
 /// Builds the session of a worker that has none live, as a fix turn needs
 ///
-/// The app's is [`super::open::open`], and a test's is the one of its own agent.
+/// The app's is `super::open::open`, and a test's is the one of its own agent.
 pub type Open =
     dyn for<'a, 'b> Fn(&OpenOn<'a>, &Opening<'b>) -> Result<Session, String> + Send + Sync;
 
-/// What the app starts a fix turn's session with: [`super::open::open`]
+/// What the app starts a fix turn's session with: `super::open::open`
 #[must_use]
 pub fn app_open() -> Arc<Open> {
     Arc::new(super::open::open)
@@ -42,7 +42,7 @@ impl Workers {
     ///
     /// # Errors
     ///
-    /// The project has no forge to read (see [`Workers::forge`]), its records cannot be
+    /// The project has no forge to read (see `Workers::forge`), its records cannot be
     /// read, or `gate.json` cannot.
     pub fn gate(
         self: &Arc<Self>,

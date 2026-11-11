@@ -353,12 +353,8 @@ impl Rig {
     /// The worker records, as the board reads them
     pub(super) fn records(&self) -> Vec<Record> {
         let records = self.state.workers().records(&self.project).unwrap();
-        let listed = records
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .list()
-            .to_vec();
-        listed
+        let guard = records.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.list().to_vec()
     }
 
     pub(super) fn record(&self, ticket: &str) -> Record {

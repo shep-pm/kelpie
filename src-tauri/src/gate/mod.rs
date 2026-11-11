@@ -2,13 +2,13 @@
 //!
 //! The order is the engine's ([`kelpie_engine::gate::pass`]): it takes what a pass read as
 //! plain values and answers what to do. This module reads the world into those values and
-//! [`act`] carries out the answer (`docs/design/gate-and-merge.md`, The order).
+//! `act` carries out the answer (`docs/design/gate-and-merge.md`, The order).
 //!
 //! [`Gate::after_read`] is what the board's read runs, with the pull requests that read
 //! listed. A pass runs for each ticket whose worker is Ended and whose `kelpie/<id>` pull
 //! request is open, or just left the listing, on a thread of its own: a pass waits on git
 //! and on `gh`, and the poll thread must not. One pass works on a ticket at a time
-//! ([`Gate::take`]), as one hand-over does, so a read that lands while a pass is at work on
+//! (`Gate::take`), as one hand-over does, so a read that lands while a pass is at work on
 //! a ticket leaves it be.
 //!
 //! - A pull request that left the listing is read once, by the number the gate kept, with
