@@ -25,7 +25,8 @@
 //! project's worker turns, and the drafts of the turns running now. [`board`] puts each of those tickets in a
 //! column and says what a drop on a column does. [`ci`] reads where CI stands on a
 //! head, reruns a run and reads the logs of the runs that failed, through a port
-//! GitHub Actions stands behind. The crate has no Tauri
+//! GitHub Actions stands behind. [`gate`] decides what one pass over a worker's
+//! pull request does, from plain values, and keeps the facts it needs between passes. The crate has no Tauri
 //! dependency, so the app crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
@@ -63,6 +64,7 @@ pub mod board;
 pub mod bridge;
 pub mod ci;
 pub mod confine;
+pub mod gate;
 pub mod github;
 pub mod guard;
 pub mod harness;
