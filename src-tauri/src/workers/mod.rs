@@ -26,8 +26,9 @@
 //! there with [`worker_answer`], as the PM's is (`docs/design/workers.md`, Talking to a
 //! worker). Each refuses a ticket with no live session by name: kelpie keeps a worker's
 //! session while its turn runs and after it ends with the work committed, so a Note
-//! between turns is that worker's next turn, and a Paused worker or one waiting on the
-//! maintainer is resumed, not told. What each one calls is in `tell.rs`, which is where
+//! between turns is that worker's next turn, and a Paused worker is resumed, not told. A
+//! Note to a worker waiting on the maintainer answers its ruling and sends it back as a fix
+//! turn (`fix_turn.rs`). What each one calls is in `tell.rs`, which is where
 //! the engine's own telling lives too (`crates/kelpie-engine/src/worker/tell.rs`).
 
 use std::collections::BTreeMap;
@@ -53,6 +54,7 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 mod feed;
+mod fix_turn;
 pub mod hand_over;
 mod open;
 mod plan;
@@ -62,7 +64,7 @@ pub use feed::Feed;
 pub use hand_over::{Forge, Hands};
 use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
-pub use tell::{NoteOutcome, answer_on, cancel_on, note_on, stop_and_tell_on};
+pub use tell::{NoteOutcome, answer_on, cancel_on, note_on, note_through, stop_and_tell_on};
 
 use crate::board::poll::Requests;
 use crate::state::AppState;

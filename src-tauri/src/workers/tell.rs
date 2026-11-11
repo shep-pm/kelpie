@@ -8,7 +8,9 @@
 //! each refuses a ticket with no live session by name. kelpie keeps a worker's session
 //! while its turn runs and after it ends with the work committed, which is how a Note
 //! between turns reaches the engine's idle path and becomes that worker's next turn. A
-//! Paused worker, or one waiting on the maintainer, is resumed, not told.
+//! Paused worker is resumed, not told: a Note to it waits in its record for its next start.
+//! A Note to a worker waiting on the maintainer answers its ruling and sends it back
+//! ([`Workers::fix_turn`]).
 //!
 //! [`Workers::answer`] answers the worker's own sandbox request through the session kept for
 //! it, and what the answer did is said the way the PM's is ([`crate::pm::pm_answer`]).
@@ -18,15 +20,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kelpie_engine::session::{SandboxAnswer, SandboxOutcome, Session};
+use kelpie_engine::ticket::Tickets;
 use kelpie_engine::tools::Tools;
-use kelpie_engine::worker::{self, Noted, Opening};
+use kelpie_engine::worker::{self, Noted, Opening, Status};
 use serde::Serialize;
 use specta::Type;
 
 use crate::pm::answered;
 use crate::state::AppState;
 
-use super::{Workers, ticket_id};
+use super::{Opener, Workers, lock, open, ticket_id};
 
 /// What a Note, or a Stop and tell, became
 ///
@@ -46,7 +49,7 @@ pub enum NoteOutcome {
 ///
 /// [`Noted`] is `#[non_exhaustive]`: a state it grows is read as `queued`, since what the
 /// maintainer asks is only whether the worker has the text yet.
-fn outcome(noted: Noted) -> NoteOutcome {
+pub(super) fn outcome(noted: Noted) -> NoteOutcome {
     match noted {
         Noted::Sent => NoteOutcome::Sent,
         _ => NoteOutcome::Queued,
@@ -70,7 +73,7 @@ impl Workers {
     /// `ticket` is not an issue number, the project's settings or records cannot be read,
     /// or its worker on `ticket` has no live session. What the engine says comes back as it
     /// says it.
-    fn steered<T>(
+    pub(super) fn steered<T>(
         &self,
         project_id: &str,
         folder: &Path,
@@ -95,9 +98,22 @@ impl Workers {
     /// What the engine makes of it is [`kelpie_engine::worker::note`]: kept in the ticket's
     /// record while its turn runs, and sent as its next turn once its turn has ended.
     ///
+    /// Two workers have no live session, and a Note reaches each one anyway. A worker
+    /// waiting on a ruling is sent back at once: the Note is the maintainer's answer, so
+    /// the worker is set Ended, its reason is cleared, and the text goes out as a fix turn
+    /// ([`Workers::fix_turn`]). A Paused worker keeps the text in its record for its next
+    /// start, which is the maintainer's to say.
+    ///
+    /// `source` and `open` are for the fix turn's start, as [`Workers::resume`] takes them.
+    ///
     /// # Errors
     ///
-    /// As `Workers::steered`, plus what the records write answers.
+    /// As `Workers::steered`, plus what the records write answers. A fix turn that cannot
+    /// start leaves the worker waiting on its ruling, with the text kept in its record.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the gate's and a Note's fix turn name the ticket, the prompt, where a ticket's text is read, and how a session is opened"
+    )]
     pub fn note(
         &self,
         project_id: &str,
@@ -105,15 +121,81 @@ impl Workers {
         tools: Option<&Tools>,
         ticket: &str,
         text: &str,
+        source: Result<&dyn Tickets, String>,
+        open: &Opener<'_>,
     ) -> Result<NoteOutcome, String> {
-        let noted = self.steered(
-            project_id,
-            folder,
-            tools,
-            ticket,
-            |project, session, ticket| worker::note(project, session, ticket, text),
-        )?;
-        Ok(outcome(noted))
+        let id = ticket_id(ticket)?;
+        match self.status_of(project_id, &id) {
+            Ok(Status::WaitingOnMaintainer) => {
+                self.send_back(project_id, folder, tools, &id, text, source, open)
+            }
+            Ok(Status::Paused) => self.keep_text(project_id, &id, text),
+            _ => {
+                let noted = self.steered(
+                    project_id,
+                    folder,
+                    tools,
+                    ticket,
+                    |project, session, ticket| worker::note(project, session, ticket, text),
+                )?;
+                Ok(outcome(noted))
+            }
+        }
+    }
+
+    /// Answer the ruling the worker on `ticket` waits on with `text`, by sending it back
+    ///
+    /// The ruling is over once the worker is Ended with no reason. A fix turn that fails
+    /// puts the ruling back, so the ticket still says what it waits on.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the gate's and a Note's fix turn name the ticket, the prompt, where a ticket's text is read, and how a session is opened"
+    )]
+    fn send_back(
+        &self,
+        project_id: &str,
+        folder: &Path,
+        tools: Option<&Tools>,
+        ticket: &str,
+        text: &str,
+        source: Result<&dyn Tickets, String>,
+        open: &Opener<'_>,
+    ) -> Result<NoteOutcome, String> {
+        let records = self.records(project_id)?;
+        let reason = {
+            let mut records = lock(&records);
+            let reason = records.get(ticket).and_then(|record| record.reason.clone());
+            records
+                .set_status(ticket, Status::Ended)
+                .and_then(|()| records.set_reason(ticket, None))
+                .map_err(|error| error.to_string())?;
+            reason
+        };
+        let sent = self.fix_turn(project_id, folder, tools, ticket, text, source, open);
+        if sent.is_err() {
+            let mut records = lock(&records);
+            // A start that parked the worker Paused, as a refused sandbox does, has said
+            // why in its reason, which a ruling put back would hide
+            if records.get(ticket).map(|record| record.status) != Some(Status::Ended) {
+                return sent;
+            }
+            let back = records
+                .set_status(ticket, Status::WaitingOnMaintainer)
+                .and_then(|()| records.set_reason(ticket, reason));
+            if let Err(error) = back {
+                eprintln!("kelpie: the ruling of ticket {ticket} was not put back: {error}");
+            }
+        }
+        sent
+    }
+
+    /// Keep `text` in the record of the Paused worker on `ticket`, for its next start
+    fn keep_text(&self, project_id: &str, ticket: &str, text: &str) -> Result<NoteOutcome, String> {
+        let records = self.records(project_id)?;
+        lock(&records)
+            .add_note(ticket, text)
+            .map_err(|error| error.to_string())?;
+        Ok(NoteOutcome::Queued)
     }
 
     /// Cancel the worker on `ticket`'s turn and send it `text` as the next prompt
@@ -218,8 +300,34 @@ fn on_project<T>(
 /// As [`Workers::note`], plus a `ticket` that is not an issue number and a project with no
 /// checkout.
 pub fn note_on(state: &AppState, ticket: &str, text: &str) -> Result<NoteOutcome, String> {
+    let project = state.project_id(None)?;
+    let source = state.source(&project);
+    let source = source.as_ref().map(|source| &**source as &dyn Tickets);
+    note_through(
+        state,
+        ticket,
+        text,
+        source.map_err(Clone::clone),
+        &open::open,
+    )
+}
+
+/// Tell the project's worker on `ticket` `text`, opening the session of a fix turn with `open`
+///
+/// What [`note_on`] does with the app's own opener, which a test replaces.
+///
+/// # Errors
+///
+/// As [`note_on`].
+pub fn note_through(
+    state: &AppState,
+    ticket: &str,
+    text: &str,
+    source: Result<&dyn Tickets, String>,
+    open: &Opener<'_>,
+) -> Result<NoteOutcome, String> {
     on_project(state, |workers, project, folder, tools| {
-        workers.note(project, folder, tools, ticket, text)
+        workers.note(project, folder, tools, ticket, text, source, open)
     })
 }
 

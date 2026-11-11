@@ -6,6 +6,7 @@
 //! opened, and the prompts each worker got. No case needs `gh`, the network or a model.
 
 use kelpie_engine::session::fake::{FakeAgent, Turn};
+use kelpie_engine::worker::Status;
 
 use super::Rig;
 use crate::board::Column;
@@ -159,4 +160,63 @@ fn a_note_to_one_worker_reaches_only_that_worker() {
         "and what it was told is its ticket alone: {second_prompts:?}",
     );
     assert_eq!(second.launches(), 1);
+}
+
+#[test]
+fn a_ruling_answered_for_one_ticket_leaves_the_other_alone() {
+    let rig = Rig::new(2);
+    let first = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    let second = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    rig.ticket(12, "Add the thing", "It does one.", &first);
+    rig.ticket(13, "Fix the other", "It does two.", &second);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.rule(12, "the pull request is still red");
+    rig.rule(13, "the pull request is still red");
+
+    let answered = rig.note(12, "the failure is in the fixture, not the code");
+
+    assert_eq!(
+        answered,
+        NoteOutcome::Sent,
+        "the Note answers the ruling by sending the worker back",
+    );
+    rig.until_turns(12, 2);
+    let first_prompts = rig.prompts(&first);
+    assert_eq!(first_prompts.len(), 2);
+    assert!(
+        first_prompts[1].ends_with("the failure is in the fixture, not the code"),
+        "the first worker's next prompt carries the answer",
+    );
+    assert_eq!(
+        rig.prompts(&second).len(),
+        1,
+        "the second worker was not prompted again",
+    );
+    assert_eq!(second.launches(), 1, "and no session started for it");
+    let waiting = rig.record(13);
+    assert_eq!(
+        (waiting.status, waiting.reason.as_deref()),
+        (
+            Status::WaitingOnMaintainer,
+            Some("the pull request is still red")
+        ),
+        "the other ticket still waits on its own ruling",
+    );
+    assert_eq!(
+        rig.record(12).reason,
+        None,
+        "the answered ticket's ruling is over",
+    );
 }
