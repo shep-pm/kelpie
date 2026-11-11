@@ -4,8 +4,9 @@
 //! (`docs/design/tickets.md`, Where tickets come from). [`TicketId`] names a
 //! ticket in any source, [`Tickets`] reads a project's tickets from its source,
 //! and [`GithubTickets`] adds the reads only GitHub answers. [`Pulls`] opens
-//! a draft pull request and edits its text. A source holds its repo, so no
-//! method names one. Nothing here talks to GitHub: the source that does is
+//! a draft pull request and edits its text. [`MergeQueue`] says where a pull
+//! request stands in the base branch's merge queue. A source holds its repo, so
+//! no method names one. Nothing here talks to GitHub: the source that does is
 //! `github::gh::GithubSource`.
 //!
 //! [`ForgeError`] is why a read failed, and `fake::FakeTickets` (under the `testing` feature) answers each
@@ -29,6 +30,7 @@ mod id;
 mod issue;
 mod port;
 mod pulls;
+mod queue;
 #[cfg(test)]
 mod tests;
 
@@ -37,3 +39,6 @@ pub use id::{TicketId, TicketIdError};
 pub use issue::{Issue, Listed, OpenPull};
 pub use port::{GithubTickets, Tickets};
 pub use pulls::Pulls;
+#[cfg(any(test, feature = "testing"))]
+pub use queue::FakeQueue;
+pub use queue::{MergeQueue, QueueStanding};

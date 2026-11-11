@@ -26,19 +26,17 @@
 //! # Ok::<(), kelpie_engine::settings::SettingsError>(())
 //! ```
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
-use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
 
-use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+mod counts;
 mod error;
 pub mod layers;
 mod schema;
@@ -48,10 +46,16 @@ pub mod tickets;
 #[cfg(test)]
 mod tests;
 
+pub use counts::{CARGO_TEST_CAPACITY, Capacity, Slots, TurnTimeout};
 pub use error::SettingsError;
 pub use layers::{Layer, LayerFile, Layered};
 pub use theme::Theme;
 pub use tickets::{DoneWindow, PickUp};
+
+use counts::{ONE_AT_A_TIME, SIXTY_MINUTES, TWO_WORKERS, nonzero};
+
+#[cfg(test)]
+use counts::{MAX_COUNT, MAX_TURN_MINUTES};
 
 /// The schema every settings file points at with `$schema`
 pub const SCHEMA_REF: &str =
@@ -357,153 +361,8 @@ impl Field {
     }
 }
 
-/// How many of a project's workers run at once
-///
-/// 0 is a project holding every worker out of its slots: no worker starts a turn.
-// wire format: a settings file holds it
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Slots(u32);
-
-impl Slots {
-    /// How many places there are, as a count kelpie can index with
-    #[must_use]
-    pub fn places(self) -> usize {
-        usize::try_from(self.0).unwrap_or(usize::MAX)
-    }
-}
-
-/// How long a worker's turn may run, in whole minutes
-///
-/// Never zero: a ceiling of no time would stop every turn before it began. It
-/// counts from when the worker's slot was granted ([`crate::worker::ceiling`]).
-// wire format: a settings file holds it
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TurnTimeout(NonZeroU32);
-
-impl TurnTimeout {
-    /// The ceiling as a length of time
-    #[must_use]
-    pub fn duration(self) -> Duration {
-        Duration::from_secs(u64::from(self.0.get()) * SECONDS_PER_MINUTE)
-    }
-}
-
-/// How many commands hold a lease at once
-///
-/// Never zero: a lease with no place can never be taken, and every command
-/// queued behind it then waits forever.
-// wire format: a settings file holds it
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Capacity(NonZeroU32);
-
-impl Capacity {
-    /// How many places there are, as a count kelpie can index with
-    #[must_use]
-    pub fn places(self) -> usize {
-        usize::try_from(self.0.get()).unwrap_or(usize::MAX)
-    }
-
-    /// The count itself, for the lease that holds this many commands at once
-    #[must_use]
-    pub(crate) const fn count(self) -> NonZeroU32 {
-        self.0
-    }
-}
-
-/// The most a settings file may name, past which it is a typo
-///
-/// A count this large names more agents or commands than a machine can run at
-/// once. Naming it in the schema is what keeps a write from landing a file kelpie
-/// then cannot read back.
-const MAX_COUNT: u32 = 64;
-
-/// The longest turn ceiling a settings file may name, one day in minutes
-///
-/// Past it a stuck turn holds its slot for longer than a person looks back at it.
-const MAX_TURN_MINUTES: u32 = 24 * 60;
-
-const SECONDS_PER_MINUTE: u64 = 60;
-
-/// A count the schema bounds, as the nonzero one [`Capacity`] holds
-const fn nonzero(count: u32) -> NonZeroU32 {
-    match NonZeroU32::new(count) {
-        Some(count) => count,
-        None => panic!("a lease always has a place"),
-    }
-}
-
-impl JsonSchema for Slots {
-    fn schema_name() -> Cow<'static, str> {
-        "Slots".into()
-    }
-
-    fn inline_schema() -> bool {
-        true
-    }
-
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "type": "integer",
-            "minimum": 0,
-            "maximum": MAX_COUNT,
-        })
-    }
-}
-
-impl JsonSchema for TurnTimeout {
-    fn schema_name() -> Cow<'static, str> {
-        "TurnTimeout".into()
-    }
-
-    fn inline_schema() -> bool {
-        true
-    }
-
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "type": "integer",
-            "minimum": 1,
-            "maximum": MAX_TURN_MINUTES,
-        })
-    }
-}
-
-impl JsonSchema for Capacity {
-    fn schema_name() -> Cow<'static, str> {
-        "Capacity".into()
-    }
-
-    fn inline_schema() -> bool {
-        true
-    }
-
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        json_schema!({
-            "type": "integer",
-            "minimum": 1,
-            "maximum": MAX_COUNT,
-        })
-    }
-}
-
 /// The lease every worker's `cargo test` run queues behind
 pub const CARGO_TEST: &str = "cargo-test";
-
-/// How many commands hold [`CARGO_TEST`] at once when no layer names it
-pub const CARGO_TEST_CAPACITY: Capacity = Capacity(nonzero(3));
-
-/// How many commands hold a lease no layer names a capacity for
-const ONE_AT_A_TIME: Capacity = Capacity(nonzero(1));
-
-/// How long a worker's turn may run when no layer names a ceiling, as SK's
-/// `worker.turn_timeout` has it
-const SIXTY_MINUTES: TurnTimeout = TurnTimeout(nonzero(60));
-
-/// How many of a project's workers run at once when no layer names a cap
-const TWO_WORKERS: Slots = Slots(2);
 
 /// The settings of one layer file, holding only the fields that file sets
 ///
