@@ -4,11 +4,12 @@ import { commands } from "@/bindings";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
-import { useChat } from "./store";
+import { useChatStore } from "./context";
 import { Turn } from "./Turn";
 
 /** Keeps the newest text in view as a reply streams in. */
 function ScrollAnchor() {
+  const useChat = useChatStore();
   const length = useChat((s) => {
     const last = s.turns.at(-1);
     return (
@@ -24,6 +25,7 @@ function ScrollAnchor() {
 }
 
 function Turns() {
+  const useChat = useChatStore();
   const ids = useChat(useShallow((s) => s.turns.map((t) => t.id)));
   const historyError = useChat((s) => s.historyError);
   return (
@@ -47,6 +49,7 @@ function Turns() {
 }
 
 function Composer() {
+  const useChat = useChatStore();
   const [text, setText] = useState("");
   const running = useChat((s) => s.turns.at(-1)?.state === "running");
   // An install ends the PM's session, so a message sent meanwhile would be cut off
@@ -116,12 +119,21 @@ function PickFolder({ onPicked }: { onPicked: (folder: string) => void }) {
   );
 }
 
-/** The PM's front end: the turns, and the composer under them. */
-export function ChatBox() {
+/**
+ * One chat's front end: the turns, and the composer under them.
+ *
+ * `picker` shows the project picker until a project is kept, which only the
+ * PM's tab needs. A chat without it reads its history at once.
+ */
+export function ChatBox({ picker = true }: { picker?: boolean }) {
+  const useChat = useChatStore();
   // `undefined` until the backend says whether a project is kept.
-  const [project, setProject] = useState<string | null | undefined>(undefined);
+  const [project, setProject] = useState<string | null | undefined>(
+    picker ? undefined : "",
+  );
 
   useEffect(() => {
+    if (!picker) return;
     let live = true;
     commands
       .projectGet()
@@ -130,12 +142,14 @@ export function ChatBox() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [picker]);
 
   // History is read once the project is known, before anything is sent.
   useEffect(() => {
-    if (project) void useChat.getState().load();
-  }, [project]);
+    if (project !== undefined && project !== null) {
+      void useChat.getState().load();
+    }
+  }, [project, useChat]);
 
   if (project === undefined) return <main className="min-h-0 flex-1" />;
   if (project === null) {
