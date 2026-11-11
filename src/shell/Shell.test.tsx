@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -22,6 +23,40 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
+const ticket = (
+  id: string,
+  title: string,
+  column: Column,
+  needs_you: string[] = [],
+): TicketView => ({
+  id,
+  title,
+  priority: null,
+  column,
+  url: `https://github.com/o/r/issues/${id}`,
+  pull_url: null,
+  needs_you,
+});
+
+/** What the engine streams as the board. A test changes it and sends it again. */
+const DEFAULT_BOARD: BoardView = {
+  held_until: null,
+  needs_you: 2,
+  tickets: [
+    ticket("12", "Wire the poller", "ready"),
+    ticket("13", "Open the draft", "building"),
+    ticket("17", "Answer the refusal", "building", [
+      "GitHub refused the push",
+      "Paused, resumes when you say so",
+    ]),
+  ],
+};
+
+let streamed: BoardView = DEFAULT_BOARD;
+
+/** The channels `boardWatch` was given, oldest first. */
+const channels: { onmessage: (event: unknown) => void }[] = [];
+
 vi.mock("@/bindings", () => ({
   commands: {
     projectGet: async () => "/work/project",
@@ -34,48 +69,22 @@ vi.mock("@/bindings", () => ({
     }),
     workerUnwatch: async () => ({ status: "ok", data: null }),
     boardWatch: async (channel: { onmessage: (event: unknown) => void }) => {
-      channel.onmessage({
-        kind: "board",
-        held_until: null,
-        needs_you: 2,
-        tickets: [
-          {
-            id: "12",
-            title: "Wire the poller",
-            priority: null,
-            column: "ready",
-            url: "https://github.com/o/r/issues/12",
-            pull_url: null,
-            needs_you: [],
-          },
-          {
-            id: "13",
-            title: "Open the draft",
-            priority: null,
-            column: "building",
-            url: "https://github.com/o/r/issues/13",
-            pull_url: null,
-            needs_you: [],
-          },
-          {
-            id: "17",
-            title: "Answer the refusal",
-            priority: null,
-            column: "building",
-            url: "https://github.com/o/r/issues/17",
-            pull_url: null,
-            needs_you: [
-              "GitHub refused the push",
-              "Paused, resumes when you say so",
-            ],
-          },
-        ],
-      });
+      channels.push(channel);
+      channel.onmessage({ kind: "board", ...streamed });
       return { status: "ok", data: null };
     },
   },
 }));
 
+/** Send the board again, as the engine's poller does when GitHub changes. */
+async function emitBoard() {
+  const channel = channels.at(-1);
+  if (!channel) throw new Error("the board was never watched");
+  await act(async () => channel.onmessage({ kind: "board", ...streamed }));
+}
+
+import type { BoardView, Column, TicketView } from "@/bindings";
+import { useBoard } from "@/board/store";
 import { Shell } from "./Shell";
 import { useTabs } from "./tabs";
 
@@ -88,7 +97,12 @@ beforeAll(() => {
   };
 });
 
-beforeEach(() => useTabs.getState().reset());
+beforeEach(() => {
+  channels.length = 0;
+  streamed = DEFAULT_BOARD;
+  useBoard.getState().reset();
+  useTabs.getState().reset();
+});
 afterEach(cleanup);
 
 const pm = () => screen.queryByRole("region", { name: "PM" });
@@ -146,6 +160,34 @@ describe("the shell", () => {
     const open = screen.getByRole("button", { name: /^Open Board/ });
     expect(open.textContent).toContain("2");
     expect(open.getAttribute("aria-label")).toBe("Open Board, 2 need you");
+  });
+
+  it("the counts keep counting while the Board panel is folded", async () => {
+    render(<Shell onSettings={() => {}} />);
+    const building = await screen.findByRole("group", { name: "Building" });
+    fireEvent.click(within(building).getByText("Open the draft"));
+    fireEvent.click(within(building).getByText("Answer the refusal"));
+    expect(
+      await screen.findByRole("tab", { name: "#17, 2 need you" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "#13" }).textContent).toBe("#13");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Board" }));
+
+    // GitHub refuses the push on #13 while the Board panel is folded, so that
+    // worker gains a wait nothing on the page has read since.
+    streamed = {
+      ...streamed,
+      needs_you: 3,
+      tickets: streamed.tickets.map((t) =>
+        t.id === "13" ? { ...t, needs_you: ["GitHub refused the push"] } : t,
+      ),
+    };
+    await emitBoard();
+
+    const open = screen.getByRole("button", { name: /^Open Board/ });
+    expect(open.getAttribute("aria-label")).toBe("Open Board, 3 need you");
+    expect(screen.getByRole("tab", { name: "#13, 1 needs you" })).toBeTruthy();
   });
 
   it("maximising a panel hides the other, and a second press restores it", () => {

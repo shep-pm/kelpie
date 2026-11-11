@@ -11,11 +11,15 @@ type BoardState = {
    */
   unavailable: string | null;
   /**
-   * Ask the engine to stream the board here, in place of any stream before. The
-   * first event is the board, or why there is none.
+   * Ask the engine to stream the board here, in place of any stream before, and
+   * read it. The first event is the board, or why there is none. Every `watch`
+   * wants its own `close`.
    */
   watch: () => void;
-  /** End the stream: the window drops what the engine still sends. */
+  /**
+   * Stop reading. The stream ends with the last reader: the window drops what
+   * the engine still sends only once nothing is reading it.
+   */
   close: () => void;
   /** Forget everything. For tests. */
   reset: () => void;
@@ -23,6 +27,16 @@ type BoardState = {
 
 /** The channel the engine streams to, `null` once closed. */
 let open: Channel<BoardEvent> | null = null;
+
+/**
+ * How many parts of the window are reading the board. `watch` adds one, `close`
+ * takes one back, and only the last one ends the stream.
+ *
+ * The Shell counts waits for panels and worker tabs that outlive the board
+ * body, so a Board panel folding must not stop the stream the rest of the
+ * window still reads.
+ */
+let readers = 0;
 
 /** The `boardWatch` call before, so the engine hears the watches in the order they were asked. */
 let before: Promise<unknown> = Promise.resolve();
@@ -42,10 +56,16 @@ const empty = { view: null, unavailable: null } satisfies Partial<BoardState>;
  * Each `boardWatch` waits for the one before to answer, since the engine
  * finishes two calls in flight in either order, and the later poller must be the
  * one that stays. A watch closed before its turn is never sent.
+ *
+ * Readers are counted, so a `close` ends the stream only once the last one has
+ * closed. The Shell watches for as long as the window is up, which is what
+ * keeps the counts on a folded panel and on a worker's tab current while the
+ * board body comes and goes.
  */
 export const useBoard = create<BoardState>()((set) => ({
   ...empty,
   watch: () => {
+    readers += 1;
     const channel = new Channel<BoardEvent>();
     open = channel;
     channel.onmessage = (event) => {
@@ -71,10 +91,14 @@ export const useBoard = create<BoardState>()((set) => ({
     });
   },
   close: () => {
+    readers = readers > 0 ? readers - 1 : 0;
+    // Something else is still reading, so the stream stays open for it.
+    if (readers > 0) return;
     if (open) open.onmessage = () => {};
     open = null;
   },
   reset: () => {
+    readers = 0;
     if (open) open.onmessage = () => {};
     open = null;
     set(empty);

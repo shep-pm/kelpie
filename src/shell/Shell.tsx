@@ -1,5 +1,5 @@
 import { KanbanSquare, MessageSquare } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BoardPanel } from "@/board/Board";
 import { useBoard } from "@/board/store";
 import {
@@ -28,13 +28,22 @@ function openWorker(ticket: WorkerTicket) {
  * The window: the PM's panel on the left and the Board's on the right, each
  * folding to an icon strip button or taking the whole window.
  *
- * A folded panel is not mounted, so its body starts afresh when it reopens.
+ * A folded panel is not mounted, so its body starts afresh when it reopens. The
+ * board keeps streaming all the while, since the counts it feeds sit on the
+ * folded panel's button and on the worker tabs beside the PM.
  */
 export function Shell({ onSettings }: { onSettings: () => void }) {
   const [folded, setFolded] = useState<ReadonlySet<PanelId>>(new Set());
   const [maximised, setMaximised] = useState<PanelId | null>(null);
-  // A folded panel keeps the board it last read, so its strip button can still
-  // count what waits inside it.
+
+  // The window reads the board for as long as it is up, not just while the
+  // Board panel is mounted, so a folded panel's count and the counts on the
+  // worker tabs keep up with what the board last read.
+  useEffect(() => {
+    useBoard.getState().watch();
+    return () => useBoard.getState().close();
+  }, []);
+
   const boardWaits = useBoard((s) => s.view?.needs_you ?? 0);
 
   const shown = (id: PanelId) =>
