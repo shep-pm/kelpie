@@ -4,6 +4,7 @@
 //! the network, and the poller is stepped by calling [`Poller::read`] and
 //! [`Poller::place`] where a run would wait on a clock.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,9 +21,10 @@ use kelpie_engine::worker::{Record, Records, Status};
 
 use super::poll::{Cadence, Choices, Feed, Poller};
 use super::{BoardEvent, BoardHost, BoardView, Column, MoveView, TicketView, move_ticket};
-use crate::workers::WorkerStarted;
+use crate::workers::{Feed as WorkerFeed, WorkerStarted};
 
 mod link;
+mod needs_you;
 
 /// A project's source, scripted
 ///
@@ -120,8 +122,12 @@ struct Rig {
     dir: PathBuf,
     source: Arc<Source>,
     records: Arc<Mutex<Records>>,
+    /// The feed of each worker, by ticket, which the poller reads the waiting requests from
+    feeds: Feeds,
     poller: Poller<Source>,
 }
+
+type Feeds = Arc<Mutex<BTreeMap<String, Arc<WorkerFeed>>>>;
 
 impl Rig {
     fn new(source: Source) -> Self {
@@ -129,17 +135,23 @@ impl Rig {
         fs::create_dir_all(&dir).unwrap();
         let records = Arc::new(Mutex::new(Records::load(dir.join("workers.json")).unwrap()));
         let source = Arc::new(source);
-        let poller = Self::poller(&source, &records);
+        let feeds = Feeds::default();
+        let poller = Self::poller(&source, &records, &feeds);
         Self {
             dir,
             source,
             records,
+            feeds,
             poller,
         }
     }
 
     /// A poller of `source`, on `records`, with the project's default choices
-    fn poller(source: &Arc<Source>, records: &Arc<Mutex<Records>>) -> Poller<Source> {
+    fn poller(
+        source: &Arc<Source>,
+        records: &Arc<Mutex<Records>>,
+        feeds: &Feeds,
+    ) -> Poller<Source> {
         let choose = Box::new(|| {
             Ok(Choices {
                 pick_up: PickUp::Me,
@@ -147,10 +159,20 @@ impl Rig {
                 done_days: 14,
             })
         });
+        let feeds = Arc::clone(feeds);
+        let requests = Box::new(move || {
+            feeds
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(ticket, feed)| (ticket.clone(), feed.waiting()))
+                .collect()
+        });
         Poller::new(
             Arc::clone(source),
             choose,
             Arc::clone(records),
+            requests,
             Arc::new(Fixed(1_700_000_000)),
         )
     }
@@ -160,6 +182,16 @@ impl Rig {
         let mut record = Record::new(ticket, format!("kelpie/{ticket}"));
         record.status = Status::Running;
         self.records.lock().unwrap().keep(record).unwrap();
+    }
+
+    /// The feed of the worker on `ticket`, made on the first ask
+    fn feed(&self, ticket: &str) -> Arc<WorkerFeed> {
+        let mut feeds = self.feeds.lock().unwrap();
+        Arc::clone(
+            feeds
+                .entry(ticket.to_owned())
+                .or_insert_with(|| Arc::new(WorkerFeed::new(0))),
+        )
     }
 }
 
@@ -230,6 +262,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     column: Column::Draft,
                     url: "https://github.com/shep-pm/kelpie/issues/13".to_owned(),
                     pull_url: None,
+                    needs_you: Vec::new(),
                 },
                 TicketView {
                     id: "12".to_owned(),
@@ -238,6 +271,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     column: Column::Ready,
                     url: "https://github.com/shep-pm/kelpie/issues/12".to_owned(),
                     pull_url: None,
+                    needs_you: Vec::new(),
                 },
                 TicketView {
                     id: "14".to_owned(),
@@ -246,9 +280,11 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     column: Column::Review,
                     url: "https://github.com/shep-pm/kelpie/issues/14".to_owned(),
                     pull_url: Some("https://github.com/shep-pm/kelpie/pull/99".to_owned()),
+                    needs_you: Vec::new(),
                 },
             ],
             held_until: None,
+            needs_you: 0,
         })
     );
 }
@@ -429,7 +465,7 @@ fn watching(rig: &Rig) -> BoardHost {
     let host = BoardHost::default();
     let (sent, first) = std::sync::mpsc::channel();
     host.watch(
-        Rig::poller(&rig.source, &rig.records),
+        Rig::poller(&rig.source, &rig.records, &rig.feeds),
         Cadence {
             place: std::time::Duration::from_millis(5),
             read: std::time::Duration::from_secs(3600),

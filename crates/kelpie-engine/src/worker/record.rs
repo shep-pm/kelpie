@@ -54,6 +54,13 @@ pub struct Record {
     /// notes had none.
     #[serde(default)]
     pub notes: Vec<String>,
+
+    /// Why it waits on the maintainer, a line the board's ticket carries
+    ///
+    /// Set with [`Status::WaitingOnMaintainer`] and cleared with any other
+    /// state. A record from before reasons had none.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 impl Record {
@@ -68,6 +75,7 @@ impl Record {
             status: Status::Running,
             seat: Seat::Without,
             notes: Vec::new(),
+            reason: None,
         }
     }
 
@@ -284,6 +292,26 @@ impl Records {
         if !status.needs_slot() {
             record.seat = Seat::Without;
         }
+        write(&self.file, &self.list)
+    }
+
+    /// Keep `reason` as why `ticket` waits on the maintainer, and write the file when it changed
+    ///
+    /// It goes with the status: the caller sets both under one hold of the records'
+    /// lock, so a reader never finds a held worker with no reason or a running one
+    /// with a stale one.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn set_reason(&mut self, ticket: &str, reason: Option<String>) -> io::Result<()> {
+        let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) else {
+            return Ok(());
+        };
+        if record.reason == reason {
+            return Ok(());
+        }
+        record.reason = reason;
         write(&self.file, &self.list)
     }
 

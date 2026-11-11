@@ -396,6 +396,8 @@ export type BoardView = {
 	tickets: TicketView[],
 	/**  While a rate limit is used up, the Unix second the hold lifts */
 	held_until: number | null,
+	/**  How many lines the tickets' `needs_you` hold in all */
+	needs_you: number,
 };
 
 /**  Where the version a bridge runs on came from */
@@ -745,6 +747,8 @@ export type TicketView = {
 	url: string,
 	/**  The page of the pull request closing it, `None` when none is open */
 	pull_url: string | null,
+	/**  One line for each wait on the maintainer, empty when its worker waits on nothing */
+	needs_you: string[],
 };
 
 /**  How far a tool call got */

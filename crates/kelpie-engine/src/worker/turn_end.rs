@@ -42,6 +42,15 @@ impl Ending {
             Self::Held(_) => Status::WaitingOnMaintainer,
         }
     }
+
+    /// Why the ticket waits on the maintainer: the held branch's line, `None` when done
+    #[must_use]
+    pub fn reason(&self) -> Option<String> {
+        match self {
+            Self::Done => None,
+            Self::Held(held) => Some(held.line()),
+        }
+    }
 }
 
 /// Why a turn's branch holds its ticket for the maintainer
