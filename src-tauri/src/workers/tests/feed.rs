@@ -81,9 +81,9 @@ impl Rig {
 
 #[test]
 fn a_watcher_gets_every_event_forwarded_after_it_attaches() {
-    let feed = Feed::new();
+    let feed = Feed::new(0);
     let (send, heard) = listener();
-    feed.watch(|| Ok::<_, ()>(()), send).unwrap();
+    feed.watch(1, || Ok::<_, ()>(Vec::new()), send).unwrap();
 
     feed.forward(text("one"));
     feed.forward(text("two"));
@@ -95,11 +95,12 @@ fn a_watcher_gets_every_event_forwarded_after_it_attaches() {
 
 #[test]
 fn a_channel_whose_send_fails_is_dropped_and_the_others_keep_receiving() {
-    let feed = Feed::new();
+    let feed = Feed::new(0);
     let tried = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&tried);
     feed.watch(
-        || Ok::<_, ()>(()),
+        1,
+        || Ok::<_, ()>(Vec::new()),
         move |_| {
             counted.fetch_add(1, Ordering::SeqCst);
             false
@@ -107,7 +108,7 @@ fn a_channel_whose_send_fails_is_dropped_and_the_others_keep_receiving() {
     )
     .unwrap();
     let (send, heard) = listener();
-    feed.watch(|| Ok::<_, ()>(()), send).unwrap();
+    feed.watch(2, || Ok::<_, ()>(Vec::new()), send).unwrap();
 
     feed.forward(text("one"));
     feed.forward(text("two"));
@@ -123,25 +124,112 @@ fn a_channel_whose_send_fails_is_dropped_and_the_others_keep_receiving() {
 
 #[test]
 fn an_event_forwarded_while_the_entries_are_read_reaches_the_channel_after_it_attaches() {
-    let feed = Arc::new(Feed::new());
+    let feed = Arc::new(Feed::new(0));
     let forwarding = Arc::clone(&feed);
     let (send, heard) = listener();
 
-    let (forwarder, entries) = feed
+    let mut forwarder = None;
+
+    let entries = feed
         .watch(
+            1,
             || {
-                let forwarder = std::thread::spawn(move || forwarding.forward(text("late")));
+                forwarder = Some(std::thread::spawn(move || forwarding.forward(text("late"))));
                 // Time for the forwarder to reach the lock the read holds
                 std::thread::sleep(Duration::from_millis(100));
-                Ok::<_, ()>((forwarder, vec!["entry"]))
+                Ok::<_, ()>(vec![LogEntry::Divider {
+                    text: "entry".to_owned(),
+                }])
             },
             send,
         )
         .unwrap();
-    forwarder.join().unwrap();
+    forwarder.unwrap().join().unwrap();
 
-    assert_eq!(entries, ["entry"]);
+    assert_eq!(entries.len(), 1);
     assert_eq!(heard.try_recv().unwrap(), text("late"));
+}
+
+#[test]
+fn an_event_the_log_holds_but_the_sink_has_not_forwarded_is_not_sent_again() {
+    // The session appends an event to the log, then calls the sink: a watcher
+    // that reads between the two has the event in its entries
+    let feed = Feed::new(0);
+    let (send, heard) = listener();
+
+    let entries = feed
+        .watch(1, || Ok::<_, ()>(vec![LogEntry::Event(text("one"))]), send)
+        .unwrap();
+    feed.forward(text("one"));
+    feed.forward(text("two"));
+
+    assert_eq!(entries, [LogEntry::Event(text("one"))]);
+    assert_eq!(heard.try_recv().unwrap(), text("two"));
+    assert!(
+        heard.try_recv().is_err(),
+        "the event in the entries was not sent too"
+    );
+}
+
+#[test]
+fn events_the_log_held_before_the_feed_began_are_not_in_flight() {
+    let past = [LogEntry::Event(text("old"))];
+    let feed = Feed::new(Feed::logged(&past));
+    let (send, heard) = listener();
+
+    feed.watch(1, || Ok::<_, ()>(past.to_vec()), send).unwrap();
+    feed.forward(text("new"));
+
+    assert_eq!(heard.try_recv().unwrap(), text("new"));
+}
+
+#[test]
+fn a_channel_watching_again_replaces_its_first_watch() {
+    let feed = Feed::new(0);
+    let (first, first_heard) = listener();
+    let (second, second_heard) = listener();
+    feed.watch(1, || Ok::<_, ()>(Vec::new()), first).unwrap();
+    feed.watch(1, || Ok::<_, ()>(Vec::new()), second).unwrap();
+
+    feed.forward(text("one"));
+
+    assert_eq!(second_heard.try_recv().unwrap(), text("one"));
+    assert!(
+        first_heard.try_recv().is_err(),
+        "the first watch was replaced"
+    );
+}
+
+#[test]
+fn an_unwatched_channel_hears_nothing_more_and_the_others_do() {
+    let feed = Feed::new(0);
+    let (gone, gone_heard) = listener();
+    let (kept, kept_heard) = listener();
+    feed.watch(1, || Ok::<_, ()>(Vec::new()), gone).unwrap();
+    feed.watch(2, || Ok::<_, ()>(Vec::new()), kept).unwrap();
+
+    feed.unwatch(1);
+    feed.forward(text("one"));
+
+    assert!(gone_heard.try_recv().is_err());
+    assert_eq!(kept_heard.try_recv().unwrap(), text("one"));
+}
+
+#[test]
+fn a_worker_unwatched_through_the_app_hears_nothing_more() {
+    let rig = Rig::new();
+    rig.worker("12", Status::Running);
+    let agent = FakeAgent::new().turn(Turn::new().text("first"));
+    let (send, heard) = listener();
+    rig.state
+        .workers()
+        .watch(&rig.project, "12", 7, send)
+        .unwrap();
+
+    rig.state.workers().unwatch(&rig.project, "012", 7);
+    rig.run_turn(&agent, "12", "Begin.");
+
+    assert!(heard.try_recv().is_err());
 }
 
 #[test]
@@ -154,7 +242,11 @@ fn the_entries_returned_are_the_logs_and_an_event_is_never_in_both_places() {
     let past = rig.run_turn(&agent, "12", "Begin.");
     let (send, heard) = listener();
 
-    let entries = rig.state.workers().watch(&rig.project, "12", send).unwrap();
+    let entries = rig
+        .state
+        .workers()
+        .watch(&rig.project, "12", 1, send)
+        .unwrap();
     let live = rig.run_turn(&agent, "12", "Go on.");
 
     let mut expected = vec![LogEntry::User {
@@ -178,7 +270,11 @@ fn a_worker_with_no_log_yet_returns_no_entries() {
     rig.worker("12", Status::Running);
     let (send, _heard) = listener();
 
-    let entries = rig.state.workers().watch(&rig.project, "12", send).unwrap();
+    let entries = rig
+        .state
+        .workers()
+        .watch(&rig.project, "12", 1, send)
+        .unwrap();
 
     assert!(entries.is_empty());
 }
@@ -191,7 +287,7 @@ fn watching_a_ticket_with_no_worker_is_refused_by_name() {
     let said = rig
         .state
         .workers()
-        .watch(&rig.project, "12", send)
+        .watch(&rig.project, "12", 1, send)
         .unwrap_err();
 
     assert!(said.contains("12") && said.contains("no worker"), "{said}");
@@ -277,7 +373,10 @@ fn resume_sends_the_carry_on_text_to_a_paused_worker() {
     rig.worker("12", Status::Paused);
     let agent = FakeAgent::new().turn(Turn::new().text("Carrying on."));
     let (send, heard) = listener();
-    rig.state.workers().watch(&rig.project, "12", send).unwrap();
+    rig.state
+        .workers()
+        .watch(&rig.project, "12", 1, send)
+        .unwrap();
 
     let started = rig.resume(&agent, "12").unwrap();
 
@@ -291,7 +390,11 @@ fn resume_sends_the_carry_on_text_to_a_paused_worker() {
     let live = until_turn_ends(&heard);
     assert!(live.contains(&text("Carrying on.")), "{live:?}");
     let (send, _heard) = listener();
-    let entries = rig.state.workers().watch(&rig.project, "12", send).unwrap();
+    let entries = rig
+        .state
+        .workers()
+        .watch(&rig.project, "12", 1, send)
+        .unwrap();
     assert_eq!(
         entries.first(),
         Some(&LogEntry::User {

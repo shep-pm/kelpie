@@ -9,67 +9,133 @@
 //! [`Feed::watch`] reads the past and attaches the channel under the lock
 //! [`Feed::forward`] holds while it sends, so an event forwarded meanwhile waits
 //! for the attach. The session writes an event to the log before it reaches the
-//! sink (`session/log.rs`, `logged`), so an event is in the entries read or sent
-//! on the channel. One forwarded after the log wrote it and before the watcher
-//! took the lock is in both: the window tells them apart by their order, since
-//! the entries come first.
+//! sink (`session/log.rs`, `logged`), so an event can be in the log and not yet
+//! forwarded when the watcher reads it. The feed counts the events it has
+//! forwarded and the events the log held when it began, so it knows how many
+//! the read returned that are still on their way, and the new channel skips
+//! exactly those. An event is in the entries or on the channel, never both.
+//!
+//! A channel's send succeeds while its webview lives, closed tab or not, so a
+//! failed send is not how a tab is forgotten: the window says so with
+//! [`Feed::unwatch`], and a channel watching again replaces its earlier watch.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use kelpie_protocol::SessionEvent;
+use kelpie_protocol::{LogEntry, SessionEvent};
 
 /// What a watching channel is: it takes an event, and answers whether it was sent
-type Watcher = Box<dyn Fn(SessionEvent) -> bool + Send>;
+type Sender = Box<dyn Fn(SessionEvent) -> bool + Send>;
+
+/// One channel watching a worker
+struct Watcher {
+    /// The channel's own id, which names it to [`Feed::unwatch`]
+    id: u32,
+
+    send: Sender,
+
+    /// How many of the events forwarded next are in the entries it was given
+    skip: usize,
+}
+
+#[derive(Default)]
+struct Inner {
+    watchers: Vec<Watcher>,
+
+    /// The events the log held when the feed began, plus the ones forwarded since
+    seen: usize,
+}
 
 /// The channels watching one worker
 #[derive(Default)]
 pub struct Feed {
-    watchers: Mutex<Vec<Watcher>>,
+    inner: Mutex<Inner>,
 }
 
 // The watchers are closures, which no derive can print
 impl std::fmt::Debug for Feed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Feed")
-            .field("watching", &self.lock().len())
+            .field("watching", &self.lock().watchers.len())
             .finish()
     }
 }
 
+/// How many of `entries` are events
+fn events_in(entries: &[LogEntry]) -> usize {
+    entries
+        .iter()
+        .filter(|entry| matches!(entry, LogEntry::Event(_)))
+        .count()
+}
+
 impl Feed {
-    /// A feed no channel watches
+    /// A feed no channel watches, for a worker whose log holds `logged` events
+    ///
+    /// Made before the worker's session begins, so none of them is on its way.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(logged: usize) -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                watchers: Vec::new(),
+                seen: logged,
+            }),
+        }
     }
 
-    fn lock(&self) -> MutexGuard<'_, Vec<Watcher>> {
-        self.watchers.lock().unwrap_or_else(PoisonError::into_inner)
+    /// How many events `entries` holds, for [`Feed::new`]
+    #[must_use]
+    pub fn logged(entries: &[LogEntry]) -> usize {
+        events_in(entries)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Send `event` to every channel watching, and drop each one whose send fails
     ///
-    /// A closed tab's channel fails its next send, which is how it is forgotten.
+    /// A channel that skips events because its entries held them does not get this one.
     pub fn forward(&self, event: SessionEvent) {
-        self.lock().retain(|send| send(event.clone()));
+        let mut inner = self.lock();
+        inner.seen += 1;
+        inner.watchers.retain_mut(|watcher| {
+            if watcher.skip > 0 {
+                watcher.skip -= 1;
+                return true;
+            }
+            (watcher.send)(event.clone())
+        });
     }
 
-    /// Read the worker's past with `read`, then attach `send` to follow it live
+    /// Read the worker's past with `read`, then attach the channel `id` to follow it live
     ///
     /// Both happen under the lock [`Feed::forward`] takes, so no event is
     /// forwarded between them: it is in what `read` returned, or `send` gets it.
+    /// A channel already watching under `id` is replaced.
     ///
     /// # Errors
     ///
     /// `read`'s own: the channel is not attached then.
-    pub fn watch<T, E>(
+    pub fn watch<E>(
         &self,
-        read: impl FnOnce() -> Result<T, E>,
+        id: u32,
+        read: impl FnOnce() -> Result<Vec<LogEntry>, E>,
         send: impl Fn(SessionEvent) -> bool + Send + 'static,
-    ) -> Result<T, E> {
-        let mut watchers = self.lock();
-        let past = read()?;
-        watchers.push(Box::new(send));
-        Ok(past)
+    ) -> Result<Vec<LogEntry>, E> {
+        let mut inner = self.lock();
+        let entries = read()?;
+        let skip = events_in(&entries).saturating_sub(inner.seen);
+        inner.watchers.retain(|watcher| watcher.id != id);
+        inner.watchers.push(Watcher {
+            id,
+            send: Box::new(send),
+            skip,
+        });
+        Ok(entries)
+    }
+
+    /// Stop sending to the channel `id`, which a tab does when it closes
+    pub fn unwatch(&self, id: u32) {
+        self.lock().watchers.retain(|watcher| watcher.id != id);
     }
 }

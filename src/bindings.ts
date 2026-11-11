@@ -295,6 +295,13 @@ export const commands = {
 	 */
 	workerWatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<LogEntry[], string>(__TAURI_INVOKE("worker_watch", { ticket, onEvent })),
 	/**
+	 *  Stop sending the worker on the ticket's events to `on_event`
+	 * 
+	 *  A tab calls it when it closes: a channel's send succeeds while the window
+	 *  lives, so nothing else tells the feed the tab is gone.
+	 */
+	workerUnwatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<null, string>(__TAURI_INVOKE("worker_unwatch", { ticket, onEvent })),
+	/**
 	 *  Start the next turn of the Paused worker on the ticket
 	 * 
 	 *  A worker that is not Paused is refused, with a line saying what it is doing.

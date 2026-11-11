@@ -12,8 +12,8 @@
 //! sub-issues: dispatch does.
 //!
 //! A worker's events go to its log and to its [`Feed`], which the window watches
-//! with [`worker_watch`]. A Paused worker resumes with [`worker_resume`], when the
-//! maintainer says so.
+//! with [`worker_watch`] and stops watching with [`worker_unwatch`]. A Paused
+//! worker resumes with [`worker_resume`], when the maintainer says so.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -294,7 +294,12 @@ impl Workers {
         let mut feeds = lock(&self.feeds);
         let feed = feeds
             .entry((project_id.to_owned(), ticket.to_owned()))
-            .or_default();
+            .or_insert_with(|| {
+                // Made before the worker's session, so no event of the log is in flight
+                let file = Paths::new(&self.data_dir, project_id).log_file(ticket);
+                let past = log::read(file).unwrap_or_default();
+                Arc::new(Feed::new(Feed::logged(&past)))
+            });
         Arc::clone(feed)
     }
 
@@ -302,7 +307,8 @@ impl Workers {
     ///
     /// The past is the worker's log, read under the feed's lock (see [`Feed::watch`]).
     /// A worker with no log yet has no entries. `send` answers whether the event
-    /// was sent, and a `false` drops it from the feed.
+    /// was sent, and a `false` drops it from the feed. `id` names the channel:
+    /// watching again under it replaces the first watch, and [`Workers::unwatch`] ends it.
     ///
     /// # Errors
     ///
@@ -311,14 +317,30 @@ impl Workers {
         &self,
         project_id: &str,
         ticket: &str,
+        id: u32,
         send: impl Fn(SessionEvent) -> bool + Send + 'static,
     ) -> Result<Vec<LogEntry>, String> {
         let ticket = ticket_id(ticket)?;
         self.status_of(project_id, &ticket)?;
         let file = Paths::new(&self.data_dir, project_id).log_file(&ticket);
         self.feed(project_id, &ticket)
-            .watch(|| log::read(&file), send)
+            .watch(id, || log::read(&file), send)
             .map_err(|error| format!("the log of ticket {ticket} cannot be read: {error}"))
+    }
+
+    /// Stop sending the worker on `ticket`'s events to the channel `id`
+    ///
+    /// A ticket that is not a number, or has no feed, has nothing to stop.
+    pub fn unwatch(&self, project_id: &str, ticket: &str, id: u32) {
+        let Ok(ticket) = ticket_id(ticket) else {
+            return;
+        };
+        let feed = lock(&self.feeds)
+            .get(&(project_id.to_owned(), ticket))
+            .cloned();
+        if let Some(feed) = feed {
+            feed.unwatch(id);
+        }
     }
 
     /// What the record of the worker on `ticket` says it is doing
@@ -518,9 +540,26 @@ pub fn worker_watch(
     on_event: Channel<SessionEvent>,
 ) -> Result<Vec<LogEntry>, String> {
     let project = state.project_id(None)?;
-    state
-        .workers()
-        .watch(&project, &ticket, move |event| on_event.send(event).is_ok())
+    let id = on_event.id();
+    state.workers().watch(&project, &ticket, id, move |event| {
+        on_event.send(event).is_ok()
+    })
+}
+
+/// Stop sending the worker on the ticket's events to `on_event`
+///
+/// A tab calls it when it closes: a channel's send succeeds while the window
+/// lives, so nothing else tells the feed the tab is gone.
+#[tauri::command]
+#[specta::specta]
+pub fn worker_unwatch(
+    state: State<'_, AppState>,
+    ticket: String,
+    on_event: Channel<SessionEvent>,
+) -> Result<(), String> {
+    let project = state.project_id(None)?;
+    state.workers().unwatch(&project, &ticket, on_event.id());
+    Ok(())
 }
 
 /// Start the next turn of the Paused worker on the ticket
