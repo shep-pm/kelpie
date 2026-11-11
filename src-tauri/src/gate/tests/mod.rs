@@ -233,7 +233,7 @@ fn a_ruled_ticket_gets_no_pass_until_its_head_moves() {
     git(&worktree, &["rm", "--quiet", ".claude/settings.json"]);
     let moved = rig.commit_staged(TICKET);
     let pull = rig.pull(TICKET, &moved, HeadStatus::Passed);
-    rig.read(&[pull.clone()]);
+    rig.read(std::slice::from_ref(&pull));
     assert_eq!(
         rig.gate.kept(TICKET).and_then(|kept| kept.pull),
         Some(pull.number.get()),
