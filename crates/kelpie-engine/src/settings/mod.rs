@@ -273,6 +273,9 @@ pub enum Field {
     /// Whether a harness may read its own global config folder
     HarnessGlobalFolder,
 
+    /// Whether a project's PM runs without a sandbox when the machine's cannot start
+    RunWithoutSandbox,
+
     /// Where each bridge's new versions come from
     BridgeUpdates,
 
@@ -288,7 +291,7 @@ pub enum Field {
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 17] = [
+    pub const ALL: [Field; 18] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -304,6 +307,7 @@ impl Field {
         Field::NetworkAllowlist,
         Field::ReadAnywhere,
         Field::HarnessGlobalFolder,
+        Field::RunWithoutSandbox,
         Field::BridgeUpdates,
         Field::LeaseCapacity,
     ];
@@ -327,6 +331,7 @@ impl Field {
             Self::NetworkAllowlist => "network-allowlist",
             Self::ReadAnywhere => "read-anywhere",
             Self::HarnessGlobalFolder => "harness-global-folder",
+            Self::RunWithoutSandbox => "run-without-sandbox",
             Self::BridgeUpdates => "bridge-updates",
             Self::LeaseCapacity => "lease-capacity",
         }
@@ -538,6 +543,9 @@ pub struct Settings {
     /// Whether a harness may read the global config folder it keeps for itself: Claude Code's `~/.claude`, or `CLAUDE_CONFIG_DIR` when the person set it, and goose's `~/.config/goose`, or the `config` folder under `GOOSE_PATH_ROOT` when the person set it. Each applies when the session next starts.
     pub harness_global_folder: Option<bool>,
 
+    /// Whether the project's PM runs without a sandbox. It applies only while the machine's sandbox cannot start, and only to the PM: a worker never runs without one.
+    pub run_without_sandbox: Option<bool>,
+
     /// Where each bridge's new versions come from, keyed by the bridge's registry id such as `claude-acp`. A bridge the map does not name takes `registry-automatic`.
     pub bridge_updates: Option<BTreeMap<String, BridgeUpdates>>,
 
@@ -596,6 +604,9 @@ pub struct Defaults {
     /// The built-in rule for a harness's own global folder
     pub harness_global_folder: bool,
 
+    /// The built-in rule for running the PM without a sandbox
+    pub run_without_sandbox: bool,
+
     /// The capacity kelpie gives each lease it names, by name
     pub lease_capacity: &'static [(&'static str, Capacity)],
 }
@@ -620,6 +631,7 @@ pub const BUILT_IN: Defaults = Defaults {
     network_allowlist: &[],
     read_anywhere: false,
     harness_global_folder: false,
+    run_without_sandbox: false,
     lease_capacity: &[(CARGO_TEST, CARGO_TEST_CAPACITY)],
 };
 
@@ -670,6 +682,9 @@ pub struct Resolved {
 
     /// Whether a harness may read its own global config folder
     pub harness_global_folder: Layered<bool>,
+
+    /// Whether the PM runs without a sandbox while the machine's cannot start
+    pub run_without_sandbox: Layered<bool>,
 
     /// Where each bridge's new versions come from, for the bridges a file names
     pub bridge_updates: Layered<BTreeMap<String, BridgeUpdates>>,
