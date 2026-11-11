@@ -20,6 +20,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -340,6 +341,9 @@ pub struct AppState {
     tools: Option<Tools>,
     /// What the PM's last start found about its sandbox
     sandbox_setup: SandboxSetup,
+    /// Whether an Install is waiting on its password prompt, which ends the
+    /// session when it loads the profile
+    installing: AtomicBool,
     /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
     bridge_checks: Mutex<Option<Sender<()>>>,
     /// What the app keeps for its workers across starts
@@ -411,7 +415,8 @@ impl AppState {
             opener,
             picker,
             tools,
-            sandbox_setup: SandboxSetup::default(),
+            sandbox_setup: SandboxSetup::detected(),
+            installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
             workers,
         })
@@ -660,6 +665,44 @@ impl AppState {
         Ok((session, handle, divider))
     }
 
+    /// Mark an Install as running, until the returned hold is dropped
+    ///
+    /// A loaded profile ends the PM's session ([`AppState::end_pm_session`]),
+    /// which would cut off a turn that began while the prompt was open, so no
+    /// send starts one meanwhile ([`AppState::installing`]). `None` when an
+    /// Install already runs: a second one would ask for a second password.
+    #[must_use]
+    pub fn hold_for_install(&self) -> Option<InstallHold<'_>> {
+        (!self.installing.swap(true, Ordering::SeqCst)).then_some(InstallHold(self))
+    }
+
+    /// Whether an Install is running, which holds every send to the PM back
+    #[must_use]
+    pub fn installing(&self) -> bool {
+        self.installing.load(Ordering::SeqCst)
+    }
+
+    /// Stop the held PM session, even one running without a sandbox, so the
+    /// next send opens a new one
+    ///
+    /// For an Install that loaded the profile: the new session probes the
+    /// sandbox again and starts sandboxed (`docs/design/sandbox-setup.md`,
+    /// Install). It waits for a session being opened, and abandons a turn in
+    /// flight, so the chat disables Install while a turn runs. The saved
+    /// session id and the PM's log stay, so the new session resumes, or is
+    /// seeded from the log when the harness refuses the resume. What the last
+    /// start found about the sandbox is dropped with the session it belonged to.
+    ///
+    /// Does nothing before the first send.
+    pub fn end_pm_session(&self) {
+        let _opening = lock(&self.opening);
+        let held = lock(&self.session).take();
+        if let Some((_, session)) = held {
+            session.stop();
+        }
+        self.sandbox_setup.record(None);
+    }
+
     /// Keep `ran` as what the project `id`'s PM runs on
     fn keep_ran(&self, id: &str, ran: &Ran) -> Result<(), String> {
         lock(&self.projects)
@@ -760,6 +803,18 @@ impl AppState {
         lock(&self.bridge_checks).take();
         self.workers.close_logs();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
+    }
+}
+
+/// An Install in flight, from [`AppState::hold_for_install`]
+///
+/// Dropping it ends the hold, whichever way the Install ended.
+#[derive(Debug)]
+pub struct InstallHold<'a>(&'a AppState);
+
+impl Drop for InstallHold<'_> {
+    fn drop(&mut self) {
+        self.0.installing.store(false, Ordering::SeqCst);
     }
 }
 

@@ -696,6 +696,14 @@ pub fn pm_retry(state: State<'_, AppState>, on_event: Channel<SessionEvent>) -> 
 }
 
 fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) -> Option<String> {
+    // A loaded profile ends the session, so a turn begun now would be cut off
+    if state.installing() {
+        let _ = on_event.send(SessionEvent::Failed {
+            message: "kelpie is installing its sandbox profile: send again once the password prompt closes."
+                .to_owned(),
+        });
+        return None;
+    }
     let (session, project, divider) = match state.pm_session() {
         Ok(held) => held,
         Err(message) => {

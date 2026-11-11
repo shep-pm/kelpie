@@ -117,7 +117,11 @@ function Failure({ id }: { id: number }) {
   // that turn did, since Install belongs on it.
   const item =
     refusal && last && (unsandboxed || (state === "failed" && !!error)) ? (
-      <SandboxSetup refusal={refusal} unsandboxed={unsandboxed} />
+      <SandboxSetup
+        refusal={refusal}
+        unsandboxed={unsandboxed}
+        install={sandbox?.install}
+      />
     ) : null;
   // The item stands in for the raw error of the turn the sandbox refused. An
   // unsandboxed session runs past its refusal, so a failure in it is its own.

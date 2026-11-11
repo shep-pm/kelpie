@@ -92,6 +92,17 @@ export const commands = {
 	 */
 	pmSandbox: () => __TAURI_INVOKE<SandboxView>("pm_sandbox"),
 	/**
+	 *  Load kelpie's AppArmor profile through `pkexec`, and end the PM's session once it is loaded
+	 * 
+	 *  Waits on the password prompt, so it runs off the main thread. A loaded
+	 *  profile ends the held session, even an unsandboxed one, and the next send
+	 *  opens one that probes the sandbox again and starts it sandboxed. A send
+	 *  made while the prompt is open is refused (`pm_send`'s `Failed`), so the end
+	 *  of the session never cuts a turn off. The command is fixed: nothing from the webview reaches it
+	 *  (`docs/design/sandbox-setup.md`, Install).
+	 */
+	sandboxInstall: () => __TAURI_INVOKE<InstallOutcome>("sandbox_install"),
+	/**
 	 *  Keep `value` as `harness`'s login, replacing any it had
 	 * 
 	 *  # Errors
@@ -355,6 +366,31 @@ export type Frontmatter = {
 	body: string | null,
 };
 
+/**  Whether kelpie can load its AppArmor profile on this machine */
+export type Install = 
+/**  The package put the profile on disk, so Install can load it */
+"available" | 
+/**
+ *  Only the `.deb` or `.rpm` can install the profile: kelpie runs as an
+ *  AppImage, or the packaged profile is not on this machine
+ */
+"package_only";
+
+/**  How an Install ended, as the webview reads it */
+export type InstallOutcome = 
+/**  The profile is copied and loaded */
+{ kind: "installed" } | 
+/**  The person dismissed the password prompt */
+{ kind: "dismissed" } | 
+/**  No polkit agent could ask for the password, or `pkexec` is not there */
+{ kind: "no_agent"; 
+/**  The two commands to run in a terminal instead */
+commands: string[] } | 
+/**  `pkexec` or `apparmor_parser` failed */
+{ kind: "failed"; 
+/**  The tool's own words */
+message: string };
+
 /**
  *  One line of a session's log: a message the maintainer sent, or an event the session streamed
  * 
@@ -456,6 +492,8 @@ export type SandboxView = {
 	 *  allows it and the sandbox could not start. `refusal` stays set then.
 	 */
 	unsandboxed: boolean,
+	/**  Whether Install can load the profile here */
+	install: Install,
 };
 
 /**  One thing a session did, in the order it happened */

@@ -674,6 +674,32 @@ fn a_send_before_a_project_is_picked_says_so_as_failed() {
 }
 
 #[test]
+fn a_send_while_an_install_waits_is_refused_and_opens_no_session() {
+    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
+    let chat = Chat::on(&agent);
+    let state = chat.state();
+    let hold = state.hold_for_install().unwrap();
+
+    let SessionEvent::Failed { message } = chat.send("Hi").next() else {
+        panic!("the chat should hear a Failed");
+    };
+
+    assert!(message.contains("installing"), "{message}");
+    assert!(
+        chat.state().held_session().is_none(),
+        "the refused send built no session for the install to end"
+    );
+
+    // Once the prompt closes the same send goes through
+    drop(hold);
+    let events = chat.send("Hi").until_turn_ends();
+    assert!(
+        matches!(events.last(), Some(SessionEvent::TurnEnded { .. })),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn an_opener_that_fails_reaches_the_chat_as_failed() {
     let chat = Chat::with(
         Box::new(|_| Err("the bridge could not be downloaded".to_owned())),

@@ -1,6 +1,7 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  InstallOutcome,
   LogEntry,
   SandboxAnswer,
   SandboxView,
@@ -40,7 +41,12 @@ const pmAnswer =
   >();
 
 const pmSandbox = vi.fn<() => Promise<SandboxView>>();
-const none: SandboxView = { refusal: null, unsandboxed: false };
+const none: SandboxView = {
+  refusal: null,
+  unsandboxed: false,
+  install: "available",
+};
+const sandboxInstall = vi.fn<() => Promise<InstallOutcome>>();
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -50,6 +56,7 @@ vi.mock("@/bindings", () => ({
     pmHistory: () => pmHistory(),
     pmAnswer: (id: string, answer: SandboxAnswer) => pmAnswer(id, answer),
     pmSandbox: () => pmSandbox(),
+    sandboxInstall: () => sandboxInstall(),
     projectGet: async () => "/work/project",
     projectPick: async () => ({ status: "ok", data: "/work/project" }),
   },
@@ -92,6 +99,8 @@ beforeEach(() => {
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
   pmSandbox.mockReset();
   pmSandbox.mockResolvedValue(none);
+  sandboxInstall.mockReset();
+  sandboxInstall.mockResolvedValue({ kind: "installed" });
   useChat.getState().reset();
 });
 
@@ -218,6 +227,7 @@ describe("the chat store", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: false,
+      install: "available",
     });
     await useChat.getState().send("go");
     emit({ kind: "failed", message: "the sandbox cannot start" });
@@ -226,6 +236,7 @@ describe("the chat store", () => {
       expect(useChat.getState().sandbox).toEqual({
         refusal: "no_capabilities",
         unsandboxed: false,
+        install: "available",
       }),
     );
     expect(pmSandbox).toHaveBeenCalledTimes(1);
@@ -235,6 +246,7 @@ describe("the chat store", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_namespaces",
       unsandboxed: false,
+      install: "available",
     });
     await useChat.getState().send("go");
     emit({ kind: "failed", message: "the sandbox cannot start" });
@@ -254,6 +266,7 @@ describe("the chat store", () => {
     const unsandboxed: SandboxView = {
       refusal: "no_capabilities",
       unsandboxed: true,
+      install: "available",
     };
     pmSandbox.mockResolvedValue(unsandboxed);
     await useChat.getState().send("go");
@@ -290,6 +303,88 @@ describe("the chat store", () => {
       state: "running",
     });
     expect(turns[0]?.id).not.toBe(failed?.id);
+  });
+
+  it("a finished install sends the failed message again, once, and clears what the sandbox found", async () => {
+    pmSandbox.mockResolvedValue({
+      refusal: "no_capabilities",
+      unsandboxed: false,
+      install: "available",
+    });
+    await useChat.getState().send("plan the slice");
+    emit({ kind: "failed", message: "bwrap: loopback: Failed RTM_NEWADDR" });
+    await vi.waitFor(() =>
+      expect(useChat.getState().sandbox?.refusal).toBe("no_capabilities"),
+    );
+    // The profile is loaded, and the session ended: the next look finds none
+    pmSandbox.mockResolvedValue(none);
+
+    const [one, two] = await Promise.all([
+      useChat.getState().install(),
+      useChat.getState().install(),
+    ]);
+
+    expect(one).toEqual({ kind: "installed" });
+    expect(two).toEqual({ kind: "installed" });
+    expect(sandboxInstall).toHaveBeenCalledTimes(1);
+    expect(pmSend).toHaveBeenCalledTimes(2);
+    expect(pmSend).toHaveBeenLastCalledWith(
+      "plan the slice",
+      expect.anything(),
+    );
+    expect(useChat.getState().turns).toHaveLength(1);
+    expect(useChat.getState().turns[0]?.state).toBe("running");
+    expect(useChat.getState().sandbox).toEqual(none);
+  });
+
+  it("no message goes while an install waits on its prompt, since the session it ends would cut the turn off", async () => {
+    let done: (outcome: InstallOutcome) => void = () => {};
+    sandboxInstall.mockReturnValue(
+      new Promise<InstallOutcome>((resolve) => {
+        done = resolve;
+      }),
+    );
+
+    const waiting = useChat.getState().install();
+    expect(useChat.getState().installing).toBe(true);
+    await useChat.getState().send("hello");
+    expect(pmSend).not.toHaveBeenCalled();
+    expect(useChat.getState().turns).toHaveLength(0);
+
+    done({ kind: "dismissed" });
+    await waiting;
+    expect(useChat.getState().installing).toBe(false);
+    await useChat.getState().send("hello");
+    expect(pmSend).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { kind: "dismissed" },
+    { kind: "no_agent", commands: ["sudo a", "sudo b"] },
+    { kind: "failed", message: "apparmor_parser: denied" },
+  ] satisfies InstallOutcome[])(
+    "an install that ends %o sends nothing",
+    async (outcome) => {
+      await useChat.getState().send("go");
+      emit({ kind: "failed", message: "refused" });
+      sandboxInstall.mockResolvedValue(outcome);
+
+      expect(await useChat.getState().install()).toEqual(outcome);
+
+      expect(pmSend).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("an install the command could not run says so, and sends nothing", async () => {
+    await useChat.getState().send("go");
+    emit({ kind: "failed", message: "refused" });
+    sandboxInstall.mockRejectedValue("ipc is down");
+
+    expect(await useChat.getState().install()).toEqual({
+      kind: "failed",
+      message: "ipc is down",
+    });
+    expect(pmSend).toHaveBeenCalledTimes(1);
   });
 
   it("send again does nothing when the last turn did not fail", async () => {
