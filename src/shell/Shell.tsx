@@ -1,13 +1,14 @@
 import { KanbanSquare, MessageSquare } from "lucide-react";
-import { useState } from "react";
-import { Board } from "@/board/Board";
+import { useEffect, useState } from "react";
+import { BoardPanel } from "@/board/Board";
+import { useBoard } from "@/board/store";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { WorkerTab, type WorkerTicket } from "@/workers/WorkerTab";
-import { Panel, PanelStrip, PanelStripButton } from "./Panel";
+import { PanelStrip, PanelStripButton } from "./Panel";
 import { PmPanel } from "./PmPanel";
 import { registerTabBody, useTabs } from "./tabs";
 
@@ -20,18 +21,30 @@ const PANEL_MIN = "320px";
 function openWorker(ticket: WorkerTicket) {
   const id = `worker:${ticket.id}`;
   registerTabBody(id, () => <WorkerTab ticket={ticket} />);
-  useTabs.getState().open({ id, title: `#${ticket.id}` });
+  useTabs.getState().open({ id, title: `#${ticket.id}`, ticket: ticket.id });
 }
 
 /**
  * The window: the PM's panel on the left and the Board's on the right, each
  * folding to an icon strip button or taking the whole window.
  *
- * A folded panel is not mounted, so its body starts afresh when it reopens.
+ * A folded panel is not mounted, so its body starts afresh when it reopens. The
+ * board keeps streaming all the while, since the counts it feeds sit on the
+ * folded panel's button and on the worker tabs beside the PM.
  */
 export function Shell({ onSettings }: { onSettings: () => void }) {
   const [folded, setFolded] = useState<ReadonlySet<PanelId>>(new Set());
   const [maximised, setMaximised] = useState<PanelId | null>(null);
+
+  // The window reads the board for as long as it is up, not just while the
+  // Board panel is mounted, so a folded panel's count and the counts on the
+  // worker tabs keep up with what the board last read.
+  useEffect(() => {
+    useBoard.getState().watch();
+    return () => useBoard.getState().close();
+  }, []);
+
+  const boardWaits = useBoard((s) => s.view?.needs_you ?? 0);
 
   const shown = (id: PanelId) =>
     maximised === null ? !folded.has(id) : maximised === id;
@@ -65,9 +78,7 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
         {both && <ResizableHandle />}
         {shown("board") && (
           <ResizablePanel id="board" minSize={PANEL_MIN} defaultSize="50%">
-            <Panel title="Board" {...controls("board")}>
-              <Board onOpenWorker={openWorker} />
-            </Panel>
+            <BoardPanel {...controls("board")} onOpenWorker={openWorker} />
           </ResizablePanel>
         )}
       </ResizablePanelGroup>
@@ -84,6 +95,7 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
             <PanelStripButton
               title="Board"
               icon={<KanbanSquare />}
+              count={boardWaits}
               onOpen={() => reopen("board")}
             />
           )}

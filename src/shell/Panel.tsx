@@ -1,5 +1,6 @@
 import { Maximize2, Minimize2, PanelRightClose } from "lucide-react";
 import type { ReactNode } from "react";
+import { NeedsYouCount, needsYouLabel } from "@/components/NeedsYouCount";
 import { Button } from "@/components/ui/button";
 
 /** What a panel's header asks of the shell. */
@@ -12,8 +13,8 @@ export type PanelControls = {
 
 type Props = PanelControls & {
   title: string;
-  /** The panel's NeedsYouCount, once it has one. */
-  count?: ReactNode;
+  /** How many waits this panel holds, as its NeedsYouCount. Nothing shows at 0. */
+  count?: number;
   /** A mark beside the title, such as the PM's No sandbox. */
   badge?: ReactNode;
   /** Buttons to the left of collapse and maximise. */
@@ -40,7 +41,7 @@ export function Panel({
       <header className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <h2 className="text-sm font-semibold">{title}</h2>
         {badge}
-        {count}
+        <NeedsYouCount count={count ?? 0} />
         <span className="ml-auto flex items-center gap-0.5">
           {actions}
           {!maximised && (
@@ -85,10 +86,13 @@ export function PanelStrip({ children }: { children: ReactNode }) {
 export function PanelStripButton({
   title,
   icon,
+  count = 0,
   onOpen,
 }: {
   title: string;
   icon: ReactNode;
+  /** What is waiting inside the panel this button reopens. */
+  count?: number;
   onOpen: () => void;
 }) {
   return (
@@ -96,10 +100,17 @@ export function PanelStripButton({
       type="button"
       variant="ghost"
       size="icon"
-      aria-label={`Open ${title}`}
+      className="relative"
+      aria-label={
+        count > 0 ? `Open ${title}, ${needsYouLabel(count)}` : `Open ${title}`
+      }
       onClick={onOpen}
     >
       {icon}
+      <NeedsYouCount
+        count={count}
+        className="absolute -top-1 -right-1 ring-2 ring-sidebar"
+      />
     </Button>
   );
 }
