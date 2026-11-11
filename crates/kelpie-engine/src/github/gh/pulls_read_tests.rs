@@ -8,6 +8,7 @@ use std::num::NonZeroU64;
 use super::GithubSource;
 use super::hold::Hold;
 use super::tests::{Script, answered, gh_over, refused};
+use crate::ci::{FailedCheck, HeadStatus};
 use crate::github::{ForgeSlug, Timestamp};
 use crate::ticket::{ForgeError, GithubTickets, OpenPull, TicketId};
 
@@ -56,6 +57,56 @@ fn a_pull_request_reads_its_number_branch_and_draft_flag() {
 }
 
 #[test]
+fn a_pull_carries_its_head_base_and_labels() {
+    let script = Script::answering(answered(OPEN_PULLS));
+
+    let pulls = source_over(&script).open_pulls().unwrap();
+
+    assert_eq!(pulls[0].head, "8e1d0c5b7a2f4e9d3c6b1a0f9e8d7c6b5a4f3e2d");
+    assert_eq!(pulls[0].base, "main");
+    assert_eq!(pulls[0].labels, Vec::<String>::new());
+    assert_eq!(pulls[1].head, "3b7f2a9c4d1e8f60a5b2c7d9e4f1a8b3c6d0e5f7");
+    assert_eq!(pulls[1].base, "release");
+    assert_eq!(pulls[1].labels, ["ready-for-agent", "priority: P1"]);
+}
+
+#[test]
+fn a_pulls_checks_are_read_from_its_last_commits_rollup() {
+    let script = Script::answering(answered(OPEN_PULLS));
+
+    let pulls = source_over(&script).open_pulls().unwrap();
+
+    assert_eq!(
+        pulls[1].checks,
+        HeadStatus::Failed(vec![FailedCheck {
+            name: "test".to_owned(),
+            url: Some(
+                "https://github.com/shep-pm/kelpie/actions/runs/38900000002/job/110000000002"
+                    .to_owned()
+            ),
+        }])
+    );
+    let query = &script.asked()[0][3];
+    assert!(query.contains("commits(last: 1)"), "{query}");
+}
+
+#[test]
+fn a_pull_with_no_commit_rollup_has_no_checks() {
+    // The first has no commit listed, the second a commit with no rollup
+    let mut page: serde_json::Value = serde_json::from_str(OPEN_PULLS).unwrap();
+    let commit = &mut page["data"]["repository"]["pullRequests"]["nodes"][1]["commits"]["nodes"][0]
+        ["commit"];
+    commit["statusCheckRollup"] = serde_json::Value::Null;
+    let bare = page.to_string();
+    let script = Script::answering(answered(&bare));
+
+    let pulls = source_over(&script).open_pulls().unwrap();
+
+    assert_eq!(pulls[0].checks, HeadStatus::None);
+    assert_eq!(pulls[1].checks, HeadStatus::None);
+}
+
+#[test]
 fn closing_references_become_ticket_ids() {
     let script = Script::answering(answered(OPEN_PULLS));
 
@@ -79,8 +130,9 @@ fn a_ticket_of_another_repo_is_not_one_a_pull_request_closes_here() {
 fn the_walker_follows_the_end_cursor_to_the_last_page() {
     let first = r#"{"data":{"repository":{"pullRequests":{
         "pageInfo":{"hasNextPage":true,"endCursor":"CURSOR-1"},
-        "nodes":[{"number":9,"headRefName":"kelpie/8","isDraft":false,
-        "closingIssuesReferences":{"nodes":[]}}]}}}}"#;
+        "nodes":[{"number":9,"headRefName":"kelpie/8","headRefOid":"abc9",
+        "baseRefName":"main","isDraft":false,"labels":{"nodes":[]},
+        "commits":{"nodes":[]},"closingIssuesReferences":{"nodes":[]}}]}}}}"#;
     let script = Script::answering(answered(first));
     script.then(answered(OPEN_PULLS));
 
@@ -99,6 +151,10 @@ fn the_walker_follows_the_end_cursor_to_the_last_page() {
             branch: "kelpie/8".to_owned(),
             draft: false,
             closes: Vec::new(),
+            head: "abc9".to_owned(),
+            base: "main".to_owned(),
+            labels: Vec::new(),
+            checks: HeadStatus::None,
         }
     );
 }
@@ -140,6 +196,57 @@ fn a_graphql_error_in_a_200_answer_is_a_failure() {
         panic!("{pulls:?}");
     };
     assert!(said.contains("Could not resolve to a Repository"), "{said}");
+}
+
+#[test]
+fn a_token_that_cannot_read_checks_still_lists_the_pulls() {
+    let mut page: serde_json::Value = serde_json::from_str(OPEN_PULLS).unwrap();
+    let nodes = &mut page["data"]["repository"]["pullRequests"]["nodes"];
+    nodes[1]["commits"]["nodes"][0]["commit"]["statusCheckRollup"] = serde_json::Value::Null;
+    page["errors"] = serde_json::json!([{
+        "type": "FORBIDDEN",
+        "message": "Resource not accessible by personal access token",
+        "path": ["repository", "pullRequests", "nodes", 1, "commits", "nodes", 0,
+            "commit", "statusCheckRollup"]
+    }]);
+    let script = Script::answering(answered(&page.to_string()));
+
+    let pulls = source_over(&script).open_pulls().unwrap();
+
+    let numbers: Vec<_> = pulls.iter().map(|p| p.number.get()).collect();
+    assert_eq!(numbers, [81, 66]);
+    assert_eq!(pulls[1].checks, HeadStatus::None);
+    assert_eq!(pulls[1].closes, [id(63), id(64)]);
+}
+
+#[test]
+fn an_error_about_anything_but_checks_still_fails_the_page() {
+    let mut page: serde_json::Value = serde_json::from_str(OPEN_PULLS).unwrap();
+    page["errors"] = serde_json::json!([{
+        "message": "Something went wrong",
+        "path": ["repository", "pullRequests", "nodes", 1, "labels"]
+    }]);
+    let script = Script::answering(answered(&page.to_string()));
+
+    let pulls = source_over(&script).open_pulls();
+
+    assert!(matches!(pulls, Err(ForgeError::Failed(_))), "{pulls:?}");
+}
+
+#[test]
+fn a_page_asks_for_few_enough_pulls_and_suites_to_cost_a_few_points() {
+    // GitHub prices a query by its page sizes: each pull request costs one request
+    // per connection under it, and each suite one more for its check runs
+    let script = Script::answering(answered(OPEN_PULLS));
+
+    source_over(&script).open_pulls().unwrap();
+
+    let query = &script.asked()[0][3];
+    assert!(
+        query.contains("pullRequests(states: OPEN, first: 25,"),
+        "{query}"
+    );
+    assert!(query.contains("checkSuites(first: 20)"), "{query}");
 }
 
 #[test]

@@ -3,6 +3,7 @@
 use std::num::NonZeroU64;
 
 use super::{Board, Column, Move, Read, Rules, place, plan_move};
+use crate::ci::HeadStatus;
 use crate::github::Timestamp;
 use crate::settings::PickUp;
 use crate::ticket::{Listed, OpenPull, TicketId};
@@ -30,6 +31,10 @@ fn pull(number: u64, branch: &str, closes: &[u64]) -> OpenPull {
         branch: branch.to_owned(),
         draft: true,
         closes: closes.iter().map(|closed| id(*closed)).collect(),
+        head: format!("{number:040x}"),
+        base: "main".to_owned(),
+        labels: Vec::new(),
+        checks: HeadStatus::None,
     }
 }
 

@@ -1,32 +1,50 @@
 //! The open pull requests of a repo, and the tickets each closes
 //!
-//! One paged GraphQL query reads each pull request's number, head branch, draft
-//! flag and closing references. A ticket is in Review while a pull request
+//! One paged GraphQL query reads each pull request's number, head branch and
+//! commit, base branch, labels, draft flag, closing references and the checks of
+//! its last commit, so the gate reads a pull request once per pass. A ticket is in Review while a pull request
 //! closing it is open (`docs/design/tickets.md`, The board).
 
 use serde::Deserialize;
 
+use super::checks::{Commit, commit_fields};
 use super::hold::Hold;
 use super::unreadable;
+use crate::ci::HeadStatus;
 use crate::github::ForgeSlug;
 use crate::ticket::{ForgeError, OpenPull, TicketId};
 
-// A page holds 100, so each 100 more open pull requests cost one more query
-const QUERY: &str = "query($owner: String!, $name: String!, $after: String) { \
-    repository(owner: $owner, name: $name) { \
-    pullRequests(states: OPEN, first: 100, after: $after, \
-    orderBy: {field: CREATED_AT, direction: DESC}) { \
-    pageInfo { hasNextPage endCursor } nodes { \
-    number headRefName isDraft \
-    closingIssuesReferences(first: 50) { nodes { number repository { name owner { login } } } } \
-    } } } }";
+// GitHub prices a query by the page sizes it asks for, not by what comes back:
+// one request per parent for each connection under it. A page of 100 pull
+// requests with a rollup each would cost about 55 points of the 5000 an hour,
+// and the board reads every minute. A page of 25, with the first 20 suites of
+// each last commit, costs about 6.
+const PAGE: usize = 25;
+const SUITES: u32 = 20;
+
+// The last commit's checks are the commit read of `checks::commit_fields`, so a
+// head's status reads the same either way.
+fn query() -> String {
+    format!(
+        "query($owner: String!, $name: String!, $after: String) {{ \
+        repository(owner: $owner, name: $name) {{ \
+        pullRequests(states: OPEN, first: {PAGE}, after: $after, \
+        orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
+        pageInfo {{ hasNextPage endCursor }} nodes {{ \
+        number headRefName headRefOid baseRefName isDraft labels(first: 50) {{ nodes {{ name }} }} \
+        closingIssuesReferences(first: 50) {{ nodes {{ number repository {{ name owner {{ login }} }} }} }} \
+        commits(last: 1) {{ nodes {{ commit {{ {} }} }} }} \
+        }} }} }} }}",
+        commit_fields(SUITES)
+    )
+}
 
 // As many pages as hold a thousand pull requests, past which the read stops
-const MAX_PAGES: usize = 10;
+const MAX_PAGES: usize = 1000 / PAGE;
 
 /// Every open pull request of `repo`, newest first
 pub(super) fn open_pulls(hold: &Hold, repo: &ForgeSlug) -> Result<Vec<OpenPull>, ForgeError> {
-    let query = format!("query={QUERY}");
+    let query = format!("query={}", query());
     let owner = format!("owner={}", repo.owner());
     let name = format!("name={}", repo.name());
     let mut pulls = Vec::new();
@@ -65,6 +83,8 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
     #[derive(Deserialize)]
     struct Problem {
         message: String,
+        #[serde(default)]
+        path: Vec<serde_json::Value>,
     }
     #[derive(Deserialize)]
     struct Data {
@@ -92,8 +112,28 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
     struct Node {
         number: u64,
         head_ref_name: String,
+        head_ref_oid: String,
+        base_ref_name: String,
         is_draft: bool,
+        labels: Labels,
         closing_issues_references: Closing,
+        commits: Commits,
+    }
+    #[derive(Deserialize)]
+    struct Labels {
+        nodes: Vec<Label>,
+    }
+    #[derive(Deserialize)]
+    struct Label {
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Commits {
+        nodes: Vec<Tip>,
+    }
+    #[derive(Deserialize)]
+    struct Tip {
+        commit: Option<Commit>,
     }
     #[derive(Deserialize)]
     struct Closing {
@@ -114,7 +154,11 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
         login: String,
     }
     let reply: Reply = serde_json::from_slice(stdout).map_err(|_| unreadable(stdout))?;
-    if !reply.errors.is_empty() {
+    // A token that cannot read checks gets partial data and an error on the
+    // rollup of each commit. The board needs none of the checks, so those leave
+    // the pull requests listed with no checks.
+    let about_checks = |problem: &Problem| problem.path.iter().any(|step| step == "commits");
+    if !reply.errors.iter().all(about_checks) {
         let said: Vec<_> = reply.errors.into_iter().map(|e| e.message).collect();
         return Err(ForgeError::Failed(said.join("; ")));
     }
@@ -141,6 +185,12 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
                 number: std::num::NonZeroU64::new(node.number)?,
                 branch: node.head_ref_name,
                 draft: node.is_draft,
+                head: node.head_ref_oid,
+                base: node.base_ref_name,
+                labels: node.labels.nodes.into_iter().map(|l| l.name).collect(),
+                checks: (node.commits.nodes.into_iter().next())
+                    .and_then(|tip| tip.commit)
+                    .map_or(HeadStatus::None, Commit::head_status),
                 closes: node
                     .closing_issues_references
                     .nodes
