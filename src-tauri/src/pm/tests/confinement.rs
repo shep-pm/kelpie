@@ -79,3 +79,36 @@ fn another_failure_is_never_run_without_a_sandbox() {
         assert!(found.is_err(), "the setting covers the two refusals only");
     }
 }
+
+#[test]
+fn an_unsandboxed_session_stays_marked_on_the_sends_that_reuse_it() {
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("one"))
+        .turn(Turn::new().text("two"));
+    // An opener that finds the sandbox refused and runs the session without one
+    let opener: Opener = {
+        let agent = agent.clone();
+        Box::new(move |opening| {
+            opening
+                .sandbox_setup
+                .record_unsandboxed(Refusal::NoCapabilities);
+            Ok(agent.session(
+                opening.project.path.clone(),
+                opening.project.pm_session.clone(),
+                Choice::default(),
+            ))
+        })
+    };
+    let chat = Chat::with(opener, Box::new(|| Ok(None)), None);
+    chat.state().set_project(chat.dir.clone()).unwrap();
+    chat.send("First").until_turn_ends();
+    assert!(chat.state().sandbox_setup().view().unsandboxed);
+
+    chat.send("Second").until_turn_ends();
+
+    assert_eq!(agent.launches(), 1, "the second send reused the session");
+    assert!(
+        chat.state().sandbox_setup().view().unsandboxed,
+        "the session still runs without a sandbox"
+    );
+}
