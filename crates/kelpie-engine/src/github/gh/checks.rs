@@ -195,24 +195,23 @@ impl Check {
         }
     }
 
-    // The check run that is still queued or in progress, which the gate reruns
-    // once if its workflow run finished: GitHub leaves a job of a finished run in
-    // either state for good, and a commit status has no run.
+    // The check run that has not finished, which the gate reruns once if its
+    // workflow run finished: GitHub leaves a job of a finished run in `QUEUED` or
+    // `IN_PROGRESS` for good, and a job waiting on an environment's approval is
+    // `WAITING`. A commit status has no run. It started only when it is in progress.
     fn queued(&self) -> Option<Queued> {
         match self {
             Self::CheckRun {
                 name,
-                status: Some(status),
+                status,
                 details_url,
                 ..
-            } if matches!(status.as_str(), "QUEUED" | "IN_PROGRESS") && !self.finished() => {
-                Some(Queued {
-                    name: name.clone(),
-                    run: details_url.as_deref().and_then(run_of),
-                    running: status == "IN_PROGRESS",
-                    held: false,
-                })
-            }
+            } if !self.finished() => Some(Queued {
+                name: name.clone(),
+                run: details_url.as_deref().and_then(run_of),
+                running: status.as_deref() == Some("IN_PROGRESS"),
+                held: false,
+            }),
             _ => None,
         }
     }

@@ -28,11 +28,19 @@ pub(super) fn failed_logs(
     head: &str,
     merge_group: bool,
 ) -> Result<Vec<FailedLog>, ForgeError> {
+    // A head is asked for by its commit, since the repo's newest runs on every
+    // branch would push its older failed run out of the list
+    let (filter, value) = match merge_group {
+        true => ("--event", "merge_group"),
+        false => ("--commit", head),
+    };
     let listed = hold.call(&[
         "run",
         "list",
         "--repo",
         repo.as_str(),
+        filter,
+        value,
         "--limit",
         "50",
         "--json",
@@ -43,14 +51,20 @@ pub(super) fn failed_logs(
         .into_iter()
         .take(RUNS)
     {
-        let read = read_run(repo, run.id, run.conclusion != "failure", &mut |args| {
+        let tail = match read_run(repo, run.id, run.conclusion != "failure", &mut |args| {
             hold.call(args)
-        })?;
+        }) {
+            Ok(read) => read.text,
+            // A limit used up is every later call's answer too
+            Err(error @ (ForgeError::Held(_) | ForgeError::Limited { .. })) => return Err(error),
+            // A log GitHub no longer keeps must not hide the other runs' logs
+            Err(error) => format!("note: the log of this run could not be read: {error}"),
+        };
         logs.push(FailedLog {
             check: run.workflow,
             run: run.id,
             url: run.url,
-            tail: read.text,
+            tail,
         });
     }
     Ok(logs)
@@ -95,8 +109,26 @@ pub(super) fn failed_runs(
         url: String,
     }
     let runs: Vec<Run> = serde_json::from_slice(listed).map_err(|_| unreadable(listed))?;
+    // A run a concurrency group cancelled for a later run of its workflow on the
+    // head was stopped by that run, not by a timeout, so the later run is read
+    let replaced: Vec<(String, String, u64)> = runs
+        .iter()
+        .filter(|r| r.conclusion == "cancelled")
+        .filter(|r| {
+            (runs.iter()).any(|later| {
+                later.workflow_name == r.workflow_name
+                    && later.head_sha == r.head_sha
+                    && later.database_id > r.database_id
+            })
+        })
+        .map(|r| (r.workflow_name.clone(), r.head_sha.clone(), r.database_id))
+        .collect();
     Ok(runs
         .into_iter()
+        .filter(|r| {
+            let key = (r.workflow_name.clone(), r.head_sha.clone(), r.database_id);
+            !replaced.contains(&key)
+        })
         .filter(|r| READ_FOR_A_LOG.contains(&r.conclusion.as_str()))
         .filter(|r| match merge_group {
             // GitHub cancels the runs of the groups queued behind one it

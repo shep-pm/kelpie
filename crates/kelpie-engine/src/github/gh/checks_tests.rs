@@ -195,6 +195,35 @@ fn a_queued_check_run_is_read_with_its_workflow_run() {
     );
 }
 
+// A job waiting on an environment's approval is `WAITING`, and `PENDING` and
+// `REQUESTED` are the other statuses GitHub documents for a run not yet started
+#[test]
+fn a_check_run_waiting_to_start_is_listed_as_queued() {
+    let waiting = |status: &str, n: u64| {
+        format!(
+            r#"{{"__typename":"CheckRun","name":"deploy-{n}","status":"{status}","conclusion":"",
+            "detailsUrl":"https://github.com/shep-pm/shep/actions/runs/{n}/job/1"}}"#
+        )
+    };
+    let contexts = [("WAITING", 1), ("PENDING", 2), ("REQUESTED", 3)]
+        .map(|(status, n)| waiting(status, n))
+        .join(",");
+
+    let HeadStatus::Pending(listed) = rollup(&contexts) else {
+        panic!("a head with unfinished checks is pending");
+    };
+
+    assert_eq!(
+        listed,
+        [1, 2, 3].map(|n| Queued {
+            name: format!("deploy-{n}"),
+            run: Some(n),
+            running: false,
+            held: false,
+        })
+    );
+}
+
 #[test]
 fn a_queued_check_run_whose_link_names_no_run_has_none() {
     let deploy = r#"{"__typename":"CheckRun","name":"deploy","status":"QUEUED","conclusion":"","detailsUrl":"https://ci.example.com/jobs/4"}"#;

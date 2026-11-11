@@ -35,6 +35,20 @@ fn listing(runs: &[(u64, &str, &str, &str)]) -> String {
     format!("[{}]", runs.join(","))
 }
 
+// As `listing`, with the workflow of each run named
+fn listing_of(runs: &[(u64, &str, &str, &str, &str)]) -> String {
+    let runs: Vec<String> = runs
+        .iter()
+        .map(|(id, workflow, conclusion, event, head)| {
+            format!(
+                r#"{{"conclusion":"{conclusion}","databaseId":{id},"event":"{event}","headSha":"{head}",
+                "url":"https://github.com/shep-pm/kelpie/actions/runs/{id}","workflowName":"{workflow}"}}"#
+            )
+        })
+        .collect();
+    format!("[{}]", runs.join(","))
+}
+
 fn ids(runs: Vec<super::runs::FailedRun>) -> Vec<u64> {
     runs.into_iter().map(|r| r.id).collect()
 }
@@ -103,6 +117,46 @@ fn a_run_ended_by_its_timeout_is_listed_for_a_log() {
     assert_eq!(ids(of_queue), [3]);
 }
 
+// Marking a draft ready runs the workflow again on the same commit, and its
+// concurrency group cancels the run before it. That run's jobs were stopped by
+// the later run, not by a timeout, and the later run's own log is the one to read.
+#[test]
+fn a_cancelled_run_a_later_run_of_its_workflow_replaced_is_not_listed() {
+    let runs = listing_of(&[
+        (8, "test", "failure", "pull_request", "abc"),
+        (7, "test", "cancelled", "pull_request", "abc"),
+        (6, "lint", "cancelled", "pull_request", "abc"),
+    ]);
+
+    assert_eq!(
+        ids(failed_runs(runs.as_bytes(), "abc", false).unwrap()),
+        [8, 6]
+    );
+}
+
+#[test]
+fn a_cancelled_run_a_later_run_still_going_replaced_is_not_listed() {
+    let runs = listing_of(&[
+        (8, "test", "", "pull_request", "abc"),
+        (7, "test", "cancelled", "pull_request", "abc"),
+    ]);
+
+    assert_eq!(failed_runs(runs.as_bytes(), "abc", false), Ok(Vec::new()));
+}
+
+#[test]
+fn a_cancelled_run_with_only_older_runs_of_its_workflow_is_listed() {
+    let runs = listing_of(&[
+        (8, "test", "cancelled", "pull_request", "abc"),
+        (7, "test", "success", "pull_request", "abc"),
+    ]);
+
+    assert_eq!(
+        ids(failed_runs(runs.as_bytes(), "abc", false).unwrap()),
+        [8]
+    );
+}
+
 #[test]
 fn a_listing_gh_did_not_print_as_json_is_unreadable() {
     assert!(matches!(
@@ -153,6 +207,8 @@ fn at_most_three_failed_logs_are_read() {
             "list",
             "--repo",
             "shep-pm/kelpie",
+            "--commit",
+            "abc",
             "--limit",
             "50",
             "--json",
@@ -170,6 +226,60 @@ fn at_most_three_failed_logs_are_read() {
             "--log-failed"
         ]
     );
+}
+
+// The repo's newest runs on every branch would push a head's older failed run
+// out of the list, so a head is asked for by its commit
+#[test]
+fn a_heads_runs_are_asked_for_by_its_commit_and_the_queues_by_its_event() {
+    let script = Script::answering(answered("[]"));
+    script.then(answered("[]"));
+    let ci = actions_over(&script);
+
+    ci.logs("abc", false).unwrap();
+    ci.logs("abc", true).unwrap();
+
+    let asked = script.asked();
+    assert_eq!(asked[0][4..6], ["--commit", "abc"]);
+    assert_eq!(asked[1][4..6], ["--event", "merge_group"]);
+}
+
+// One run whose log GitHub no longer keeps must not hide the logs of the others
+#[test]
+fn a_log_gh_cannot_read_leaves_the_other_runs_logs() {
+    let runs = listing(&[
+        (50, "failure", "pull_request", "abc"),
+        (40, "failure", "pull_request", "abc"),
+    ]);
+    let script = Script::answering(answered(&runs));
+    script.then(super::tests::refused("HTTP 410: log has expired"));
+    script.then(answered(&failed_log_of(40)));
+
+    let logs = actions_over(&script).logs("abc", false).unwrap();
+
+    assert_eq!(logs.iter().map(|l| l.run).collect::<Vec<_>>(), [50, 40]);
+    assert!(
+        logs[0].tail.contains("could not be read"),
+        "{}",
+        logs[0].tail
+    );
+    assert!(logs[0].tail.contains("log has expired"), "{}", logs[0].tail);
+    assert_eq!(logs[1].tail, "test\tRun cargo test\terror: boom in run 40");
+}
+
+// A limit used up is every later call's answer too, so it ends the read
+#[test]
+fn a_rate_limit_ends_the_read_of_the_logs() {
+    let runs = listing(&[(50, "failure", "pull_request", "abc")]);
+    let script = Script::answering(answered(&runs));
+    script.then(super::tests::refused(
+        "< HTTP/2.0 403 Forbidden\n< Retry-After: 90\n<\n\
+         gh: You have exceeded a secondary rate limit. (HTTP 403)\n",
+    ));
+
+    let read = actions_over(&script).logs("abc", false);
+
+    assert!(read.is_err(), "{read:?}");
 }
 
 #[test]
