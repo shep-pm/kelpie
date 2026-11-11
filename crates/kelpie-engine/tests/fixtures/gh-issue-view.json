@@ -1,1 +1,7 @@
-{"body":"## Parent\n\n#5\n\n## What to build\n\nKelpie's Rust workspace, with the project runner running under the engine's process tree.\n\n## Acceptance criteria\n\n- [ ] `status` returns JSON with the project's state.\n- [ ] `start` and `pause` change that state.\n\n## Blocked by\n\nNone (can start immediately).\n","labels":[{"name":"ready-for-agent"}],"state":"CLOSED","title":"Project runner skeleton with a status trigger","url":"https://github.com/shep-pm/kelpie/issues/7"}
+{
+  "body": "## Parent\n\n#5\n\n## What to build\n\nKelpie's Rust workspace, with the project runner running under the engine's process tree.\n\n## Acceptance criteria\n\n- [ ] `status` returns JSON with the project's state.\n- [ ] `start` and `pause` change that state.\n\n## Blocked by\n\nNone (can start immediately).\n",
+  "labels": [{ "name": "ready-for-agent" }],
+  "state": "CLOSED",
+  "title": "Project runner skeleton with a status trigger",
+  "url": "https://github.com/shep-pm/kelpie/issues/7"
+}

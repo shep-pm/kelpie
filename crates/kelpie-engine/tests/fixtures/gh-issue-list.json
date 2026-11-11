@@ -1,1 +1,31 @@
-[{"author":{"login":"octocat"},"createdAt":"2026-11-10T21:58:51Z","labels":[{"name":"ready-for-agent"},{"name":"priority: P2"},{"name":"kind:feat"}],"number":163,"title":"feat(app): the PM and workers run on goose when the settings name it"},{"author":{"login":"octocat"},"createdAt":"2026-11-10T21:58:48Z","labels":[{"name":"ready-for-agent"},{"name":"priority: P2"},{"name":"kind:feat"}],"number":162,"title":"feat(app): a worker's finished turn opens its draft pull request, and a refusal reaches the worker as a Note"},{"author":{"login":"hubot"},"createdAt":"2026-11-10T21:58:46Z","labels":[{"name":"ready-for-agent"},{"name":"kind:feat"}],"number":161,"title":"feat(app): the needs-you marker shows on a ticket, the Board panel and a worker's tab"}]
+[
+  {
+    "author": { "login": "octocat" },
+    "createdAt": "2026-11-10T21:58:51Z",
+    "labels": [
+      { "name": "ready-for-agent" },
+      { "name": "priority: P2" },
+      { "name": "kind:feat" }
+    ],
+    "number": 163,
+    "title": "feat(app): the PM and workers run on goose when the settings name it"
+  },
+  {
+    "author": { "login": "octocat" },
+    "createdAt": "2026-11-10T21:58:48Z",
+    "labels": [
+      { "name": "ready-for-agent" },
+      { "name": "priority: P2" },
+      { "name": "kind:feat" }
+    ],
+    "number": 162,
+    "title": "feat(app): a worker's finished turn opens its draft pull request, and a refusal reaches the worker as a Note"
+  },
+  {
+    "author": { "login": "hubot" },
+    "createdAt": "2026-11-10T21:58:46Z",
+    "labels": [{ "name": "ready-for-agent" }, { "name": "kind:feat" }],
+    "number": 161,
+    "title": "feat(app): the needs-you marker shows on a ticket, the Board panel and a worker's tab"
+  }
+]
