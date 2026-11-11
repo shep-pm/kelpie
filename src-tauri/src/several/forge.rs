@@ -6,7 +6,9 @@
 //! after a hand-over sees the pull request the hand-over opened. No call here needs
 //! `gh` or the network.
 //!
-//! Later slices grow it with checks, merges and closes.
+//! A merge pinned to a head the branch no longer holds is refused, as GitHub
+//! refuses it, and a merged pull request leaves the open ones. Later slices grow
+//! it with checks and closes.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -14,7 +16,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use kelpie_engine::github::{ForgeSlug, Timestamp};
 use kelpie_engine::ticket::{
-    ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets,
+    ForgeError, GithubTickets, Issue, Listed, OpenPull, PullState, Pulls, TicketId, Tickets,
 };
 
 use crate::board::poll::Feed;
@@ -53,6 +55,9 @@ pub(super) struct Pull {
 
     /// The tickets its body closes
     pub closes: Vec<TicketId>,
+
+    /// Whether it is open, merged or closed
+    pub state: PullState,
 }
 
 #[derive(Debug, Default)]
@@ -62,6 +67,15 @@ struct State {
 
     /// The commit each branch holds on the forge, which is what a push leaves there
     heads: BTreeMap<String, String>,
+}
+
+impl State {
+    fn pull_mut(&mut self, number: NonZeroU64) -> Result<&mut Pull, ForgeError> {
+        self.pulls
+            .iter_mut()
+            .find(|pull| pull.number == number)
+            .ok_or_else(|| ForgeError::Failed(format!("no pull request {number}")))
+    }
 }
 
 /// The project's GitHub, stood in
@@ -183,6 +197,7 @@ impl GithubTickets for Github {
             .state()
             .pulls
             .iter()
+            .filter(|pull| pull.state == PullState::Open)
             .map(|pull| OpenPull {
                 number: pull.number,
                 branch: pull.branch.clone(),
@@ -225,6 +240,7 @@ impl Pulls for Github {
             body: body.to_owned(),
             draft: true,
             closes: closes(body),
+            state: PullState::Open,
         });
         Ok(number)
     }
@@ -244,5 +260,30 @@ impl Pulls for Github {
         pull.body = body.to_owned();
         pull.closes = closes(body);
         Ok(())
+    }
+
+    fn state(&self, number: NonZeroU64) -> Result<PullState, ForgeError> {
+        self.state().pull_mut(number).map(|pull| pull.state)
+    }
+
+    fn mark_ready(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        self.state().pull_mut(number)?.draft = false;
+        Ok(())
+    }
+
+    fn merge(&self, number: NonZeroU64, head: &str) -> Result<(), ForgeError> {
+        let mut state = self.state();
+        let branch = state.pull_mut(number)?.branch.clone();
+        if state.heads.get(&branch).map(String::as_str) != Some(head) {
+            return Err(ForgeError::Failed(
+                "Head branch was modified. Review and try the merge again.".to_owned(),
+            ));
+        }
+        state.pull_mut(number)?.state = PullState::Merged;
+        Ok(())
+    }
+
+    fn disable_auto_merge(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        self.state().pull_mut(number).map(drop)
     }
 }
