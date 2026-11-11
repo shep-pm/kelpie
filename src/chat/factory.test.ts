@@ -133,6 +133,91 @@ describe("createChat", () => {
   });
 });
 
+describe("a transport's watch", () => {
+  it("is attached on load, and its events fold into the turns", async () => {
+    const watched: Channel<SessionEvent>[] = [];
+    const mine = {
+      ...workerTransport(),
+      watch: vi.fn((channel: Channel<SessionEvent>) => {
+        watched.push(channel);
+      }),
+    };
+    mine.history.mockResolvedValueOnce({
+      status: "ok",
+      data: [
+        { entry: "user", text: "build it" },
+        { entry: "event", kind: "text", delta: "Started" },
+      ],
+    });
+    const chat = createChat(mine);
+
+    await chat.getState().load();
+    await chat.getState().load();
+
+    expect(mine.watch).toHaveBeenCalledTimes(1);
+    watched[0]?.onmessage({ kind: "text", delta: " working" });
+    expect(chat.getState().turns.map((t) => [t.reply, t.state])).toEqual([
+      ["Started working", "running"],
+    ]);
+    expect(pmHistory).not.toHaveBeenCalled();
+  });
+
+  it("holds an event that arrives before the history, and folds it after", async () => {
+    const mine = {
+      ...workerTransport(),
+      watch: vi.fn((channel: Channel<SessionEvent>) => {
+        channel.onmessage({ kind: "text", delta: " early" });
+      }),
+    };
+    mine.history.mockResolvedValueOnce({
+      status: "ok",
+      data: [
+        { entry: "user", text: "build it" },
+        { entry: "event", kind: "text", delta: "Late" },
+      ],
+    });
+    const chat = createChat(mine);
+
+    await chat.getState().load();
+
+    expect(chat.getState().turns.map((t) => t.reply)).toEqual(["Late early"]);
+  });
+
+  it("stops following when the chat closes", async () => {
+    const watched: Channel<SessionEvent>[] = [];
+    const mine = {
+      ...workerTransport(),
+      watch: (channel: Channel<SessionEvent>) => {
+        watched.push(channel);
+      },
+      unwatch: vi.fn(async (_channel: Channel<SessionEvent>) => {}),
+    };
+    mine.history.mockResolvedValueOnce({
+      status: "ok",
+      data: [{ entry: "user", text: "build it" }],
+    });
+    const chat = createChat(mine);
+    await chat.getState().load();
+
+    chat.getState().close();
+    watched[0]?.onmessage({ kind: "text", delta: "after" });
+
+    expect(mine.unwatch).toHaveBeenCalledWith(watched[0]);
+    expect(chat.getState().turns[0]?.reply).toBe("");
+  });
+
+  it("is not attached by a transport without one", async () => {
+    const mine = workerTransport();
+    const chat = createChat(mine);
+
+    await chat.getState().load();
+
+    expect(mine.history).toHaveBeenCalledTimes(1);
+    expect("watch" in mine).toBe(false);
+    expect(chat.getState().turns).toEqual([]);
+  });
+});
+
 describe("ChatProvider", () => {
   it("gives ChatBox its own store, and ChatBox with none uses the PM's", async () => {
     const mine = workerTransport();
