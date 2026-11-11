@@ -3,6 +3,7 @@
 use std::num::NonZeroU64;
 
 use super::TicketId;
+use crate::ci::HeadStatus;
 use crate::github::Timestamp;
 
 /// A ticket as its source holds it
@@ -44,4 +45,13 @@ pub struct OpenPull {
     pub draft: bool,
     /// The tickets of this repo it closes when it merges, in the order GitHub lists them
     pub closes: Vec<TicketId>,
+    /// The commit its branch holds, in full
+    pub head: String,
+    /// The branch it is opened against
+    pub base: String,
+    /// Its labels' names
+    pub labels: Vec<String>,
+    /// Where CI stands on its head, [`HeadStatus::None`] when the head has no
+    /// check or no commit was listed
+    pub checks: HeadStatus,
 }

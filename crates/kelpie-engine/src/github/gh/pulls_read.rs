@@ -1,32 +1,40 @@
 //! The open pull requests of a repo, and the tickets each closes
 //!
-//! One paged GraphQL query reads each pull request's number, head branch, draft
-//! flag and closing references. A ticket is in Review while a pull request
+//! One paged GraphQL query reads each pull request's number, head branch and
+//! commit, base branch, labels, draft flag, closing references and the checks of
+//! its last commit, so the gate reads a pull request once per pass. A ticket is in Review while a pull request
 //! closing it is open (`docs/design/tickets.md`, The board).
 
 use serde::Deserialize;
 
+use super::checks::{COMMIT_FIELDS, Commit};
 use super::hold::Hold;
 use super::unreadable;
+use crate::ci::HeadStatus;
 use crate::github::ForgeSlug;
 use crate::ticket::{ForgeError, OpenPull, TicketId};
 
 // A page holds 100, so each 100 more open pull requests cost one more query
-const QUERY: &str = "query($owner: String!, $name: String!, $after: String) { \
+//
+// The last commit's checks are the commit read of `checks::COMMIT_FIELDS`, so a
+// head's status reads the same either way. A page of 100 pull requests, each with
+// its rollup, stays well under GitHub's node limit.
+const QUERY_HEAD: &str = "query($owner: String!, $name: String!, $after: String) { \
     repository(owner: $owner, name: $name) { \
     pullRequests(states: OPEN, first: 100, after: $after, \
     orderBy: {field: CREATED_AT, direction: DESC}) { \
     pageInfo { hasNextPage endCursor } nodes { \
-    number headRefName isDraft \
+    number headRefName headRefOid baseRefName isDraft labels(first: 50) { nodes { name } } \
     closingIssuesReferences(first: 50) { nodes { number repository { name owner { login } } } } \
-    } } } }";
+    commits(last: 1) { nodes { commit { ";
+const QUERY_TAIL: &str = " } } } } } } }";
 
 // As many pages as hold a thousand pull requests, past which the read stops
 const MAX_PAGES: usize = 10;
 
 /// Every open pull request of `repo`, newest first
 pub(super) fn open_pulls(hold: &Hold, repo: &ForgeSlug) -> Result<Vec<OpenPull>, ForgeError> {
-    let query = format!("query={QUERY}");
+    let query = format!("query={QUERY_HEAD}{COMMIT_FIELDS}{QUERY_TAIL}");
     let owner = format!("owner={}", repo.owner());
     let name = format!("name={}", repo.name());
     let mut pulls = Vec::new();
@@ -92,8 +100,28 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
     struct Node {
         number: u64,
         head_ref_name: String,
+        head_ref_oid: String,
+        base_ref_name: String,
         is_draft: bool,
+        labels: Labels,
         closing_issues_references: Closing,
+        commits: Commits,
+    }
+    #[derive(Deserialize)]
+    struct Labels {
+        nodes: Vec<Label>,
+    }
+    #[derive(Deserialize)]
+    struct Label {
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Commits {
+        nodes: Vec<Tip>,
+    }
+    #[derive(Deserialize)]
+    struct Tip {
+        commit: Commit,
     }
     #[derive(Deserialize)]
     struct Closing {
@@ -141,6 +169,11 @@ fn parse_page(stdout: &[u8], repo: &ForgeSlug) -> Result<Page, ForgeError> {
                 number: std::num::NonZeroU64::new(node.number)?,
                 branch: node.head_ref_name,
                 draft: node.is_draft,
+                head: node.head_ref_oid,
+                base: node.base_ref_name,
+                labels: node.labels.nodes.into_iter().map(|l| l.name).collect(),
+                checks: (node.commits.nodes.into_iter().next())
+                    .map_or(HeadStatus::None, |tip| tip.commit.head_status()),
                 closes: node
                     .closing_issues_references
                     .nodes

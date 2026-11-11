@@ -10,7 +10,15 @@
           {
             "number": 81,
             "headRefName": "worktree-kelpie-79",
+            "headRefOid": "8e1d0c5b7a2f4e9d3c6b1a0f9e8d7c6b5a4f3e2d",
+            "baseRefName": "main",
             "isDraft": true,
+            "labels": {
+              "nodes": []
+            },
+            "commits": {
+              "nodes": []
+            },
             "closingIssuesReferences": {
               "nodes": []
             }
@@ -18,7 +26,68 @@
           {
             "number": 66,
             "headRefName": "kelpie/63",
+            "headRefOid": "3b7f2a9c4d1e8f60a5b2c7d9e4f1a8b3c6d0e5f7",
+            "baseRefName": "release",
             "isDraft": false,
+            "labels": {
+              "nodes": [
+                {
+                  "name": "ready-for-agent"
+                },
+                {
+                  "name": "priority: P1"
+                }
+              ]
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "contexts": {
+                        "nodes": [
+                          {
+                            "__typename": "CheckRun",
+                            "name": "commits",
+                            "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                            "completedAt": "2026-11-10T09:14:02Z",
+                            "startedAt": "2026-11-10T09:13:41Z",
+                            "detailsUrl": "https://github.com/shep-pm/kelpie/actions/runs/38900000001/job/110000000001",
+                            "checkSuite": {
+                              "workflowRun": {
+                                "workflow": {
+                                  "name": "commits"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "__typename": "CheckRun",
+                            "name": "test",
+                            "status": "COMPLETED",
+                            "conclusion": "FAILURE",
+                            "completedAt": "2026-11-10T09:20:11Z",
+                            "startedAt": "2026-11-10T09:13:44Z",
+                            "detailsUrl": "https://github.com/shep-pm/kelpie/actions/runs/38900000002/job/110000000002",
+                            "checkSuite": {
+                              "workflowRun": {
+                                "workflow": {
+                                  "name": "test"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "checkSuites": {
+                      "nodes": []
+                    }
+                  }
+                }
+              ]
+            },
             "closingIssuesReferences": {
               "nodes": [
                 {

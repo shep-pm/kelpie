@@ -4,6 +4,7 @@ use std::num::NonZeroU64;
 use std::path::Path;
 
 use super::*;
+use crate::ci::HeadStatus;
 use crate::ticket::fake::{FakePulls, FakeTickets, PullCall};
 use crate::ticket::{ForgeError, OpenPull};
 use crate::worker::hand_over::{APPLIED, HandOver, Outcome, Text, Untitled, after_turn, parse};
@@ -73,6 +74,10 @@ fn open_draft(pulls: NonZeroU64) -> Vec<OpenPull> {
         branch: BRANCH.to_owned(),
         draft: true,
         closes: Vec::new(),
+        head: "0".repeat(40),
+        base: "main".to_owned(),
+        labels: Vec::new(),
+        checks: HeadStatus::None,
     }]
 }
 

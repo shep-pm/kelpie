@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use kelpie_engine::ci::HeadStatus;
 use kelpie_engine::github::{ForgeSlug, Timestamp};
 use kelpie_engine::ticket::{
     ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets,
@@ -179,8 +180,8 @@ impl GithubTickets for Github {
     }
 
     fn open_pulls(&self) -> Result<Vec<OpenPull>, ForgeError> {
-        Ok(self
-            .state()
+        let state = self.state();
+        Ok(state
             .pulls
             .iter()
             .map(|pull| OpenPull {
@@ -188,6 +189,10 @@ impl GithubTickets for Github {
                 branch: pull.branch.clone(),
                 draft: pull.draft,
                 closes: pull.closes.clone(),
+                head: state.heads.get(&pull.branch).cloned().unwrap_or_default(),
+                base: pull.base.clone(),
+                labels: Vec::new(),
+                checks: HeadStatus::None,
             })
             .collect())
     }

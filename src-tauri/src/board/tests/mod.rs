@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use kelpie_engine::ci::HeadStatus;
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::run::RunId;
 use kelpie_engine::settings::PickUp;
@@ -251,6 +252,10 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
         branch: "kelpie/14".to_owned(),
         draft: true,
         closes: vec![id(14)],
+        head: "0".repeat(40),
+        base: "main".to_owned(),
+        labels: Vec::new(),
+        checks: HeadStatus::None,
     }]));
 
     let event = rig.poller.read().unwrap();

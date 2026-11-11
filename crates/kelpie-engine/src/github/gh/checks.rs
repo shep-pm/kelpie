@@ -23,15 +23,19 @@ use crate::ticket::ForgeError;
 // names its workflow through its suite's run, since `CheckRun` names none of its
 // own. The suites count their check runs by `totalCount`, which is all
 // `Suites::fold` reads of them.
-const QUERY: &str = "query($owner: String!, $name: String!, $oid: GitObjectID!) { \
-    repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { \
-    statusCheckRollup { contexts(first: 100) { nodes { __typename \
+//
+// `COMMIT_FIELDS` is what `Commit` reads, shared with the open pull request
+// listing, which asks for it on each pull request's last commit.
+pub(super) const COMMIT_FIELDS: &str = "statusCheckRollup { contexts(first: 100) { nodes { __typename \
     ... on CheckRun { name status conclusion completedAt startedAt detailsUrl \
     checkSuite { workflowRun { workflow { name } } } } \
     ... on StatusContext { context state targetUrl } } } } \
     checkSuites(first: 50) { nodes { conclusion checkRuns(first: 1) { totalCount } \
-    workflowRun { url file { path } } } } \
-    } } } }";
+    workflowRun { url file { path } } } }";
+
+const QUERY_HEAD: &str = "query($owner: String!, $name: String!, $oid: GitObjectID!) { \
+    repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { ";
+const QUERY_TAIL: &str = " } } } }";
 
 /// Where CI stands on `head` of `repo`
 pub(super) fn head_status(
@@ -39,7 +43,7 @@ pub(super) fn head_status(
     repo: &ForgeSlug,
     head: &str,
 ) -> Result<HeadStatus, ForgeError> {
-    let query = format!("query={QUERY}");
+    let query = format!("query={QUERY_HEAD}{COMMIT_FIELDS}{QUERY_TAIL}");
     let owner = format!("owner={}", repo.owner());
     let name = format!("name={}", repo.name());
     let oid = format!("oid={head}");
@@ -63,29 +67,40 @@ pub(super) fn parse_head(stdout: &[u8]) -> Result<HeadStatus, ForgeError> {
     struct Repository {
         object: Option<Commit>,
     }
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Commit {
-        status_check_rollup: Option<Rollup>,
-        #[serde(default)]
-        check_suites: Suites,
-    }
-    #[derive(Deserialize)]
-    struct Rollup {
-        contexts: Contexts,
-    }
-    #[derive(Deserialize)]
-    struct Contexts {
-        nodes: Vec<Check>,
-    }
     let reply: Reply = serde_json::from_slice(stdout).map_err(|_| unreadable(stdout))?;
     let Some(commit) = reply.data.repository.object else {
         return Ok(HeadStatus::None);
     };
-    let contexts = commit
-        .status_check_rollup
-        .map_or_else(Vec::new, |rollup| rollup.contexts.nodes);
-    Ok(commit.check_suites.fold(status(&contexts)))
+    Ok(commit.head_status())
+}
+
+/// A commit's checks, as `COMMIT_FIELDS` asks for them
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Commit {
+    status_check_rollup: Option<Rollup>,
+    #[serde(default)]
+    check_suites: Suites,
+}
+
+#[derive(Deserialize)]
+struct Rollup {
+    contexts: Contexts,
+}
+
+#[derive(Deserialize)]
+struct Contexts {
+    nodes: Vec<Check>,
+}
+
+impl Commit {
+    /// Where CI stands on this commit
+    pub(super) fn head_status(self) -> HeadStatus {
+        let contexts = self
+            .status_check_rollup
+            .map_or_else(Vec::new, |rollup| rollup.contexts.nodes);
+        self.check_suites.fold(status(&contexts))
+    }
 }
 
 // GitHub has two kinds of check: an Actions-style check run, and a commit
