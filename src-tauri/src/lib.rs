@@ -71,6 +71,9 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             agents::agent_save,
             agents::agent_new,
             workers::worker_start,
+            workers::worker_watch,
+            workers::worker_unwatch,
+            workers::worker_resume,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()
