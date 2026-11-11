@@ -25,6 +25,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@/bindings", () => ({
   commands: {
     projectGet: async () => "/work/project",
+    workerWatch: async () => ({
+      status: "ok",
+      data: [
+        { entry: "user", text: "Open the draft pull request" },
+        { entry: "event", kind: "text", delta: "I read the issue." },
+      ],
+    }),
+    workerUnwatch: async () => ({ status: "ok", data: null }),
     boardWatch: async (channel: { onmessage: (event: unknown) => void }) => {
       channel.onmessage({
         kind: "board",
@@ -37,6 +45,15 @@ vi.mock("@/bindings", () => ({
             priority: null,
             column: "ready",
             url: "https://github.com/o/r/issues/12",
+            pull_url: null,
+            needs_you: [],
+          },
+          {
+            id: "13",
+            title: "Open the draft",
+            priority: null,
+            column: "building",
+            url: "https://github.com/o/r/issues/13",
             pull_url: null,
             needs_you: [],
           },
@@ -118,6 +135,28 @@ describe("the shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore Board" }));
     expect(pm()).toBeTruthy();
     expect(board()).toBeTruthy();
+  });
+
+  it("clicking a Building ticket opens its worker's tab, closing it hides it, and clicking again reopens it with its history", async () => {
+    render(<Shell onSettings={() => {}} />);
+
+    const building = await screen.findByRole("group", { name: "Building" });
+    fireEvent.click(within(building).getByText("Open the draft"));
+
+    const tab = await screen.findByRole("tab", { name: "#13" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("I read the issue.")).toBeTruthy();
+    // The PM's own composer stays mounted behind the tab, hidden.
+    const panel = screen.getByText("I read the issue.").closest("main");
+    expect(panel && within(panel).queryByLabelText("Message")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close #13" }));
+    expect(screen.queryByRole("tab", { name: "#13" })).toBeNull();
+    expect(screen.queryByText("I read the issue.")).toBeNull();
+
+    fireEvent.click(within(building).getByText("Open the draft"));
+    expect(await screen.findByRole("tab", { name: "#13" })).toBeTruthy();
+    expect(await screen.findByText("I read the issue.")).toBeTruthy();
   });
 
   it("opens the settings from the gear in the PM's header", () => {

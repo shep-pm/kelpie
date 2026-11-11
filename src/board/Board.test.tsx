@@ -194,6 +194,33 @@ describe("the Board panel", () => {
     expect(workerStart).toHaveBeenCalledTimes(1);
   });
 
+  it("a successful Start calls onOpenWorker with the ticket's id and title", async () => {
+    const { onOpenWorker } = await open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+
+    await waitFor(() =>
+      expect(onOpenWorker).toHaveBeenCalledWith({
+        id: "12",
+        title: "Wire the poller",
+      }),
+    );
+    expect(onOpenWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Start that fails or waits for a slot opens no worker", async () => {
+    workerStart.mockResolvedValueOnce(err("The ticket is closed."));
+    workerStart.mockResolvedValueOnce(ok({ ticket: "12", waiting: true }));
+    const { onOpenWorker } = await open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+    await screen.findByText("The ticket is closed.");
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+    await screen.findByText("#12 waits for a slot.");
+
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
   it("a Start that fails shows its error line", async () => {
     workerStart.mockResolvedValueOnce(err("The ticket is closed."));
     await open();
@@ -382,12 +409,15 @@ describe("the Board panel", () => {
     );
   });
 
-  it("clicking a Building ticket calls onOpenWorker with its id", async () => {
+  it("clicking a Building ticket calls onOpenWorker with its id and title", async () => {
     const { onOpenWorker } = await open();
 
     fireEvent.click(card("Open the draft"));
 
-    expect(onOpenWorker).toHaveBeenCalledWith("13");
+    expect(onOpenWorker).toHaveBeenCalledWith({
+      id: "13",
+      title: "Open the draft",
+    });
     expect(openLink).not.toHaveBeenCalled();
   });
 
