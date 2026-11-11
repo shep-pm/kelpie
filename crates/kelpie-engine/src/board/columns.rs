@@ -41,7 +41,8 @@ const LOWEST_PRIORITY: u8 = 4;
 ///
 /// A listed issue is a ticket when it carries the ready label, when the
 /// setting is Everyone, or when its author is the signed-in login, compared
-/// without regard to case. An issue listed more than once is one ticket: the
+/// without regard to case. Every entry of the ready list is a ticket, since
+/// GitHub matched its label without regard to case. An issue listed more than once is one ticket: the
 /// closed list's entry wins, then the ready list's, then the open list's.
 ///
 /// A ticket's column is the first that holds: Done when its issue is closed,
@@ -58,7 +59,10 @@ pub fn place(read: &Read, workers: &[Record], rules: &Rules) -> Board {
     ];
     for (index, (list, listed_ready)) in lists.into_iter().enumerate() {
         let closed = index == 2;
-        for listed in list.iter().filter(|listed| is_ticket(listed, rules)) {
+        for listed in list
+            .iter()
+            .filter(|listed| listed_ready || is_ticket(listed, rules))
+        {
             let ready = listed_ready || carries(listed, &rules.ready_label);
             entries
                 .entry(listed.id)

@@ -202,6 +202,22 @@ fn the_ready_label_makes_a_ticket_under_either_setting() {
 }
 
 #[test]
+fn an_entry_of_the_ready_list_is_a_ticket_whatever_the_case_of_its_label() {
+    let read = Read {
+        ready: vec![issue(1, "someone", &["ready-for-agent"])],
+        ..Read::default()
+    };
+    let rules = Rules {
+        ready_label: "Ready-For-Agent".to_owned(),
+        ..me()
+    };
+
+    let board = place(&read, &[], &rules);
+
+    assert_eq!(column_of(&board, 1), Some(Column::Ready));
+}
+
+#[test]
 fn an_issue_in_both_lists_is_one_ticket_in_ready() {
     let mut in_ready = issue(1, "rin", &[READY]);
     in_ready.title = "from the ready list".to_owned();
