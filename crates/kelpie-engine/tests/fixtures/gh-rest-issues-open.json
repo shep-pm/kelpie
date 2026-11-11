@@ -1,0 +1,49 @@
+[
+  {
+    "number": 163,
+    "title": "feat(app): the PM and workers run on goose when the settings name it",
+    "body": "The body.",
+    "state": "open",
+    "created_at": "2026-11-10T21:58:51Z",
+    "updated_at": "2026-11-10T22:10:00Z",
+    "closed_at": null,
+    "user": { "login": "octocat", "type": "User" },
+    "labels": [{ "name": "ready-for-agent" }, { "name": "kind:feat" }]
+  },
+  {
+    "number": 160,
+    "title": "fix(engine): a pull request listed beside the issues",
+    "body": null,
+    "state": "open",
+    "created_at": "2026-11-10T20:00:00Z",
+    "updated_at": "2026-11-10T20:30:00Z",
+    "closed_at": null,
+    "user": { "login": "octocat", "type": "User" },
+    "labels": [],
+    "pull_request": {
+      "url": "https://api.github.com/repos/shep-pm/kelpie/pulls/160"
+    }
+  },
+  {
+    "number": 161,
+    "title": "chore(deps): bump serde",
+    "body": "",
+    "state": "open",
+    "created_at": "2026-11-10T19:00:00Z",
+    "updated_at": "2026-11-10T19:00:00Z",
+    "closed_at": null,
+    "user": { "login": "dependabot[bot]", "type": "Bot" },
+    "labels": [{ "name": "dependencies" }]
+  },
+  {
+    "number": 150,
+    "title": "docs: an issue whose author deleted the account",
+    "body": "Left behind.",
+    "state": "open",
+    "created_at": "2026-11-09T08:00:00Z",
+    "updated_at": "2026-11-09T08:00:00Z",
+    "closed_at": null,
+    "user": null,
+    "labels": []
+  }
+]

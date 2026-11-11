@@ -78,6 +78,10 @@ tokio = { version = "1.54", default-features = false, features = [
 # Ends a session's connections when its tools are dropped
 tokio-util = { version = "0.7.20", default-features = false }
 
+# GitHub's ISO 8601 moments in whole seconds (`github::gh::listing::time`), SK's
+# choice. `std` is the parser, with no time zone database.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+
 # Reads `docs/parity.toml` in the engine's tests (the harness parity matrix)
 toml = { version = "1.2", default-features = false, features = ["std", "parse", "serde"] }
 # Unix: the child-subreaper flag (Linux), `openat` without following a link in
