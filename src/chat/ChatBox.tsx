@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { commands } from "@/bindings";
+import { useBoard } from "@/board/store";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
@@ -156,7 +157,11 @@ function PickFolder({ onPicked }: { onPicked: (folder: string) => void }) {
   async function pick() {
     const result = await commands.projectPick();
     if (result.status === "error") setError(result.error);
-    else if (result.data) onPicked(result.data);
+    else if (result.data) {
+      onPicked(result.data);
+      // The board watched before any project existed and was refused.
+      useBoard.getState().rewatch();
+    }
   }
 
   return (

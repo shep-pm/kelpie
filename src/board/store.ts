@@ -17,6 +17,12 @@ type BoardState = {
    */
   watch: () => void;
   /**
+   * Ask again on a new channel, for the readers already counted, since a watch
+   * that failed leaves the engine holding no channel to the window (no project
+   * was picked yet). Adds no reader, and does nothing while none is reading.
+   */
+  rewatch: () => void;
+  /**
    * Stop reading. The stream ends with the last reader: the window drops what
    * the engine still sends only once nothing is reading it.
    */
@@ -62,10 +68,9 @@ const empty = { view: null, unavailable: null } satisfies Partial<BoardState>;
  * keeps the counts on a folded panel and on a worker's tab current while the
  * board body comes and goes.
  */
-export const useBoard = create<BoardState>()((set) => ({
-  ...empty,
-  watch: () => {
-    readers += 1;
+export const useBoard = create<BoardState>()((set) => {
+  /** Open a channel in place of any before, and send `boardWatch` with it in turn. */
+  const openChannel = () => {
     const channel = new Channel<BoardEvent>();
     open = channel;
     channel.onmessage = (event) => {
@@ -89,18 +94,29 @@ export const useBoard = create<BoardState>()((set) => ({
     before = before.then(send).then((problem) => {
       if (problem !== null && open === channel) set({ unavailable: problem });
     });
-  },
-  close: () => {
-    readers = readers > 0 ? readers - 1 : 0;
-    // Something else is still reading, so the stream stays open for it.
-    if (readers > 0) return;
-    if (open) open.onmessage = () => {};
-    open = null;
-  },
-  reset: () => {
-    readers = 0;
-    if (open) open.onmessage = () => {};
-    open = null;
-    set(empty);
-  },
-}));
+  };
+
+  return {
+    ...empty,
+    watch: () => {
+      readers += 1;
+      openChannel();
+    },
+    rewatch: () => {
+      if (readers > 0) openChannel();
+    },
+    close: () => {
+      readers = readers > 0 ? readers - 1 : 0;
+      // Something else is still reading, so the stream stays open for it.
+      if (readers > 0) return;
+      if (open) open.onmessage = () => {};
+      open = null;
+    },
+    reset: () => {
+      readers = 0;
+      if (open) open.onmessage = () => {};
+      open = null;
+      set(empty);
+    },
+  };
+});

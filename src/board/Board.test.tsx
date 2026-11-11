@@ -620,6 +620,26 @@ describe("the Board panel", () => {
     expect(screen.queryByRole("group")).toBeNull();
   });
 
+  it("rewatch reads the board after a watch that failed for want of a project", async () => {
+    boardWatch.mockResolvedValueOnce(err("No project is picked."));
+    render(<Board onOpenWorker={() => {}} />);
+    await statusLine("No project is picked.");
+
+    act(() => useBoard.getState().rewatch());
+    await waitFor(() => expect(boardWatch).toHaveBeenCalledTimes(2));
+    await emitBoard();
+
+    expect(screen.getAllByRole("group")).toHaveLength(5);
+    expect(screen.queryByText("No project is picked.")).toBeNull();
+  });
+
+  it("rewatch does nothing while nothing reads the board", async () => {
+    useBoard.getState().rewatch();
+    await settle();
+
+    expect(boardWatch).not.toHaveBeenCalled();
+  });
+
   it("a new board view replaces the tickets", async () => {
     await open();
 
