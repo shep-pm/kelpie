@@ -100,7 +100,10 @@ impl Field {
             Self::Provider | Self::Host | Self::ReplyStyle | Self::WorkerTurnTimeout => {
                 GLOBAL_AND_PROJECT
             }
-            Self::NetworkAllowlist | Self::ReadAnywhere | Self::HarnessGlobalFolder => PROJECT,
+            Self::NetworkAllowlist
+            | Self::ReadAnywhere
+            | Self::HarnessGlobalFolder
+            | Self::RunWithoutSandbox => PROJECT,
             // A lease is the machine's, so its capacity is one value for every
             // project, and so is the appearance of the window they share
             Self::BridgeUpdates | Self::LeaseCapacity | Self::Theme => GLOBAL,
@@ -171,6 +174,11 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             global,
             project,
             BUILT_IN.harness_global_folder,
+        )?,
+        run_without_sandbox: Field::RunWithoutSandbox.resolve(
+            global,
+            project,
+            BUILT_IN.run_without_sandbox,
         )?,
         bridge_updates: Field::BridgeUpdates.resolve(global, project, BTreeMap::new())?,
         lease_capacity: Field::LeaseCapacity.resolve(
