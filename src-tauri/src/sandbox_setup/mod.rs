@@ -25,7 +25,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use kelpie_engine::sandbox::Refusal;
+use kelpie_engine::sandbox::{Refusal, SandboxError};
 use serde::Serialize;
 use tauri::State;
 
@@ -173,6 +173,26 @@ impl SandboxSetup {
     pub fn view(&self) -> SandboxView {
         *self.found.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The started value, only once `ready` has run a command in it and passed
+///
+/// A start only builds a sandbox. bwrap's refusal first shows when something
+/// runs inside it, and then as bwrap's own stderr. Running `ready` first turns
+/// that into the [`SandboxError`] the engine reads from it, in kelpie's words.
+/// `ready` runs only when `started` is `Ok`, so a failed start keeps its own
+/// error.
+///
+/// # Errors
+///
+/// The start's own error, or the one `ready` gives.
+pub fn proven<T>(
+    started: Result<T, SandboxError>,
+    ready: impl FnOnce(&T) -> Result<(), SandboxError>,
+) -> Result<T, SandboxError> {
+    let value = started?;
+    ready(&value)?;
+    Ok(value)
 }
 
 /// What the PM's last start found about its sandbox
