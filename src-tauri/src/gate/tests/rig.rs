@@ -289,6 +289,32 @@ impl Rig {
         git(&worktree, &["rev-parse", "HEAD"])
     }
 
+    /// The worker on `ticket` commits what it staged and pushes, and the pushed head is returned
+    pub(super) fn commit_staged(&self, ticket: &str) -> String {
+        let worktree = self.worktree(ticket);
+        git(&worktree, &["commit", "--quiet", "-m", "more work"]);
+        git(
+            &worktree,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("HEAD:refs/heads/kelpie/{ticket}"),
+            ],
+        );
+        git(&worktree, &["rev-parse", "HEAD"])
+    }
+
+    /// Set the status of `ticket`'s record, as the maintainer's Resume or a turn would
+    pub(super) fn set_status(&self, ticket: &str, status: Status) {
+        let records = self.state.workers().records(&self.project).unwrap();
+        records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_status(ticket, status)
+            .unwrap();
+    }
+
     /// `main` takes a commit that sets `text` at `file`
     pub(super) fn main_moves(&self, file: &str, text: &str) {
         let other = self.root.join("other");

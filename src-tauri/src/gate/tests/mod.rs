@@ -11,6 +11,8 @@ mod rig;
 
 use kelpie_engine::ci::{HeadStatus, Queued};
 use kelpie_engine::session::fake::{FakeAgent, Turn};
+use kelpie_engine::ticket::PullState;
+use kelpie_engine::ticket::fake::PullCall;
 use kelpie_engine::worker::{Seat, Status};
 use rig::{Rig, git};
 
@@ -177,4 +179,197 @@ fn a_fourth_conflict_rules_and_aborts_the_merge() {
         rig.agent.params("session/prompt").is_empty(),
         "no fourth turn was sent"
     );
+}
+
+/// A worker that committed a harness's own file, which the gate rules on
+fn fenced(rig: &Rig) -> String {
+    rig.worker_on(TICKET, "work.txt", "mine\n");
+    let worktree = rig.worktree(TICKET);
+    std::fs::create_dir_all(worktree.join(".claude")).unwrap();
+    std::fs::write(worktree.join(".claude/settings.json"), "{}\n").unwrap();
+    git(&worktree, &["add", ".claude/settings.json"]);
+    rig.commit_staged(TICKET)
+}
+
+#[test]
+fn a_ruling_records_the_worker_waiting_with_its_reason_and_holds_no_slot() {
+    let rig = rig();
+    let head = fenced(&rig);
+
+    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
+
+    let record = rig.record(TICKET);
+    assert_eq!(record.status, Status::WaitingOnMaintainer);
+    assert!(
+        record
+            .reason
+            .as_deref()
+            .is_some_and(|why| why.contains(".claude/settings.json")),
+        "{:?}",
+        record.reason
+    );
+    assert_eq!(record.seat, Seat::Without, "a ruled worker holds no slot");
+}
+
+#[test]
+fn a_ruled_ticket_gets_no_pass_until_its_head_moves() {
+    let rig = rig();
+    let head = fenced(&rig);
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.read(std::slice::from_ref(&pull));
+    assert_eq!(rig.record(TICKET).status, Status::WaitingOnMaintainer);
+    // A pass clears this, so a pass that ran again would show
+    rig.gate
+        .keep_for_test(TICKET, |kept| kept.ready = Some("planted".to_owned()));
+
+    rig.read(std::slice::from_ref(&pull));
+    assert!(
+        rig.gate.ready().contains(TICKET),
+        "no pass ran at the head it ruled on"
+    );
+
+    // The worker takes the file out, which moves the head
+    let worktree = rig.worktree(TICKET);
+    git(&worktree, &["rm", "--quiet", ".claude/settings.json"]);
+    let moved = rig.commit_staged(TICKET);
+    rig.read(&[rig.pull(TICKET, &moved, HeadStatus::Passed)]);
+    assert!(
+        !rig.gate.ready().contains(TICKET),
+        "a pass ran at the new head"
+    );
+    assert_eq!(
+        rig.record(TICKET).status,
+        Status::Ended,
+        "the ruling is given up, and the ticket is back in the gate"
+    );
+}
+
+#[test]
+fn a_pull_merged_by_hand_leaves_the_gate() {
+    let rig = rig();
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.read(std::slice::from_ref(&pull));
+    assert!(rig.gate.kept(TICKET).is_some(), "the gate kept the ticket");
+    rig.pulls.script_state(pull.number, Ok(PullState::Merged));
+
+    rig.read(&[]);
+
+    assert!(rig.gate.kept(TICKET).is_none(), "the ticket left the gate");
+    assert_eq!(rig.pulls.calls(), [PullCall::State(pull.number)]);
+    assert_eq!(
+        rig.record(TICKET).status,
+        Status::Ended,
+        "nothing was ruled"
+    );
+}
+
+#[test]
+fn a_pull_closed_on_github_is_the_closed_ruling() {
+    let rig = rig();
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.read(std::slice::from_ref(&pull));
+    rig.pulls.script_state(pull.number, Ok(PullState::Closed));
+
+    rig.read(&[]);
+
+    let record = rig.record(TICKET);
+    assert_eq!(record.status, Status::WaitingOnMaintainer);
+    assert_eq!(
+        record.reason.as_deref(),
+        Some("The pull request was closed without merging.")
+    );
+}
+
+#[test]
+fn a_run_stuck_queued_past_the_ci_wait_is_rerun_once() {
+    let rig = rig();
+    rig.ci_waits(1);
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let stuck = HeadStatus::Pending(vec![Queued {
+        name: "test".to_owned(),
+        run: Some(42),
+        running: false,
+        held: false,
+    }]);
+    let pull = rig.pull(TICKET, &head, stuck);
+
+    rig.read(std::slice::from_ref(&pull));
+    assert!(rig.ci.reruns().is_empty(), "the wait has not passed");
+    rig.clock.advance(SETTLE + 60);
+    rig.read(std::slice::from_ref(&pull));
+    rig.read(std::slice::from_ref(&pull));
+
+    assert_eq!(rig.ci.reruns(), [42], "the run was rerun once, not again");
+}
+
+#[test]
+fn a_green_head_on_the_latest_base_is_ready_to_merge_and_needs_you() {
+    let rig = rig();
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+
+    rig.read(std::slice::from_ref(&pull));
+    assert!(rig.gate.ready().is_empty(), "the checks have not settled");
+    rig.clock.advance(SETTLE);
+    rig.read(std::slice::from_ref(&pull));
+
+    assert_eq!(rig.gate.ready().into_iter().collect::<Vec<_>>(), [TICKET]);
+    assert_eq!(
+        rig.record(TICKET).status,
+        Status::Ended,
+        "the worker stays ended, and the ticket in Review"
+    );
+}
+
+#[test]
+fn a_running_or_paused_worker_gets_no_pass() {
+    for status in [Status::Running, Status::Paused] {
+        let rig = rig();
+        let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+        rig.set_status(TICKET, status);
+        rig.gate
+            .keep_for_test(TICKET, |kept| kept.ready = Some("planted".to_owned()));
+
+        rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
+
+        assert!(
+            rig.gate.ready().contains(TICKET),
+            "a {status:?} worker got a pass"
+        );
+    }
+}
+
+#[test]
+fn a_pass_runs_off_the_poll_thread_and_one_at_a_time_per_ticket() {
+    let rig = rig();
+    rig.ci_waits(1);
+    let head = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let stuck = HeadStatus::Pending(vec![Queued {
+        name: "test".to_owned(),
+        run: Some(42),
+        running: false,
+        held: false,
+    }]);
+    let pull = rig.pull(TICKET, &head, stuck);
+    rig.read(std::slice::from_ref(&pull));
+    rig.clock.advance(SETTLE + 60);
+    rig.ci.hold();
+
+    // The read returns while the pass is held in its call to CI
+    rig.gate
+        .after_read(&rig.records(), std::slice::from_ref(&pull));
+    until_some(|| (rig.ci.asked() == 1).then_some(()));
+    assert!(rig.gate.at_work_on(TICKET), "the pass is at work");
+
+    // Another read lands while it is, and starts no second pass
+    rig.gate
+        .after_read(&rig.records(), std::slice::from_ref(&pull));
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(rig.ci.asked(), 1, "one pass at a time on a ticket");
+
+    rig.ci.release();
+    rig.gate.idle();
+    assert_eq!(rig.ci.reruns(), [42]);
 }
