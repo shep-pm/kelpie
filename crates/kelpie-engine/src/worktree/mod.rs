@@ -11,6 +11,7 @@
 //! the conflict in the worktree for the worker, and [`abort_merge`] gives that
 //! merge up. [`merge_conflicts`] and [`runs_on_pull_requests`] ask whether a
 //! head would conflict and whether the base runs CI on a pull request.
+//! [`changed::changed_files`] names the files a branch changed from the base.
 //!
 //! `main` and `origin/main` in these docs are the project's base branch, which
 //! each function takes as `base`.

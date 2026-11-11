@@ -8,8 +8,8 @@
 //!
 //! A merge of a draft, of an ended pull request, or pinned to a head the branch no
 //! longer holds is refused, as GitHub refuses it, and a merged pull request leaves
-//! the open ones. Later slices grow
-//! it with checks and closes.
+//! the open ones. A branch's checks are what a case scripted, and none otherwise. Later
+//! slices grow it with closes.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -69,6 +69,9 @@ struct State {
 
     /// The commit each branch holds on the forge, which is what a push leaves there
     heads: BTreeMap<String, String>,
+
+    /// Where CI stands on each branch's head, none for a branch nothing scripted
+    checks: BTreeMap<String, HeadStatus>,
 }
 
 impl State {
@@ -127,6 +130,11 @@ impl Github {
         self.state()
             .heads
             .insert(branch.to_owned(), head.to_owned());
+    }
+
+    /// What the listing shows of CI on `branch`'s head from now on
+    pub(super) fn script_checks(&self, branch: &str, checks: HeadStatus) {
+        self.state().checks.insert(branch.to_owned(), checks);
     }
 
     /// Every pull request, oldest first
@@ -227,7 +235,11 @@ impl GithubTickets for Github {
                 head: state.heads.get(&pull.branch).cloned().unwrap_or_default(),
                 base: pull.base.clone(),
                 labels: Vec::new(),
-                checks: HeadStatus::None,
+                checks: state
+                    .checks
+                    .get(&pull.branch)
+                    .cloned()
+                    .unwrap_or(HeadStatus::None),
             })
             .collect())
     }

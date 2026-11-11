@@ -15,12 +15,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use kelpie_engine::ci::Ci;
 use kelpie_engine::ci::fake::FakeCi;
+use kelpie_engine::ci::{Ci, FailedCheck, FailedLog, HeadStatus};
 use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
@@ -34,6 +35,7 @@ use serde_json::json;
 
 use crate::board::poll::{Choices, Poller, Retry};
 use crate::board::{BoardEvent, Column};
+use crate::gate::Gate;
 use crate::state::AppState;
 use crate::workers::{
     Forge, Hands, NoteOutcome, Open, WorkerStarted, note_through, plan, stop_and_tell_on,
@@ -69,6 +71,28 @@ impl Clock for Fixed {
     }
 }
 
+/// A clock that stands where a case puts it, which the gate's passes read
+///
+/// A head's checks have time to register once [`SETTLE`] seconds have passed since a
+/// pass first saw it, so a case lets that time pass between two reads.
+#[derive(Debug, Clone, Default)]
+struct Ticks(Arc<AtomicU64>);
+
+impl Ticks {
+    fn advance(&self, seconds: u64) {
+        self.0.fetch_add(seconds, Ordering::SeqCst);
+    }
+}
+
+impl Clock for Ticks {
+    fn now(&self) -> Timestamp {
+        Timestamp::from_secs(1_700_000_000 + self.0.load(Ordering::SeqCst))
+    }
+}
+
+/// How long the gate waits for a head's checks to register
+const SETTLE: u64 = 120;
+
 /// Run `git` in `folder`, as the checkout of a project would be made
 fn git(folder: &Path, args: &[&str]) -> String {
     let done = Command::new("git")
@@ -99,8 +123,14 @@ struct Rig {
     /// The project's GitHub, which every case shares
     github: Arc<Github>,
 
+    /// The project's CI, which a case scripts the failed logs of
+    ci: Arc<FakeCi>,
+
+    /// Where the gate's passes read the present moment from
+    clock: Ticks,
+
     /// The agent each ticket's worker runs on
-    agents: Mutex<BTreeMap<u64, FakeAgent>>,
+    agents: Arc<Mutex<BTreeMap<u64, FakeAgent>>>,
 
     /// What each ticket's worker's feed carried
     heard: Mutex<BTreeMap<u64, Heard>>,
@@ -147,12 +177,13 @@ impl Rig {
         )
         .unwrap();
         let github = Arc::new(Github::new());
+        let ci = Arc::new(FakeCi::new());
         state.workers().stand_in_forge(
             &project,
             Arc::new(Forge::new(
                 Arc::clone(&github) as Arc<dyn GithubTickets>,
                 Arc::clone(&github) as Arc<dyn Pulls>,
-                Arc::new(FakeCi::new()) as Arc<dyn Ci>,
+                Arc::clone(&ci) as Arc<dyn Ci>,
             )),
         );
         Self {
@@ -160,7 +191,9 @@ impl Rig {
             state,
             project,
             github,
-            agents: Mutex::default(),
+            ci,
+            clock: Ticks::default(),
+            agents: Arc::default(),
             heard: Mutex::default(),
         }
     }
@@ -407,15 +440,8 @@ impl Rig {
             })
         });
         let hands = self.hands();
-        // Each read then runs the gate on the Review tickets, as the app's does. These
-        // cases send no worker back, so its opener builds nothing.
-        let folder = self.state.project_path_of(&self.project).unwrap();
-        let open: Arc<Open> = Arc::new(|_, _| Err("these cases send no fix turn".to_owned()));
-        let gate = self
-            .state
-            .workers_arc()
-            .gate(&self.project, &folder, None, Arc::new(Fixed), open)
-            .expect("the project's gate");
+        // Each read then runs the gate on the Review tickets, as the app's does
+        let gate = self.gate();
         let retry: Retry = Box::new(move |records: &[Record], pulls: &[OpenPull]| {
             hands.retry(records);
             gate.after_read(records, pulls);
@@ -428,6 +454,60 @@ impl Rig {
             retry,
             Arc::new(Fixed),
         )
+    }
+
+    /// The project's gate, which a read of the board runs on its Review tickets
+    ///
+    /// A worker it sends back gets a session on the agent its ticket was put on the
+    /// board with, which the worktree's folder names.
+    fn gate(&self) -> Arc<Gate> {
+        let folder = self.state.project_path_of(&self.project).unwrap();
+        let agents = Arc::clone(&self.agents);
+        let open: Arc<Open> = Arc::new(move |_, opening: &Opening<'_>| {
+            let number: u64 = opening
+                .worktree
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.parse().ok())
+                .ok_or("the worktree names no ticket")?;
+            let agent = lock(&agents)
+                .get(&number)
+                .cloned()
+                .ok_or("the ticket was put on the board")?;
+            Ok(agent.session(
+                opening.worktree.to_path_buf(),
+                opening.resume.clone(),
+                opening.choice.clone(),
+            ))
+        });
+        self.state
+            .workers_arc()
+            .gate(&self.project, &folder, None, Arc::new(self.clock.clone()), open)
+            .expect("the project's gate")
+    }
+
+    /// CI fails the check `check` on ticket `number`'s `head`, whose failed log ends with `tail`
+    fn fails(&self, number: u64, head: &str, check: &str, tail: &str) {
+        let url = format!("https://github.com/shep-pm/kelpie/actions/runs/{number}");
+        self.github.script_checks(
+            &format!("kelpie/{number}"),
+            HeadStatus::Failed(vec![FailedCheck {
+                name: check.to_owned(),
+                url: Some(url.clone()),
+            }]),
+        );
+        let log = FailedLog {
+            check: check.to_owned(),
+            run: number,
+            url,
+            tail: tail.to_owned(),
+        };
+        self.ci.script_logs(head, false, Ok(vec![log]));
+    }
+
+    /// Wait until the gate's passes of the last read have ended
+    fn until_passed(&self) {
+        self.gate().idle();
     }
 
     /// What the project's finished turns hand over
