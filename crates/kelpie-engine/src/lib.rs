@@ -59,6 +59,7 @@
 pub mod agents;
 pub mod board;
 pub mod bridge;
+pub mod ci;
 pub mod confine;
 pub mod github;
 pub mod guard;
