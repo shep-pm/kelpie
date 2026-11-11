@@ -62,11 +62,16 @@ fn is_status(line: &str) -> bool {
         .is_some_and(|(code, _)| code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Whether `stderr` says a rate limit is used up
+pub(super) fn says_used_up(stderr: &str) -> bool {
+    let lowered = stderr.to_lowercase();
+    USED_UP.iter().any(|said| lowered.contains(said))
+}
+
 // A used-up limit is `Limited` with what the answer said of when, anything
 // else stays what gh printed.
 fn limited_or(kept: &str, cooldown: Cooldown) -> ForgeError {
-    let lowered = kept.to_lowercase();
-    if USED_UP.iter().any(|said| lowered.contains(said)) {
+    if says_used_up(kept) {
         ForgeError::Limited {
             said: format!("gh failed: {}", kept.trim()),
             cooldown,

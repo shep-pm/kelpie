@@ -26,7 +26,7 @@ fn status(code: i32) -> ExitStatus {
     std::os::windows::process::ExitStatusExt::from_raw(code.cast_unsigned())
 }
 
-fn answered(stdout: &str) -> io::Result<Output> {
+pub(super) fn answered(stdout: &str) -> io::Result<Output> {
     Ok(Output {
         status: status(0),
         stdout: stdout.as_bytes().to_vec(),
@@ -34,7 +34,7 @@ fn answered(stdout: &str) -> io::Result<Output> {
     })
 }
 
-fn refused(stderr: &str) -> io::Result<Output> {
+pub(super) fn refused(stderr: &str) -> io::Result<Output> {
     Ok(Output {
         status: status(1),
         stdout: Vec::new(),
@@ -44,19 +44,25 @@ fn refused(stderr: &str) -> io::Result<Output> {
 
 // The child, scripted: each call is answered with the next answer and recorded
 #[derive(Debug, Clone, Default)]
-struct Script {
+pub(super) struct Script {
     answers: Arc<Mutex<VecDeque<io::Result<Output>>>>,
     asked: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl Script {
-    fn answering(answer: io::Result<Output>) -> Self {
+    pub(super) fn answering(answer: io::Result<Output>) -> Self {
         let script = Self::default();
         script.answers.lock().unwrap().push_back(answer);
         script
     }
 
-    fn asked(&self) -> Vec<Vec<String>> {
+    // The next answer after those already scripted
+    pub(super) fn then(&self, answer: io::Result<Output>) -> &Self {
+        self.answers.lock().unwrap().push_back(answer);
+        self
+    }
+
+    pub(super) fn asked(&self) -> Vec<Vec<String>> {
         self.asked.lock().unwrap().clone()
     }
 }
@@ -72,7 +78,7 @@ impl Runner for Script {
     }
 }
 
-fn gh_over(script: &Script) -> Gh {
+pub(super) fn gh_over(script: &Script) -> Gh {
     Gh::with_runner(Box::new(script.clone()))
 }
 
