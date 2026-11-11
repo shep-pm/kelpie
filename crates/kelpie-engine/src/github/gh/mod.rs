@@ -21,10 +21,16 @@ use crate::tree::ProcessTree;
 use crate::worker::login;
 
 pub mod account;
+pub mod conditional;
 mod failed;
+pub mod hold;
 
 pub use account::{RateBucket, RateLimits};
 
+#[cfg(test)]
+mod conditional_tests;
+#[cfg(test)]
+mod hold_tests;
 #[cfg(test)]
 mod tests;
 
