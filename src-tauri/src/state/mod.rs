@@ -15,7 +15,8 @@
 //! ([`kelpie_engine::worker`]). A run that ended with a worker mid-turn is read
 //! at the start of the next one, and every worker still holding a slot is marked
 //! Paused: kelpie never restarts a worker on its own
-//! (`docs/design/workers.md`, Quitting).
+//! (`docs/design/workers.md`, Quitting). A turn still running on the way out is
+//! written to `<data_dir>/projects/<id>/usage.jsonl` ([`kelpie_engine::usage`]).
 
 use std::fs;
 use std::io;
@@ -811,7 +812,7 @@ impl AppState {
         self.workers.source(id, &folder)
     }
 
-    /// Stop every process of this run, and stop logging the PM and the workers
+    /// Stop every process of this run, write the worker turns it cuts off, and stop logging
     ///
     /// # Errors
     ///
@@ -826,6 +827,9 @@ impl AppState {
         lock(&self.bridge_checks).take();
         self.board.stop();
         self.workers.close_logs();
+        // Before the tree stops, so every turn it cuts off is written as stopped
+        // here rather than left open
+        self.workers.stop_usage();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }
 }

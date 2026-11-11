@@ -25,6 +25,7 @@ mod goose;
 mod hand_over;
 mod plan;
 mod tell;
+mod usage;
 
 /// An app state in a folder of its own, with one project picked
 struct Rig {
