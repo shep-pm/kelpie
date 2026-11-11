@@ -173,6 +173,10 @@ _Avoid_: tell, nudge
 A message that interrupts the worker's turn and becomes its next prompt.
 _Avoid_: interrupt, cancel
 
+**Ruling**:
+What kelpie makes of something a worker will not fix on its own: the worker waits on the maintainer with what it found as its reason, holds no slot, and is told no more until the file or the maintainer changes.
+_Avoid_: error, blocker, escalation
+
 **Fence**:
 The check, when a worker's turn ends, that its branch changed only what a worker may change. It sits on top of the sandbox and is not the sandbox.
 _Avoid_: guard (the check on each command)

@@ -16,6 +16,7 @@
 //!
 //! - A draft opened, or an open one edited to the file, changes no record: the worker already ended.
 //! - A refusal the worker can fix goes to it as a Note ([`kelpie_engine::worker::note`]), so it rewrites its file.
+//! - The same refusal at the next hand-over is the worker leaving its file as it was, and is ruled on instead: it waits on the maintainer with the refusal as its reason, holds no slot, and is told no more. Without this, a refusal the worker never fixes costs a turn and a slot at every hand-over.
 //! - A forge that could not be asked parks the worker as waiting on the maintainer with the reason, which the board marks as needing the maintainer and which holds no slot.
 //!
 //! A parked worker is handed over again on every read of GitHub ([`crate::board::poll`]),
@@ -50,9 +51,22 @@ const OWES: &str = "Could not open the draft pull request";
 /// What kelpie then does for a worker parked on a draft it could not open
 const EVERY_MINUTE: &str = "kelpie tries again each minute";
 
+/// The start of the reason a worker waits on the maintainer for a refusal it was told
+///
+/// A worker waiting on its draft is handed over again on every read of GitHub, and a
+/// worker waiting on this is not ([`OWES`]): what is owed here is a file the worker
+/// will not fix, which is the maintainer's to rule on.
+const TOLD_ONCE: &str =
+    "Kelpie told the worker to fix its hand-over file, and the same refusal stands";
+
 /// Why a hand-over could not open the draft, as the worker's record keeps it
 fn reason(why: &ForgeError) -> String {
     format!("{OWES}: {why}, and {EVERY_MINUTE}")
+}
+
+/// Why a worker waits on the maintainer for the refusal it was told and left as it was
+fn ruling(text: &str) -> String {
+    format!("{TOLD_ONCE}: {text}. kelpie tells it no more until the file changes")
 }
 
 /// Say what a record that would not be written cost the ticket
@@ -236,13 +250,16 @@ impl Hands {
     /// Settle `ticket`'s record by what the forge made of its hand-over
     fn settle(&self, ticket: &str, outcome: worker::Outcome) {
         match outcome {
-            worker::Outcome::Told(text) => self.tell(ticket, &text),
+            worker::Outcome::Told(text) => self.answer(ticket, &text),
             worker::Outcome::Failed(why) => self.park(ticket, &why),
             worker::Outcome::Opened(..)
             | worker::Outcome::Edited(..)
             | worker::Outcome::Unchanged => self.cleared(ticket),
-            // A turn that left no file, or one whose branch is not on the forge, asks
-            // nothing of the record: the worker is where it was
+            // A file the worker took away leaves nothing owed of it, and the refusal
+            // kelpie remembers for it goes with it
+            worker::Outcome::NoFile => self.forget(ticket),
+            // A branch the forge does not have asks nothing of the record: the worker
+            // is where it was
             _ => {}
         }
     }
@@ -275,6 +292,33 @@ impl Hands {
         lock(&records)
             .get(ticket)
             .is_some_and(|record| record.status == Status::Ended)
+    }
+
+    /// Answer the refusal `ticket`'s file drew: tell the worker, or rule on it when it was told already
+    ///
+    /// The first refusal goes to the worker as a Note, which is its next turn, and its
+    /// text is kept in the record. A hand-over that answers with the same text is the
+    /// worker leaving its file as it was, and telling it again would start another turn,
+    /// and another, each one taking a slot for the same file. What kelpie will not fix
+    /// goes to the maintainer instead ([`Hands::rule`]).
+    ///
+    /// The text is kept before the worker is told, so a turn that ends fast is answered
+    /// by the ruling and not by a second telling.
+    fn answer(&self, ticket: &str, text: &str) {
+        let Some(records) = self.kept() else {
+            return;
+        };
+        let told = lock(&records)
+            .get(ticket)
+            .and_then(|record| record.refused.as_deref())
+            .is_some_and(|before| before == text);
+        if told {
+            self.rule(ticket, text);
+            return;
+        }
+        let written = lock(&records).set_refused(ticket, Some(text.to_owned()));
+        lost(ticket, written, "the refusal it was told");
+        self.tell(ticket, text);
     }
 
     /// Tell `ticket`'s worker `text` as a Note, so it can fix the file it left
@@ -344,30 +388,65 @@ impl Hands {
         lost(ticket, written, "its wait for the draft");
     }
 
+    /// Park `ticket`'s worker on the refusal it was told and left as it was
+    ///
+    /// The reason names the refusal, which the board shows on the ticket's needs-you
+    /// line, and no slot is held. Nothing hands it over again by itself: the board's
+    /// read retries a worker waiting on its draft ([`OWES`]), not one waiting on a
+    /// ruling, so the next hand-over is the next turn's end, which the maintainer
+    /// starts. A file kelpie can then open clears the ruling ([`Hands::cleared`]).
+    fn rule(&self, ticket: &str, text: &str) {
+        let Some(records) = self.kept() else {
+            return;
+        };
+        let mut records = lock(&records);
+        let written = records
+            .set_status(ticket, Status::WaitingOnMaintainer)
+            .and_then(|()| records.set_reason(ticket, Some(ruling(text))));
+        lost(ticket, written, "its ruling on the refusal");
+    }
+
     /// Set `ticket`'s worker Ended and clear the reason, when a hand-over that failed
-    /// before has now gone through
+    /// before has now gone through, and forget the refusal its file drew
     ///
     /// A worker held for something else keeps its reason: only the one this module wrote
-    /// is cleared.
+    /// is cleared. The refusal is forgotten whatever the worker was waiting on, since a
+    /// file the forge has taken is one its worker was told to fix for nothing.
     fn cleared(&self, ticket: &str) {
         let Some(records) = self.kept() else {
             return;
         };
-        let parked = lock(&records).get(ticket).is_some_and(|record| {
+        let mut records = lock(&records);
+        let parked = records.get(ticket).is_some_and(|record| {
             record.status == Status::WaitingOnMaintainer
                 && record
                     .reason
                     .as_deref()
                     .is_some_and(|why| why.starts_with(OWES))
         });
-        if !parked {
+        let draft = if parked {
+            records
+                .set_status(ticket, Status::Ended)
+                .and_then(|()| records.set_reason(ticket, None))
+        } else {
+            Ok(())
+        };
+        lost(ticket, draft, "its draft going through");
+        let refusal = records.set_refused(ticket, None);
+        lost(ticket, refusal, "its refusal going away");
+    }
+
+    /// Forget the refusal `ticket`'s worker was told, when its hand-over file is gone
+    ///
+    /// The worker took away the file it was refused for. A refusal kept for a file that
+    /// is no longer there would rule on the next one the worker writes, before it has
+    /// been told anything about it.
+    fn forget(&self, ticket: &str) {
+        let Some(records) = self.kept() else {
             return;
-        }
-        let mut records = lock(&records);
-        let written = records
-            .set_status(ticket, Status::Ended)
-            .and_then(|()| records.set_reason(ticket, None));
-        lost(ticket, written, "its draft going through");
+        };
+        let written = lock(&records).set_refused(ticket, None);
+        lost(ticket, written, "its refusal going away");
     }
 
     /// The session of the worker on `ticket`, while kelpie keeps one

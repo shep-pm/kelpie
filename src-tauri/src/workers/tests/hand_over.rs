@@ -4,6 +4,10 @@
 //! with a [`FakePulls`] and a [`FakeTickets`] stood in for the project's GitHub, so
 //! none needs `gh`, a model or the network. The draft is opened on a thread of its
 //! own, which is what the tests that name a thread are about.
+//!
+//! The last three are about the ruling a repeated refusal draws: the worker is told
+//! once, its next turn answers the telling, and a refusal that comes back the same is
+//! the worker leaving its file as it was.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -19,7 +23,7 @@ use kelpie_engine::ticket::fake::{FakePulls, FakeTickets, PullCall};
 use kelpie_engine::ticket::{
     ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets,
 };
-use kelpie_engine::worker::{Opening, Paths, Record, Seat, Status, Ticket};
+use kelpie_engine::worker::{Opening, Paths, Record, Seat, Status, Ticket, owes_a_draft};
 use kelpie_protocol::SessionEvent;
 
 use super::{Rig, git, git_out, id, issue};
@@ -186,6 +190,17 @@ fn sink_thread(heard: &Heard) -> ThreadId {
             .iter()
             .find(|seen| matches!(seen.event, SessionEvent::TurnEnded { .. }))
             .map(|seen| seen.on)
+    })
+}
+
+/// Wait for ticket 12's worker to be ruled on, and return its record
+///
+/// A ruling is what a hand-over makes of a refusal the worker was told and left as it
+/// was: the worker waits on the maintainer, naming the refusal, and holds no slot.
+fn ruled(rig: &Rig) -> Record {
+    until_some(|| {
+        let record = rig.record();
+        (record.status == Status::WaitingOnMaintainer).then_some(record)
     })
 }
 
@@ -529,7 +544,10 @@ fn the_retry_skips_a_worker_whose_file_the_forge_already_has() {
     let (rig, _tickets, pulls) = rig_with(FILE);
     let agent = FakeAgent::new().turn(Turn::new().text("Pushed."));
     ran(&rig, &agent, &pulls);
-    until_some(|| (pulls.creates() >= 1).then_some(()));
+    // The hand-over is over once the forge has the file, which is when the worker
+    // stops owing one: waiting on the call instead would run on before the copy of it
+    // is kept, and the retry would be answering a hand-over still in flight
+    until_some(|| (!owes_a_draft(&paths(&rig), TICKET)).then_some(()));
 
     let hands = rig.hands();
     hands.retry(&rig.listed());
@@ -570,4 +588,107 @@ fn the_retry_runs_on_each_github_read_for_a_worker_that_owes_a_pull_request() {
         3,
         "and a placing, which asks nothing of GitHub, hands over nothing",
     );
+}
+
+#[test]
+fn a_file_the_guard_keeps_refusing_parks_on_a_ruling_naming_the_refusal() {
+    let (rig, _tickets, pulls) = rig_with(FILE);
+    // What the forge's leak guard answers for a text naming this machine
+    pulls.script_create(Err(ForgeError::LocalPath));
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Pushed."))
+        .turn(Turn::new().text("Rewrote it, and the same."));
+    ran(&rig, &agent, &pulls);
+
+    let record = ruled(&rig);
+    let why = record.reason.clone().unwrap_or_default();
+    assert!(
+        why.starts_with(
+            "Kelpie told the worker to fix its hand-over file, and the same refusal stands"
+        ),
+        "{why}",
+    );
+    assert!(
+        why.contains("path or address on this machine"),
+        "the ruling names the refusal: {why}",
+    );
+    assert!(
+        why.contains("pull-request.md"),
+        "and the file it is about: {why}"
+    );
+    assert_eq!(record.seat, Seat::Without, "a ruled worker holds no slot");
+    assert_eq!(
+        agent.params("session/prompt").len(),
+        2,
+        "the worker was told once, and its next turn answered the telling",
+    );
+    assert_eq!(
+        pulls.creates(),
+        2,
+        "the file was handed over at each turn's end, and at no third",
+    );
+}
+
+#[test]
+fn a_title_that_stays_unconventional_parks_on_a_ruling_naming_the_reason() {
+    let (rig, _tickets, pulls) = rig_with("# Open the draft\n\nA heading is no title.\n");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Pushed."))
+        .turn(Turn::new().text("Rewrote the title, still a heading."));
+    ran(&rig, &agent, &pulls);
+
+    let record = ruled(&rig);
+    let why = record.reason.clone().unwrap_or_default();
+    assert!(
+        why.contains("is not a conventional commit subject"),
+        "the ruling names why the file was refused: {why}",
+    );
+    assert!(
+        why.contains("Open the draft"),
+        "and the line that is no title: {why}",
+    );
+    assert!(
+        why.contains("kelpie tells it no more until the file changes"),
+        "and what kelpie does next: {why}",
+    );
+    assert_eq!(record.seat, Seat::Without, "a ruled worker holds no slot");
+    assert_eq!(
+        agent.params("session/prompt").len(),
+        2,
+        "the worker was told once, and its next turn answered the telling",
+    );
+    assert!(
+        pulls.calls().is_empty(),
+        "a file with no title never reaches the forge: {:?}",
+        pulls.calls(),
+    );
+}
+
+#[test]
+fn a_file_fixed_after_a_ruling_opens_the_draft_and_clears_the_ruling() {
+    let (rig, _tickets, pulls) = rig_with("# Open the draft\n\nA heading is no title.\n");
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("Pushed."))
+        .turn(Turn::new().text("Rewrote the title, still a heading."));
+    ran(&rig, &agent, &pulls);
+    let ruled = ruled(&rig);
+    assert!(
+        ruled.refused.is_some(),
+        "the refusal is kept for the next hand-over to answer",
+    );
+
+    // The maintainer's fix, and the worker started again to carry it
+    left(&rig, FILE);
+    pulls.script_create(Ok(NonZeroU64::MIN));
+    let heard: Heard = Arc::new(Mutex::new(Vec::new()));
+    let fixed = FakeAgent::new().turn(Turn::new().text("Fixed the title."));
+    rig.started(&fixed, &pulls, &heard);
+    until_turn_ends(&heard);
+
+    let record = until_some(|| {
+        let record = rig.record();
+        (record.refused.is_none() && record.status == Status::Ended).then_some(record)
+    });
+    assert_eq!(record.reason, None, "and the ruling goes with the refusal");
+    assert_eq!(pulls.creates(), 1, "the fixed file opened the draft");
 }
