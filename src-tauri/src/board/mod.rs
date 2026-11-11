@@ -1,12 +1,12 @@
 //! The board's commands: what the Board panel calls
 //!
 //! [`board_watch`] starts the project's poller and streams a [`BoardEvent`] to
-//! the window whenever the board changes. The [`Poller`](poll::Poller) reads
+//! the window whenever the board changes. The [`Poller`] reads
 //! GitHub once a minute and places the tickets again every two seconds from the
 //! workers' records, so a Start moves its ticket to Building at once
 //! (`docs/design/tickets.md`, The board and GitHub). [`board_refresh`] reads at
 //! once, and [`board_move`] runs what a drop on a column does
-//! ([`kelpie_engine::board::plan_move`]). [`open_link::open_link`] sends a
+//! ([`kelpie_engine::board::plan_move`]). [`link::open_link`] sends a
 //! ticket's page to the OS's own broker, so the browser never descends from
 //! kelpie (ADR 0001).
 //!
@@ -318,7 +318,10 @@ fn poller_of(
 /// on GitHub, or a missing `gh`, is sent to the window as an Unavailable.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn board_watch(state: State<'_, AppState>, on_board: Channel<BoardEvent>) -> Result<(), String> {
+pub fn board_watch(
+    state: State<'_, AppState>,
+    on_board: Channel<BoardEvent>,
+) -> Result<(), String> {
     let project = state.project_id(None)?;
     let source = match state.source(&project) {
         Ok(source) => source,

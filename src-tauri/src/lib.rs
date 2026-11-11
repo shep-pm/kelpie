@@ -75,6 +75,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             board::board_watch,
             board::board_refresh,
             board::board_move,
+            board::link::open_link,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()

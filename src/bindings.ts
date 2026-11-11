@@ -283,6 +283,45 @@ export const commands = {
 	 *  worker could not start. The text says why.
 	 */
 	workerStart: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_start", { ticket })),
+	/**
+	 *  Stream the project's board to the window, and keep it current
+	 * 
+	 *  The first event is the board, or why there is none. It starts one poller for
+	 *  the project and replaces the one before. The poller ends when a send to the
+	 *  window fails, and when kelpie quits.
+	 * 
+	 *  # Errors
+	 * 
+	 *  No project is picked, or its records cannot be read. A project that is not
+	 *  on GitHub, or a missing `gh`, is sent to the window as an Unavailable.
+	 */
+	boardWatch: (onBoard: Channel<BoardEvent>) => typedError<null, string>(__TAURI_INVOKE("board_watch", { onBoard })),
+	/**  Read GitHub now, instead of at the next minute */
+	boardRefresh: () => __TAURI_INVOKE<void>("board_refresh"),
+	/**
+	 *  What dropping `ticket` on the column `to` does
+	 * 
+	 *  A drop from Ready on Building starts a worker through the one function the
+	 *  Start button calls. Any other drop changes nothing, and a snap back carries
+	 *  the line the window shows.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket is not on the board, or the worker could not start. The text says why.
+	 */
+	boardMove: (ticket: string, to: Column) => typedError<MoveView, string>(__TAURI_INVOKE("board_move", { ticket, to })),
+	/**
+	 *  Open a ticket's issue or pull request page on GitHub
+	 * 
+	 *  Answers [`LinkView::Copy`] where the OS has no broker to give it to: the
+	 *  window copies the link and says why.
+	 * 
+	 *  # Errors
+	 * 
+	 *  No project is picked or it is not on GitHub, or the URL is not one of the
+	 *  project's own issues or pull requests.
+	 */
+	openLink: (url: string) => typedError<LinkView, string>(__TAURI_INVOKE("open_link", { url })),
 };
 
 /* Types */
@@ -310,6 +349,25 @@ export type AgentView = {
 	problem: string | null,
 	/**  The agent as a session gets it, `None` when the file cannot be used */
 	resolved: ResolvedAgent | null,
+};
+
+/**  What the board streams to the window */
+export type BoardEvent = 
+/**  The board as it stands now */
+{
+	kind: "board",
+} & BoardView | 
+/**  GitHub cannot be read, and what to do about it */
+{ kind: "unavailable"; 
+/**  What to tell the maintainer */
+message: string };
+
+/**  Every ticket of the project, column by column, as the window shows them */
+export type BoardView = {
+	/**  The tickets, in the order the board shows them */
+	tickets: TicketView[],
+	/**  While a rate limit is used up, the Unix second the hold lifts */
+	held_until: number | null,
 };
 
 /**  Where the version a bridge runs on came from */
@@ -351,6 +409,19 @@ export type Choice = {
 	/**  What the harness says about it, `None` when it says nothing */
 	description: string | null,
 };
+
+/**  One of the board's five columns, as the window names it */
+export type Column = 
+/**  Its issue is open without the ready label */
+"draft" | 
+/**  Its issue carries the ready label */
+"ready" | 
+/**  A worker on it is live */
+"building" | 
+/**  A pull request closing it is open */
+"review" | 
+/**  Its issue is closed */
+"done";
 
 /**  One field of the form: its value, and the layer the value came from */
 export type FieldView = {
@@ -416,6 +487,17 @@ commands: string[] } |
 /**  The tool's own words */
 message: string };
 
+/**  What the window does after an open */
+export type LinkView = 
+/**  The OS took the link */
+{ kind: "opened" } | 
+/**  Nothing opened it: the window copies `url` and says `message` */
+{ kind: "copy"; 
+/**  The link to copy */
+url: string; 
+/**  Why it was not opened */
+message: string };
+
 /**
  *  One line of a session's log: a message the maintainer sent, or an event the session streamed
  * 
@@ -441,6 +523,19 @@ text: string } |
 { entry: "divider"; 
 /**  What the line says */
 text: string };
+
+/**  What a drop on a column did */
+export type MoveView = 
+/**  A worker started on the ticket, or is in line for a slot when `waiting` */
+{ kind: "started"; 
+/**  No slot was free, so nothing began */
+waiting: boolean } | 
+/**  The ticket is already in that column */
+{ kind: "stay" } | 
+/**  The ticket goes back where it was, and the window shows the line */
+{ kind: "snap_back"; 
+/**  Why the move does nothing */
+line: string };
 
 /**
  *  What a harness says it offers, listed by the harness itself
@@ -607,6 +702,22 @@ export type Target =
 { kind: "project"; 
 /**  The project's id, from [`ProjectView`] */
 id: string };
+
+/**  One ticket on the board, with the pages it links out to */
+export type TicketView = {
+	/**  Its number */
+	id: string,
+	/**  Its title */
+	title: string,
+	/**  The number of its priority label, `None` when it has none */
+	priority: number | null,
+	/**  Where it sits */
+	column: Column,
+	/**  Its issue's page on GitHub */
+	url: string,
+	/**  The page of the pull request closing it, `None` when none is open */
+	pull_url: string | null,
+};
 
 /**  How far a tool call got */
 export type ToolStatus = 

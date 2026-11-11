@@ -13,7 +13,9 @@ use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::run::RunId;
 use kelpie_engine::settings::PickUp;
 use kelpie_engine::ticket::fake::FakeTickets;
-use kelpie_engine::ticket::{ForgeError, GithubTickets, Issue, Listed, OpenPull, TicketId, Tickets};
+use kelpie_engine::ticket::{
+    ForgeError, GithubTickets, Issue, Listed, OpenPull, TicketId, Tickets,
+};
 use kelpie_engine::worker::{Record, Records, Status};
 
 use super::poll::{Cadence, Choices, Feed, Poller};
@@ -196,7 +198,12 @@ fn placed(event: &BoardEvent) -> Vec<(String, Column)> {
 #[test]
 fn a_read_becomes_a_board_view_with_each_tickets_url() {
     let mut rig = Rig::new(Source::new());
-    let ready = listed(12, "Add the thing", &["ready-for-agent", "priority: P1"], 100);
+    let ready = listed(
+        12,
+        "Add the thing",
+        &["ready-for-agent", "priority: P1"],
+        100,
+    );
     rig.source.tickets.script_ready(Ok(vec![ready.clone()]));
     rig.source.tickets.script_open(Ok(vec![
         ready,
@@ -316,7 +323,10 @@ fn a_held_limit_sends_the_last_board_with_the_time_it_lifts() {
         panic!("expected a board, got {held:?}");
     };
     assert_eq!(view.held_until, Some(1_700_000_900));
-    assert!(view.tickets.is_empty(), "no board was read before the limit");
+    assert!(
+        view.tickets.is_empty(),
+        "no board was read before the limit"
+    );
 }
 
 #[test]
@@ -443,10 +453,7 @@ fn a_move_from_ready_to_building_starts_the_worker_and_any_other_move_changes_no
     assert!(line.contains("ready label"), "{line}");
 
     let merge = move_ticket(&host, "12", Column::Done, start);
-    assert!(
-        matches!(merge, Ok(MoveView::SnapBack { .. })),
-        "{merge:?}"
-    );
+    assert!(matches!(merge, Ok(MoveView::SnapBack { .. })), "{merge:?}");
 
     assert_eq!(
         *started.lock().unwrap(),
@@ -465,5 +472,8 @@ fn a_move_of_a_ticket_not_on_the_board_is_refused() {
     });
 
     let said = refused.unwrap_err();
-    assert!(said.contains("99") && said.contains("not on the board"), "{said}");
+    assert!(
+        said.contains("99") && said.contains("not on the board"),
+        "{said}"
+    );
 }
