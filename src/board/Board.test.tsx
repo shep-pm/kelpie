@@ -117,6 +117,13 @@ async function open(view: BoardView = VIEW, onOpenWorker = vi.fn()) {
   return { onOpenWorker };
 }
 
+/**
+ * Wait for the board's status line to say `text`. The line is always on the
+ * page, empty until a notice sets it, so reading it at once can see it empty.
+ */
+const statusLine = (text: string) =>
+  waitFor(() => expect(screen.getByRole("status").textContent).toBe(text));
+
 const card = (title: string) => {
   const found = Array.from(
     document.querySelectorAll<HTMLElement>("[data-slot=kanban-card]"),
@@ -227,9 +234,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "The ticket is closed.",
-    );
+    await statusLine("The ticket is closed.");
   });
 
   it("a Start error stays in the line when a move that snaps back answers after it", async () => {
@@ -260,9 +265,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "#12 waits for a slot.",
-    );
+    await statusLine("#12 waits for a slot.");
   });
 
   it("Start does not open the ticket", async () => {
@@ -317,9 +320,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No slot, and none will come.",
-    );
+    await statusLine("No slot, and none will come.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
     expect(titlesIn("Building")).toEqual(["Open the draft"]);
   });
@@ -330,9 +331,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "#12 waits for a slot.",
-    );
+    await statusLine("#12 waits for a slot.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -342,9 +341,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Ticket 12 is not on the board.",
-    );
+    await statusLine("Ticket 12 is not on the board.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -357,7 +354,7 @@ describe("the Board panel", () => {
     await dragTo("Sketch the graph", "Ready");
 
     expect(boardMove).toHaveBeenCalledWith("11", "ready");
-    expect((await screen.findByRole("status")).textContent).toBe(line);
+    await statusLine(line);
     await waitFor(() =>
       expect(titlesIn("Draft")).toEqual(["Sketch the graph"]),
     );
@@ -381,9 +378,7 @@ describe("the Board panel", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Draft" }));
 
     await waitFor(() => expect(boardMove).toHaveBeenCalledWith("15", "draft"));
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "A ticket's column follows its worker and its issue.",
-    );
+    await statusLine("A ticket's column follows its worker and its issue.");
     await waitFor(() => expect(titlesIn("Done")).toEqual(["Lift the board"]));
   });
 
@@ -477,21 +472,22 @@ describe("the Board panel", () => {
 
     fireEvent.click(card("Sketch the graph"));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
+    await statusLine(
       "This system has no browser to open it: the link is copied.",
     );
     expect(writeText).toHaveBeenCalledWith("https://github.com/o/r/issues/11");
   });
 
   it("a link that cannot be opened shows the error line", async () => {
-    openLink.mockResolvedValueOnce(err("No project is picked."));
+    openLink.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return err("No project is picked.");
+    });
     await open();
 
     fireEvent.click(card("Sketch the graph"));
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No project is picked.",
-    );
+    await statusLine("No project is picked.");
   });
 
   it("a held limit shows when it lifts, with the board still there", async () => {
@@ -542,9 +538,7 @@ describe("the Board panel", () => {
 
     render(<Board onOpenWorker={() => {}} />);
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "No project is picked.",
-    );
+    await statusLine("No project is picked.");
     expect(screen.queryByRole("group")).toBeNull();
   });
 
