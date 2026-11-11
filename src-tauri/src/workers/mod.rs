@@ -26,7 +26,7 @@ use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
 use kelpie_engine::tools::Tools;
 use kelpie_engine::tree::ProcessTree;
-use kelpie_engine::worker::{self, Opening, Paths, Records, Started, Ticket};
+use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Ticket};
 use serde::Serialize;
 use specta::Type;
 use tauri::State;
@@ -71,6 +71,10 @@ pub struct Workers {
     leases: OnceLock<Leases>,
     records: Mutex<BTreeMap<String, Arc<Mutex<Records>>>>,
     /// The sessions of the workers that hold a slot, by project and ticket
+    ///
+    /// The engine holds a worker's session only weakly, so this map is what keeps
+    /// one alive. [`Workers::session`] and every start give up the sessions of
+    /// workers that no longer hold a slot.
     sessions: Mutex<BTreeMap<(String, String), Arc<Session>>>,
     sources: Mutex<BTreeMap<String, Arc<GithubSource>>>,
 }
@@ -157,11 +161,49 @@ impl Workers {
     }
 
     /// The session of the worker on `ticket` while it holds a slot
+    ///
+    /// `None` once its turn ended or it was Paused, and then nothing of the
+    /// worker's is kept alive.
     #[must_use]
     pub fn session(&self, project_id: &str, ticket: &str) -> Option<Arc<Session>> {
+        self.give_up_idle();
         lock(&self.sessions)
             .get(&(project_id.to_owned(), ticket.to_owned()))
             .cloned()
+    }
+
+    /// Keep `session` as the worker on `ticket`'s, in place of one it had
+    fn keep(&self, project_id: &str, ticket: &str, session: Arc<Session>) {
+        let before =
+            lock(&self.sessions).insert((project_id.to_owned(), ticket.to_owned()), session);
+        // Dropped here, outside the lock: the last of a session stops its harness
+        drop(before);
+    }
+
+    /// Drop the session of each worker whose record says it holds no slot
+    ///
+    /// Run from the caller's thread and never from a session's own event sink:
+    /// the last reference to a session stops its harness and joins its thread.
+    fn give_up_idle(&self) {
+        let keys: Vec<(String, String)> = lock(&self.sessions).keys().cloned().collect();
+        let idle: Vec<_> = keys
+            .into_iter()
+            .filter(|(project, ticket)| !self.holds_slot(project, ticket))
+            .collect();
+        let given: Vec<_> = {
+            let mut sessions = lock(&self.sessions);
+            idle.iter().filter_map(|key| sessions.remove(key)).collect()
+        };
+        drop(given);
+    }
+
+    fn holds_slot(&self, project_id: &str, ticket: &str) -> bool {
+        let records = lock(&self.records).get(project_id).cloned();
+        records.is_some_and(|records| {
+            lock(&records)
+                .get(ticket)
+                .is_some_and(|r| r.status.needs_slot() && r.seat == Seat::Held)
+        })
     }
 
     /// Stop logging every worker, so a quit does not log the `Failed` of its turn
@@ -187,6 +229,7 @@ impl Workers {
         ticket: &Ticket,
         open: &Opener<'_>,
     ) -> Result<WorkerStarted, String> {
+        self.give_up_idle();
         let plan = plan(&self.config, project_id)?;
         let records = self.records(project_id)?;
         let paths = Paths::new(&self.data_dir, project_id);
@@ -221,7 +264,7 @@ impl Workers {
         let started = worker::start(&project, ticket, |_| {}).map_err(|error| error.to_string())?;
         let waiting = matches!(started, Started::Waiting { .. });
         if let Started::Running { session, .. } = started {
-            lock(&self.sessions).insert((project_id.to_owned(), ticket.id.clone()), session);
+            self.keep(project_id, &ticket.id, session);
         }
         Ok(WorkerStarted {
             ticket: ticket.id.clone(),
@@ -255,6 +298,9 @@ pub fn ticket_of(source: &dyn Tickets, number: &str) -> Result<Ticket, String> {
         .ok()
         .and_then(TicketId::from_issue)
         .ok_or_else(|| format!("{number} is not an issue number"))?;
+    // The id is the number formatted back, so `012` and `+12` are ticket 12 and
+    // meet the worker already on it
+    let number = id.to_string();
     let issue = source.issue(&id).map_err(|error| match error {
         ForgeError::NoIssue { .. } => format!("there is no issue {number} in this project"),
         other => other.to_string(),
@@ -265,7 +311,7 @@ pub fn ticket_of(source: &dyn Tickets, number: &str) -> Result<Ticket, String> {
         ));
     }
     Ok(Ticket {
-        id: number.trim().trim_start_matches('#').to_owned(),
+        id: number,
         text: format!("{}\n\n{}", issue.title, issue.body),
     })
 }

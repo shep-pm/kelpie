@@ -10,7 +10,7 @@ use std::sync::Arc;
 use kelpie_engine::agents::{Binding, Origin, Sourced};
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
-use kelpie_engine::session::Session;
+use kelpie_engine::session::{Choice, Harness as SessionHarness, Session};
 use kelpie_engine::settings::{ConfigDir, Field, Harness, LayerFile, Settings};
 use kelpie_engine::ticket::fake::FakeTickets;
 use kelpie_engine::ticket::{ForgeError, Issue, TicketId, Tickets};
@@ -120,6 +120,57 @@ fn a_ticket_is_sent_as_its_title_a_blank_line_then_its_body() {
 
     assert_eq!(ticket.id, "12");
     assert_eq!(ticket.text, "Add the thing\n\nIt does one.\n\nAnd two.");
+}
+
+#[test]
+fn a_number_written_another_way_names_the_same_ticket() {
+    let tickets = FakeTickets::new();
+    tickets.script_issue(id(12), issue("Add the thing", "It does one.", true));
+
+    for written in ["012", "+12", "#12", " 12 "] {
+        let ticket = ticket_of(&tickets, written).unwrap();
+
+        assert_eq!(
+            ticket.id, "12",
+            "{written:?} must not start a second worker"
+        );
+    }
+}
+
+#[test]
+fn a_session_is_given_up_once_its_worker_holds_no_slot() {
+    let rig = Rig::new();
+    let session = Arc::new(Session::new(
+        rig.state.tree(),
+        SessionHarness::new("true"),
+        rig.dir.join("checkout"),
+        None,
+        Choice::default(),
+    ));
+    let weak = Arc::downgrade(&session);
+    {
+        let records = rig.state.workers().records(&rig.project).unwrap();
+        let mut records = records.lock().unwrap();
+        let mut busy = Record::new("12", "kelpie/12");
+        busy.status = Status::Running;
+        records.keep(busy).unwrap();
+        records.seat(1).unwrap();
+    }
+    rig.state.workers().keep(&rig.project, "12", session);
+    assert!(rig.state.workers().session(&rig.project, "12").is_some());
+
+    {
+        let records = rig.state.workers().records(&rig.project).unwrap();
+        let mut records = records.lock().unwrap();
+        records.set_status("12", Status::Ended).unwrap();
+        records.seat(1).unwrap();
+    }
+
+    assert!(rig.state.workers().session(&rig.project, "12").is_none());
+    assert!(
+        weak.upgrade().is_none(),
+        "nothing keeps the ended worker's session alive"
+    );
 }
 
 #[test]
