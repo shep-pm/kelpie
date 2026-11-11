@@ -84,7 +84,6 @@ pub struct Poller<F> {
     choose: Choose,
     records: Arc<Mutex<Records>>,
     clock: Arc<dyn Clock>,
-    login: Option<String>,
     last: Option<Last>,
     held: Option<Timestamp>,
     shown: Option<BoardEvent>,
@@ -109,7 +108,6 @@ impl<F: Feed> Poller<F> {
             choose,
             records,
             clock,
-            login: None,
             last: None,
             held: None,
             shown: None,
@@ -132,10 +130,8 @@ impl<F: Feed> Poller<F> {
     }
 
     fn fetch(&mut self) -> Result<Last, ForgeError> {
-        let login = match &self.login {
-            Some(login) => login.clone(),
-            None => self.feed.viewer()?,
-        };
+        // Asked on every read, so `gh auth switch` shows on the next minute
+        let login = self.feed.viewer()?;
         let choices = (self.choose)().map_err(ForgeError::Failed)?;
         let rules = Rules {
             pick_up: choices.pick_up,
@@ -154,7 +150,6 @@ impl<F: Feed> Poller<F> {
             closed: self.feed.closed_issues(since)?,
             pulls: self.feed.open_pulls()?,
         };
-        self.login = Some(rules.login.clone());
         Ok(Last { read, rules })
     }
 
@@ -163,7 +158,6 @@ impl<F: Feed> Poller<F> {
             ForgeError::Held(until) => self.held = Some(*until),
             ForgeError::Limited { .. } => self.held = self.feed.lifts_at(),
             _ if needs_gh(error) => {
-                self.login = None;
                 self.last = None;
                 return self.show(BoardEvent::Unavailable {
                     message: SIGN_IN.to_owned(),

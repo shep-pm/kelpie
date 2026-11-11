@@ -322,6 +322,9 @@ pub fn board_watch(
     state: State<'_, AppState>,
     on_board: Channel<BoardEvent>,
 ) -> Result<(), String> {
+    // Whatever fails below, the poller of the project before must not outlive the
+    // window's switch to this one
+    state.board().stop();
     let project = state.project_id(None)?;
     let source = match state.source(&project) {
         Ok(source) => source,

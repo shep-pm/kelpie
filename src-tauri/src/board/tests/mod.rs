@@ -356,6 +356,22 @@ fn a_gh_with_no_login_sends_unavailable_saying_to_sign_in() {
 }
 
 #[test]
+fn a_login_switched_while_watching_picks_up_the_new_logins_tickets() {
+    let mut rig = Rig::new(Source::new());
+    rig.source
+        .tickets
+        .script_open(Ok(vec![listed(13, "Think", &[], 200)]));
+    let event = rig.poller.read().unwrap();
+    assert_eq!(placed(&event), [("13".to_owned(), Column::Draft)]);
+
+    // `gh auth switch` to an account that opened none of them
+    *rig.source.viewer.lock().unwrap() = Ok("someone-else".to_owned());
+    let event = rig.poller.read().unwrap();
+
+    assert_eq!(placed(&event), []);
+}
+
+#[test]
 fn a_missing_gh_sends_unavailable_saying_to_install_it() {
     let mut rig = Rig::new(Source::new());
     *rig.source.viewer.lock().unwrap() = Err(ForgeError::Spawn("no such file".to_owned()));
@@ -476,4 +492,17 @@ fn a_move_of_a_ticket_not_on_the_board_is_refused() {
         said.contains("99") && said.contains("not on the board"),
         "{said}"
     );
+}
+
+#[test]
+fn a_stopped_host_no_longer_answers_for_the_board_it_watched() {
+    let rig = Rig::new(Source::new());
+    let host = watching(&rig);
+    assert_eq!(host.column_of("12"), Ok(Column::Ready));
+
+    host.stop();
+
+    // A drop must not be checked against the columns of a project left behind
+    let said = host.column_of("12").unwrap_err();
+    assert!(said.contains("not been read"), "{said}");
 }
