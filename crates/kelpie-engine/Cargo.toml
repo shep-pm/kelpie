@@ -23,6 +23,7 @@ blocking.workspace = true
 crabpot.workspace = true
 futures.workspace = true
 getrandom.workspace = true
+jiff.workspace = true
 keyring.workspace = true
 kelpie-protocol.workspace = true
 serde.workspace = true
