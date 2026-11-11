@@ -9,6 +9,7 @@ vi.mock("@/bindings", () => ({
       status: "ok",
       data: { global: [], project: null },
     }),
+    githubStatus: async () => ({ status: "ok", data: { kind: "no_gh" } }),
   },
 }));
 
