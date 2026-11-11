@@ -11,6 +11,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use kelpie_engine::sandbox::Refusal;
 use kelpie_engine::session::fake::{FakeAgent, FakeNetwork, Turn};
 use kelpie_engine::session::{SandboxAnswer, Session};
 use kelpie_engine::tools::SessionTools;
@@ -366,13 +367,21 @@ fn noted(rig: &Rig, agent: &FakeAgent, text: &str) -> Result<NoteOutcome, String
 }
 
 /// Park ticket 12's worker the way a ruling does: waiting on the maintainer, with `reason`
+///
+/// Its session is given up, as the next ask of one does.
 fn ruled(rig: &Rig, reason: &str) {
-    let records = rig.state.workers().records(&rig.project).unwrap();
-    let mut records = lock(&records);
-    records
-        .set_status(TICKET, Status::WaitingOnMaintainer)
-        .unwrap();
-    records.set_reason(TICKET, Some(reason.to_owned())).unwrap();
+    {
+        let records = rig.state.workers().records(&rig.project).unwrap();
+        let mut records = lock(&records);
+        records
+            .set_status(TICKET, Status::WaitingOnMaintainer)
+            .unwrap();
+        records.set_reason(TICKET, Some(reason.to_owned())).unwrap();
+    }
+    assert!(
+        rig.state.workers().session(&rig.project, TICKET).is_none(),
+        "a worker waiting on the maintainer keeps no session"
+    );
 }
 
 #[test]
@@ -386,10 +395,6 @@ fn a_note_to_a_worker_waiting_on_a_ruling_sends_it_back_with_the_text() {
     started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
     until_turns(&heard, 1);
     ruled(&rig, "the pull request is still red");
-    assert!(
-        rig.state.workers().session(&rig.project, TICKET).is_none(),
-        "a worker waiting on the maintainer keeps no session"
-    );
 
     let told = noted(&rig, &agent, "the failure is in the fixture, not the code").unwrap();
 
@@ -457,6 +462,88 @@ fn a_note_to_a_paused_worker_is_kept_for_its_next_start() {
         "its next start's prompt does not end with the note"
     );
     assert!(record(&rig).notes.is_empty());
+}
+
+/// What the worker on ticket 12 is told as a Note when its session cannot be opened, as `open` fails it
+fn noted_through(
+    rig: &Rig,
+    text: &str,
+    open: &crate::workers::Opener<'_>,
+) -> Result<NoteOutcome, String> {
+    let folder = rig.state.project_path_of(&rig.project).unwrap();
+    rig.state.workers().note(
+        &rig.project,
+        &folder,
+        rig.state.tools(),
+        TICKET,
+        text,
+        Err("no ticket is read for a worker that has had a turn".to_owned()),
+        open,
+    )
+}
+
+#[test]
+fn a_note_whose_fix_turn_hits_a_refused_sandbox_leaves_the_worker_paused_with_the_refusal() {
+    let rig = Rig::new();
+    rig.with_origin();
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let (heard, kept) = session();
+    started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    until_turns(&heard, 1);
+    ruled(&rig, "the pull request is still red");
+
+    let refused = noted_through(&rig, "try again", &|_, opening: &Opening<'_>| {
+        Err(opening.refuse(Refusal::NoCapabilities))
+    });
+
+    assert!(refused.is_err(), "the start was refused");
+    let record = record(&rig);
+    assert_eq!(
+        record.status,
+        Status::Paused,
+        "a refused sandbox waits Paused, so Resume takes it"
+    );
+    assert_eq!(
+        record.reason,
+        Some(format!(
+            "its sandbox cannot start because {}",
+            Refusal::NoCapabilities
+        )),
+        "the ticket says why, not what the ruling was"
+    );
+}
+
+#[test]
+fn a_note_sent_again_after_its_fix_turn_failed_to_start_goes_out_once() {
+    let rig = Rig::new();
+    rig.with_origin();
+    let agent = FakeAgent::new()
+        .can_resume()
+        .knows("fake-1")
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    let (heard, kept) = session();
+    started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    until_turns(&heard, 1);
+    ruled(&rig, "the pull request is still red");
+    let broken = |_: &OpenOn<'_>, _: &Opening<'_>| Err::<Session, _>("no harness".to_owned());
+
+    noted_through(&rig, "use the new name", &broken).unwrap_err();
+    assert_eq!(
+        standing(&rig).0,
+        Status::WaitingOnMaintainer,
+        "the ruling is put back"
+    );
+    noted_through(&rig, "use the new name", &broken).unwrap_err();
+    let told = noted(&rig, &agent, "use the new name").unwrap();
+
+    assert_eq!(told, NoteOutcome::Sent);
+    until_turns_in(&agent, 2);
+    assert_eq!(
+        prompts(&agent)[1].matches("use the new name").count(),
+        1,
+        "the worker's first prompt carries the text once, however many tries failed"
+    );
 }
 
 /// Wait for `agent` to have been sent `n` prompts

@@ -174,6 +174,11 @@ impl Workers {
         let sent = self.fix_turn(project_id, folder, tools, ticket, text, source, open);
         if sent.is_err() {
             let mut records = lock(&records);
+            // A start that parked the worker Paused, as a refused sandbox does, has said
+            // why in its reason, which a ruling put back would hide
+            if records.get(ticket).map(|record| record.status) != Some(Status::Ended) {
+                return sent;
+            }
             let back = records
                 .set_status(ticket, Status::WaitingOnMaintainer)
                 .and_then(|()| records.set_reason(ticket, reason));

@@ -16,7 +16,7 @@ use std::path::Path;
 
 use kelpie_engine::ticket::Tickets;
 use kelpie_engine::tools::Tools;
-use kelpie_engine::worker::{self, Seat, Status, Ticket};
+use kelpie_engine::worker::{self, Ticket};
 
 use super::tell::NoteOutcome;
 use super::{CARRY_ON, Opener, Workers, lock, ticket_id, ticket_of};
@@ -79,16 +79,15 @@ impl Workers {
 
     /// Add `prompt` to the notes of the worker on `ticket`, which its next prompt carries
     ///
-    /// A worker already in line for a slot holds the prompt from the ask that put it
-    /// there, so it is not added twice.
+    /// A record that already holds the prompt, from an ask that put the worker in line or
+    /// whose start failed, is not given it twice.
     fn keep_prompt(&self, project_id: &str, ticket: &str, prompt: &str) -> Result<(), String> {
         let records = self.records(project_id)?;
         let mut records = lock(&records);
         let record = records
             .get(ticket)
             .ok_or_else(|| format!("there is no worker on ticket {ticket}"))?;
-        let in_line = record.status == Status::Running && record.seat == Seat::Waiting;
-        if in_line && record.notes.iter().any(|note| note == prompt) {
+        if record.notes.iter().any(|note| note == prompt) {
             return Ok(());
         }
         records
