@@ -717,6 +717,41 @@ fn an_opener_that_fails_reaches_the_chat_as_failed() {
 }
 
 #[test]
+fn an_opener_that_fails_leaves_the_message_and_its_failure_in_the_log() {
+    let chat = Chat::with(
+        Box::new(|_| Err("the bridge could not be downloaded".to_owned())),
+        Box::new(|| Ok(None)),
+        None,
+    );
+    chat.state().set_project(chat.dir.clone()).unwrap();
+    chat.send("Hi").next();
+
+    assert_eq!(
+        pm_history(chat.state()).unwrap(),
+        [
+            user("Hi"),
+            LogEntry::Event(SessionEvent::Failed {
+                message: "the bridge could not be downloaded".to_owned()
+            })
+        ]
+    );
+}
+
+#[test]
+fn a_send_refused_for_no_project_or_an_install_leaves_the_log_empty() {
+    let chat = Chat::with(Chat::opener(&FakeAgent::new()), Box::new(|| Ok(None)), None);
+    chat.send("Hi").next();
+    assert_eq!(pm_history(chat.state()).unwrap(), []);
+
+    chat.state().set_project(chat.dir.clone()).unwrap();
+    let state = chat.state();
+    let hold = state.hold_for_install().unwrap();
+    chat.send("Hi").next();
+    drop(hold);
+    assert_eq!(pm_history(chat.state()).unwrap(), []);
+}
+
+#[test]
 fn project_pick_keeps_the_folder_and_project_get_returns_it() {
     let picked = std::env::temp_dir().join("kelpie-picked");
     let answer = picked.clone();

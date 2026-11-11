@@ -608,6 +608,74 @@ describe("the chat store", () => {
     ]);
   });
 
+  it("load asks what the sandbox found when the last restored turn failed", async () => {
+    const refused: SandboxView = {
+      refusal: "no_capabilities",
+      unsandboxed: false,
+      install: "available",
+    };
+    pmSandbox.mockResolvedValue(refused);
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "go" },
+        { entry: "event", kind: "failed", message: "the sandbox cannot start" },
+      ],
+    });
+
+    await useChat.getState().load();
+
+    await vi.waitFor(() => expect(useChat.getState().sandbox).toEqual(refused));
+    expect(pmSandbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("load asks nothing when the last restored turn did not fail", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "go" },
+        { entry: "event", kind: "failed", message: "the sandbox cannot start" },
+        { entry: "user", text: "again" },
+        { entry: "event", kind: "text", delta: "Hi" },
+        {
+          entry: "event",
+          kind: "turn_ended",
+          stop_reason: "end_turn",
+          usage: null,
+        },
+      ],
+    });
+
+    await useChat.getState().load();
+
+    expect(pmSandbox).not.toHaveBeenCalled();
+    expect(useChat.getState().sandbox).toBeNull();
+  });
+
+  it("a failed turn sent again shows once, as the retry, in a restored history", async () => {
+    pmHistory.mockResolvedValue({
+      status: "ok",
+      data: [
+        { entry: "user", text: "go" },
+        { entry: "event", kind: "failed", message: "the sandbox cannot start" },
+        { entry: "user", text: "go" },
+        { entry: "event", kind: "text", delta: "Whole answer" },
+        {
+          entry: "event",
+          kind: "turn_ended",
+          stop_reason: "end_turn",
+          usage: null,
+        },
+      ],
+    });
+
+    await useChat.getState().load();
+
+    expect(useChat.getState().turns).toMatchObject([
+      { user: "go", reply: "Whole answer", state: "done" },
+    ]);
+  });
+
   it("a history that cannot be read is kept as an error and the chat still works", async () => {
     pmHistory.mockResolvedValue({ status: "error", error: "line 3 is torn" });
 
