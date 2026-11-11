@@ -3,14 +3,17 @@
 //! [`open`] is what [`kelpie_engine::worker::start`] calls to build a worker's
 //! session, as [`pm::open`](crate::pm::open) builds the PM's. The engine hands it
 //! the worktree to work in, the variables the worker's harness runs with and the
-//! worker's lease socket, and it builds the session on the `claude-acp` bridge
-//! inside a sandbox started by [`Sandbox::start_worker`].
+//! worker's lease socket, and it builds the session inside a sandbox started by
+//! [`Sandbox::start_worker`]: on Claude Code that means the `claude-acp` bridge,
+//! and on goose the person's own `goose acp`, which speaks ACP itself and needs
+//! no bridge (ADR 0007).
 //!
 //! The engine's own `Opening::sandbox` borrows what the start holds, and a bridge
 //! starts a sandbox for each version it moves a session to, long after the start
 //! has returned. So the opener keeps the folders itself and starts every
-//! version's sandbox from them. A worker never runs without a sandbox: where it
-//! cannot start, the worker does not either.
+//! version's sandbox from them. A goose worker swaps no version, so its sandbox
+//! comes from `Opening::sandbox` and covers its whole session. A worker never runs
+//! without a sandbox: where it cannot start, the worker does not either.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -18,11 +21,11 @@ use std::process::Command;
 use std::sync::Arc;
 
 use kelpie_engine::bridge;
-use kelpie_engine::harness::claude;
+use kelpie_engine::harness::{HarnessError, claude, goose};
 use kelpie_engine::lease::SessionLease;
 use kelpie_engine::login::Store;
 use kelpie_engine::sandbox::{self, Sandbox};
-use kelpie_engine::session::{Session, Started, sandboxed_launcher};
+use kelpie_engine::session::{Harness as SessionHarness, Session, Started, sandboxed_launcher};
 use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tools::SessionTools;
 use kelpie_engine::tree::ProcessTree;
@@ -62,9 +65,30 @@ pub struct OpenOn<'a> {
 /// # Errors
 ///
 /// The harness is not wired to workers, the state folder cannot be made, the
-/// bridge cannot be installed, or the harness is not installed or has no login.
-/// The text says which.
+/// bridge cannot be installed, a goose worker has no provider set, the harness is
+/// not installed or has no login, or the worker's sandbox cannot start. The text
+/// says which.
 pub fn open(on: &OpenOn<'_>, opening: &Opening<'_>) -> Result<Session, String> {
+    open_with(on, opening, goose::harness, goose_session)
+}
+
+/// The opener with the goose arm's two steps as `build` and `session`
+///
+/// `build` is what finds the person's own goose and builds its harness, and
+/// `session` is what starts the worker's sandbox around it and opens the session
+/// in the worktree. The app hands in [`goose::harness`] and [`goose_session`],
+/// which search `PATH` and start crabpot; a test hands in stand-ins, since a unit
+/// test has no goose on `PATH` and starts no sandbox.
+///
+/// # Errors
+///
+/// As [`open`].
+pub(super) fn open_with(
+    on: &OpenOn<'_>,
+    opening: &Opening<'_>,
+    build: impl FnOnce(&Path, goose::Provider, bool) -> Result<SessionHarness, HarnessError>,
+    session: impl FnOnce(&Opening<'_>, SessionHarness) -> Result<Session, String>,
+) -> Result<Session, String> {
     let harness = opening
         .binding
         .harness
@@ -73,12 +97,71 @@ pub fn open(on: &OpenOn<'_>, opening: &Opening<'_>) -> Result<Session, String> {
     // parity: harness.worker
     match harness {
         Harness::ClaudeCode => claude_worker(on, opening),
-        // `Harness` grows with each harness's slice, and none but Claude Code is built here
+        Harness::Goose => goose_worker(on, opening, build, session),
+        // `Harness` grows with each harness's slice, and none but these two are built here
         other => Err(format!(
             "{} is not wired to workers yet",
             pm::describe(other, None)
         )),
     }
+}
+
+/// The worker's goose harness, from the plan's provider, carrying the worker's own variables
+///
+/// goose keeps its config in a folder of kelpie's own under the worker's state
+/// folder, so each worker has a goose root of its own and the person's own goose
+/// config stays out until they turn *Harness global folder* on.
+///
+/// # Errors
+///
+/// The settings name no provider, the state folder cannot be made, or the
+/// person's goose is not on `PATH`. The text says which.
+fn goose_worker(
+    on: &OpenOn<'_>,
+    opening: &Opening<'_>,
+    build: impl FnOnce(&Path, goose::Provider, bool) -> Result<SessionHarness, HarnessError>,
+    session: impl FnOnce(&Opening<'_>, SessionHarness) -> Result<Session, String>,
+) -> Result<Session, String> {
+    let provider = pm::goose_provider(on.plan.provider.as_deref(), on.plan.host.as_deref())?;
+    std::fs::create_dir_all(opening.state_dir)
+        .map_err(|error| format!("could not make {}: {error}", opening.state_dir.display()))?;
+    let mut harness =
+        build(opening.state_dir, provider, on.plan.harness_global_folder).map_err(pm::no_goose)?;
+    harness.env.extend(
+        opening
+            .env
+            .iter()
+            .map(|(key, value)| (key.into(), value.into())),
+    );
+    harness
+        .env
+        .extend(opening.lease.as_ref().map(SessionLease::env));
+    session(opening, harness)
+}
+
+/// The worker's goose session, inside the sandbox the engine starts for it
+///
+/// `Opening::sandbox` is [`Sandbox::start_worker`] with the worker's worktree,
+/// git dirs, state folder and lease door, which is the policy every worker's
+/// sandbox gets whatever its harness is. goose swaps no version, so this one
+/// sandbox covers its whole session.
+///
+/// # Errors
+///
+/// The worker's sandbox cannot start. The text says why.
+pub(super) fn goose_session(
+    opening: &Opening<'_>,
+    harness: SessionHarness,
+) -> Result<Session, String> {
+    let sandbox = (opening.sandbox)(&harness)?;
+    Ok(Session::sandboxed(
+        Arc::clone(opening.tree),
+        harness,
+        sandbox,
+        opening.worktree.to_path_buf(),
+        opening.resume.clone(),
+        opening.choice.clone(),
+    ))
 }
 
 /// What every version's sandbox is started from

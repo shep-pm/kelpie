@@ -4,25 +4,24 @@
 //! a [`FakeTickets`], so no test needs `gh`, a model or the network.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
-use kelpie_engine::agents::{Binding, Origin, Sourced};
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::{Choice, Harness as SessionHarness, Session};
-use kelpie_engine::settings::{ConfigDir, Field, Harness, LayerFile, Settings};
+use kelpie_engine::settings::{ConfigDir, Field, LayerFile, Settings};
 use kelpie_engine::ticket::fake::FakeTickets;
 use kelpie_engine::ticket::{ForgeError, Issue, TicketId, Tickets};
-use kelpie_engine::tree::ProcessTree;
-use kelpie_engine::worker::{Opening, Record, Seat, Status};
+use kelpie_engine::worker::{Record, Seat, Status};
 use serde_json::{Value, json};
 
-use super::open::{self, OpenOn};
 use super::{WorkerStarted, start_on, ticket_of};
 use crate::state::AppState;
 
 mod feed;
+mod goose;
 mod plan;
 
 /// An app state in a folder of its own, with one project picked
@@ -249,62 +248,55 @@ fn a_start_with_no_free_slot_answers_waiting() {
     );
 }
 
-#[test]
-fn a_harness_other_than_claude_code_is_refused_by_name() {
-    let rig = Rig::new();
-    let tree = rig.state.tree();
-    let binding = Binding {
-        harness: Sourced {
-            value: Some(Harness::Goose),
-            from: Origin::Project,
-        },
-        model: Sourced {
-            value: None,
-            from: Origin::BuiltIn,
-        },
-        effort: Sourced {
-            value: None,
-            from: Origin::BuiltIn,
-        },
-        body: Sourced {
-            value: None,
-            from: Origin::BuiltIn,
-        },
-    };
-
-    let said = opened(&rig, &tree, &binding).unwrap_err();
-
-    assert_eq!(said, "goose is not wired to workers yet");
+/// Run `git` in `folder`, as the checkout of a project would be made
+pub(super) fn git(folder: &Path, args: &[&str]) {
+    let done = Command::new("git")
+        .current_dir(folder)
+        .args([
+            "-c",
+            "user.name=kelpie",
+            "-c",
+            "user.email=kelpie@example.com",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        done.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&done.stderr)
+    );
 }
 
-/// What the app's opener answers for a worker whose binding is `binding`
-fn opened(rig: &Rig, tree: &Arc<ProcessTree>, binding: &Binding) -> Result<Session, String> {
-    let plan = super::plan(rig.config(), &rig.project).unwrap();
-    let worktree = rig.dir.join("worktree");
-    let state_dir = rig.dir.join("state");
-    let logins = Store::memory();
-    let on = OpenOn {
-        data_dir: rig.state.data_dir(),
-        logins: &logins,
-        config: rig.config(),
-        project_id: &rig.project,
-        folder: &rig.dir.join("checkout"),
-        plan: &plan,
-    };
-    let sandbox = |_: &kelpie_engine::session::Harness| Err("no sandbox here".to_owned());
-    open::open(
-        &on,
-        &Opening {
-            tree,
-            binding,
-            choice: kelpie_engine::session::Choice::default(),
-            worktree: &worktree,
-            state_dir: &state_dir,
-            resume: None,
-            tools: None,
-            env: Vec::new(),
-            lease: None,
-            sandbox: &sandbox,
-        },
-    )
+/// What `git` answers for `folder`, trimmed
+pub(super) fn git_out(folder: &Path, args: &[&str]) -> String {
+    let done = Command::new("git")
+        .current_dir(folder)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        done.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    String::from_utf8_lossy(&done.stdout).trim().to_owned()
+}
+
+impl Rig {
+    /// Make the project's checkout a repo with an origin holding `main`
+    pub(super) fn with_origin(&self) {
+        let checkout = self.dir.join("checkout");
+        git(
+            &self.dir,
+            &["init", "--quiet", "--bare", "-b", "main", "origin.git"],
+        );
+        git(&checkout, &["init", "--quiet", "-b", "main"]);
+        git(&checkout, &["remote", "add", "origin", "../origin.git"]);
+        git(
+            &checkout,
+            &["commit", "--quiet", "--allow-empty", "-m", "init"],
+        );
+        git(&checkout, &["push", "--quiet", "origin", "main"]);
+    }
 }

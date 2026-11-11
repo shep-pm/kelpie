@@ -27,6 +27,27 @@ fn the_plan_takes_slots_timeout_allowlist_and_reads_from_the_projects_settings()
 }
 
 #[test]
+fn the_plan_carries_the_provider_and_host_a_goose_worker_runs_on() {
+    let rig = Rig::new();
+    rig.set(Field::Provider, json!("ollama"));
+    rig.set(Field::Host, json!("http://127.0.0.1:11434"));
+
+    let named = plan(rig.config(), &rig.project).unwrap();
+
+    assert_eq!(named.provider.as_deref(), Some("ollama"));
+    assert_eq!(named.host.as_deref(), Some("http://127.0.0.1:11434"));
+
+    let unset = Rig::new();
+    let nothing = plan(unset.config(), &unset.project).unwrap();
+
+    assert_eq!(
+        (nothing.provider.as_deref(), nothing.host.as_deref()),
+        (None, None),
+        "kelpie names no provider of its own"
+    );
+}
+
+#[test]
 fn the_plan_binding_is_the_worker_agent_with_the_projects_layers() {
     let rig = Rig::new();
     rig.set(Field::WorkerModel, json!("small"));

@@ -38,6 +38,10 @@
 //! built-in layer (ADR 0006). Its bridge is installed on the first send, and
 //! whatever goes wrong before the session can start reaches the chat as a
 //! [`SessionEvent::Failed`], like a failure mid-turn.
+//!
+//! A PM on goose runs on the person's own `goose acp` (ADR 0007): goose speaks
+//! ACP itself, so there is no bridge to install, no version to swap to, and the
+//! provider it runs on is the `provider` and `host` the settings name.
 
 use std::fmt;
 use std::fs;
@@ -46,7 +50,7 @@ use std::sync::Arc;
 
 use kelpie_engine::agents::{Agents, Binding, Origin, Sourced};
 use kelpie_engine::bridge::{self, Pin, Versions};
-use kelpie_engine::harness::{HarnessError, claude};
+use kelpie_engine::harness::{HarnessError, claude, goose};
 use kelpie_engine::login::Store;
 use kelpie_engine::sandbox::{self, Reads, Sandbox, SandboxError};
 use kelpie_engine::session::{
@@ -228,12 +232,15 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 
 /// The app's [`Opener`](crate::state::Opener): the PM on what `opening.pm` says
 ///
-/// Installs the bridge if it is not yet, and builds the session on it, so the
-/// harness is built from the version [`Versions::current`] names at each send
-/// rather than from kelpie's pinned path. Every version is confined in a
-/// sandbox of its own, started with the version, so a bridge swapped in at an
-/// idle point runs inside crabpot as the first one did. Each sandbox lives as
-/// long as the launcher that holds it.
+/// A Claude Code PM runs on the `claude-acp` bridge, installed on the first send
+/// if it is not yet, so the harness is built from the version
+/// [`Versions::current`] names at each send rather than from kelpie's pinned
+/// path. Every version is confined in a sandbox of its own, started with the
+/// version, so a bridge swapped in at an idle point runs inside crabpot as the
+/// first one did. Each sandbox lives as long as the launcher that holds it.
+///
+/// A goose PM runs on the person's own `goose acp`, which installs no bridge and
+/// swaps no version: one sandbox, started with the session, covers the whole PM.
 ///
 /// Before it builds the session it checks the project's folder, then starts
 /// the PM's sandbox once and runs a command in it, and records in
@@ -244,9 +251,29 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 /// # Errors
 ///
 /// The state folder cannot be made, the bridge cannot be installed, the
-/// harness is not installed or has no login, or the sandbox cannot start and
-/// the project does not allow running without one. The text says which.
+/// harness is not installed or has no login, a goose PM has no provider set, or
+/// the sandbox cannot start and the project does not allow running without one.
+/// The text says which.
 pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
+    open_with(opening, goose::harness, goose_session)
+}
+
+/// The app's [`Opener`](crate::state::Opener) with the goose arm's two steps as `build` and `run`
+///
+/// `build` is what finds the person's own goose and builds its harness, and
+/// `run` is what starts that harness inside the PM's sandbox and opens the
+/// session on it. The app hands in [`goose::harness`] and its own session step,
+/// which search `PATH` and start crabpot; a test hands in stand-ins, since a
+/// unit test has no goose on `PATH` and starts no sandbox.
+///
+/// # Errors
+///
+/// As [`open`].
+fn open_with(
+    opening: &Opening<'_>,
+    build: impl FnOnce(&Path, goose::Provider, bool) -> Result<SessionHarness, HarnessError>,
+    run: impl FnOnce(&Opening<'_>, SessionHarness, Option<&SessionTools>) -> Result<Session, String>,
+) -> Result<Session, String> {
     let Opening {
         data_dir,
         project,
@@ -264,7 +291,19 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
             // kelpie's own pin is always there to fall back to
             let pinned =
                 bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
-            let confinement = confined(opening, tools.as_ref(), pinned)?;
+            let pm_sandbox = PmSandbox::of(opening);
+            let confinement = confined(opening, || {
+                // The version a session starts on now, else kelpie's own pin, which is always there
+                let pin = claude::pin();
+                let in_use = versions(data_dir, pin).in_use;
+                let cmd =
+                    bridge::installed(data_dir, pin.id, &in_use, claude::CMD).unwrap_or(pinned);
+                pm_sandbox
+                    .start(cmd, tools.as_ref().map(SessionTools::door))
+                    .and_then(|(_, sandbox)| {
+                        sandbox.ready(opening.tree).map_err(Unstarted::Sandbox)
+                    })
+            })?;
             Session::on_bridge(
                 pm_bridge(opening, tools.clone(), confinement),
                 project.path.clone(),
@@ -272,7 +311,15 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
                 pm.choice.clone(),
             )
         }
-        // `Harness` grows with each harness's slice, and none but Claude Code is built here
+        Harness::Goose => {
+            let provider = goose_provider(pm.provider.as_deref(), pm.host.as_deref())?;
+            fs::create_dir_all(state_dir)
+                .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
+            let harness = build(state_dir, provider, pm.harness_global_folder).map_err(no_goose)?;
+            run(opening, harness, tools.as_ref())?
+        }
+        // parity: harness.pm
+        // `Harness` grows with each harness's slice, and none but these two are built here
         other => return Err(format!("{other:?} is not wired to the PM yet")),
     };
     let session = match tools {
@@ -283,6 +330,103 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
         Some(instructions) => session.with_instructions(instructions.clone()),
         None => session,
     })
+}
+
+/// The provider a goose session runs on, from the `provider` and `host` settings
+///
+/// goose reaches its model through a server the person names, and kelpie names no
+/// provider of its own (ADR 0006), so a goose session with no provider cannot
+/// start.
+///
+/// # Errors
+///
+/// No provider is set: the line names the `provider` setting.
+pub(crate) fn goose_provider(
+    name: Option<&str>,
+    host: Option<&str>,
+) -> Result<goose::Provider, String> {
+    let Some(name) = name else {
+        return Err(
+            "goose runs on a provider you name: set `provider` in the settings, then start again"
+                .to_owned(),
+        );
+    };
+    Ok(goose::Provider {
+        name: name.to_owned(),
+        host: host.map(str::to_owned),
+    })
+}
+
+/// Why the person's own goose could not be run
+///
+/// goose installs no bridge, so a goose that is not on `PATH` is the person's own
+/// install missing, and kelpie installs no harness of its own (ADR 0006,
+/// `docs/design/bridge-updates.md`, Scope).
+pub(crate) fn no_goose(error: HarnessError) -> String {
+    match error {
+        HarnessError::NotInstalled { cmd, .. } => format!(
+            "kelpie runs your own goose, and PATH holds no {cmd}: install goose and start kelpie again"
+        ),
+        // goose keeps no login of kelpie's and has no bridge to say it is too old
+        other => other.to_string(),
+    }
+}
+
+/// The PM's goose session: `harness` inside the PM's sandbox, or without one
+///
+/// The sandbox is the one the Claude Code arm starts, from the same project
+/// settings, and it lets through what that arm's sandbox lets through: the
+/// project's allowlist plus the hosts its harness names, which for goose are the
+/// provider's host alone (ADR 0005). goose speaks ACP itself, so one sandbox
+/// covers the whole session: there is no version to swap to and no bridge to
+/// start the next one's sandbox from.
+///
+/// # Errors
+///
+/// The sandbox cannot start and the project does not allow running without one.
+/// The text names the refusal when bwrap gave one.
+fn goose_session(
+    opening: &Opening<'_>,
+    harness: SessionHarness,
+    tools: Option<&SessionTools>,
+) -> Result<Session, String> {
+    let Opening {
+        tree, project, pm, ..
+    } = *opening;
+    let pm_sandbox = PmSandbox::of(opening);
+    let door = tools.map(SessionTools::door);
+    let confinement = confined(opening, || {
+        pm_sandbox
+            .sandbox(&harness, door)
+            .and_then(|sandbox| sandbox.ready(tree).map_err(Unstarted::Sandbox))
+    })?;
+    let (folder, resume, choice) = (
+        project.path.clone(),
+        project.pm_session.clone(),
+        pm.choice.clone(),
+    );
+    match confinement {
+        Confinement::Sandboxed => {
+            let sandbox = pm_sandbox
+                .sandbox(&harness, door)
+                .map_err(|error| error.to_string())?;
+            Ok(Session::sandboxed(
+                Arc::clone(tree),
+                harness,
+                sandbox,
+                folder,
+                resume,
+                choice,
+            ))
+        }
+        Confinement::Unsandboxed => Ok(Session::new(
+            Arc::clone(tree),
+            harness,
+            folder,
+            resume,
+            choice,
+        )),
+    }
 }
 
 /// The `claude-acp` bridge a PM session runs on, which it can move to a newer
@@ -472,9 +616,17 @@ impl PmSandbox {
         door: Option<&Door>,
     ) -> Result<(SessionHarness, Sandbox), Unstarted> {
         let harness = self.harness(cmd)?;
-        let sandbox = Sandbox::start_with_door(&harness, &self.project(), &self.state_dir, door)
-            .map_err(Unstarted::Sandbox)?;
+        let sandbox = self.sandbox(&harness, door)?;
         Ok((harness, sandbox))
+    }
+
+    /// The sandbox `harness` runs in, with `door` as its one route to kelpie
+    ///
+    /// One policy for every harness the PM runs on: what a session's model
+    /// answers on comes from the harness itself (ADR 0005).
+    fn sandbox(&self, harness: &SessionHarness, door: Option<&Door>) -> Result<Sandbox, Unstarted> {
+        Sandbox::start_with_door(harness, &self.project(), &self.state_dir, door)
+            .map_err(Unstarted::Sandbox)
     }
 }
 
@@ -504,10 +656,10 @@ fn confinement(
     }
 }
 
-/// Decide how the PM runs: check the folder, probe the sandbox, and apply
+/// Decide how the PM runs: check the folder, run `probe`, and apply
 /// [`confinement`]
 ///
-/// The probe starts the PM's sandbox once, runs a command in it, and drops it,
+/// `probe` starts the PM's sandbox once, runs a command in it, and drops it,
 /// so the session is not built on a sandbox that cannot start. What it finds
 /// goes to `opening.sandbox_setup`: a bwrap [`Refusal`] is kept for the chat,
 /// along with whether the session runs without a sandbox because of it, and any
@@ -524,37 +676,21 @@ fn confinement(
 /// [`Refusal`]: kelpie_engine::sandbox::Refusal
 fn confined(
     opening: &Opening<'_>,
-    tools: Option<&SessionTools>,
-    pinned: PathBuf,
+    probe: impl FnOnce() -> Result<(), Unstarted>,
 ) -> Result<Confinement, String> {
     let Opening {
-        data_dir,
-        tree,
-        pm,
-        sandbox_setup,
-        ..
+        pm, sandbox_setup, ..
     } = *opening;
-    let pm_sandbox = PmSandbox::of(opening);
-    let folder = sandbox::check_project(&pm_sandbox.project());
+    let folder = sandbox::check_project(&PmSandbox::of(opening).project());
     // A refused folder has no sandbox worth trying, and the harness is not asked either
-    let probed = if folder.is_ok() {
-        // The version a session starts on now, else kelpie's own pin, which is always there
-        let pin = claude::pin();
-        let in_use = versions(data_dir, pin).in_use;
-        let cmd = bridge::installed(data_dir, pin.id, &in_use, claude::CMD).unwrap_or(pinned);
-        match pm_sandbox
-            .start(cmd, tools.map(SessionTools::door))
-            .and_then(|(_, sandbox)| sandbox.ready(tree).map_err(Unstarted::Sandbox))
-        {
-            Err(Unstarted::Harness(error)) => {
-                sandbox_setup.record(None);
-                return Err(Unstarted::Harness(error).to_string());
-            }
-            Err(Unstarted::Sandbox(error)) => Err(error),
-            Ok(()) => Ok(()),
+    let probed = if folder.is_ok() { probe() } else { Ok(()) };
+    let probed = match probed {
+        Ok(()) => Ok(()),
+        Err(Unstarted::Harness(error)) => {
+            sandbox_setup.record(None);
+            return Err(Unstarted::Harness(error).to_string());
         }
-    } else {
-        Ok(())
+        Err(Unstarted::Sandbox(error)) => Err(error),
     };
     let refusal = match &probed {
         Err(SandboxError::Refused(refusal)) => Some(*refusal),
