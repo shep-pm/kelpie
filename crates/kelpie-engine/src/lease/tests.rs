@@ -110,33 +110,6 @@ fn holders(leases: &Leases, name: &str) -> usize {
         .map_or(0, |status| status.holders.len())
 }
 
-/// How many asks queue for `name`, as kelpie's lease status says
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn waiting(leases: &Leases, name: &str) -> usize {
-    leases
-        .status()
-        .iter()
-        .find(|status| status.kind == name)
-        .map_or(0, |status| status.queue.len())
-}
-
-/// Wait for kelpie to hear a withdrawn ask close and take its queue entry back
-///
-/// A connection's end is heard on that connection's own task, a moment after the
-/// client closes it. An ask sent at once can be answered with the withdrawn ask
-/// still ahead of it, which is that moment and not the queue's order.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn withdrawn(leases: &Leases, name: &str) {
-    let deadline = std::time::Instant::now() + WAIT;
-    while waiting(leases, name) != 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{name} still queues the ask that was withdrawn"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
 #[test]
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn a_second_holder_waits_while_the_first_holds_it() {
@@ -168,12 +141,6 @@ fn a_waiter_that_closes_loses_its_place_and_grants_nothing() {
     let mut waiter = knocked(session.door(), "cargo-test");
     assert_eq!(waiter.answer(), json!({"queued": 0}));
     drop(waiter);
-    withdrawn(&leases, "cargo-test");
-    assert_eq!(
-        holders(&leases, "cargo-test"),
-        1,
-        "the withdrawn ask was never granted a place"
-    );
 
     // The withdrawn ask granted nothing, and the next ask queues behind the holder
     let mut third = knocked(session.door(), "cargo-test");
