@@ -6,8 +6,9 @@
 //! after a hand-over sees the pull request the hand-over opened. No call here needs
 //! `gh` or the network.
 //!
-//! A merge pinned to a head the branch no longer holds is refused, as GitHub
-//! refuses it, and a merged pull request leaves the open ones. Later slices grow
+//! A merge of a draft, of an ended pull request, or pinned to a head the branch no
+//! longer holds is refused, as GitHub refuses it, and a merged pull request leaves
+//! the open ones. Later slices grow
 //! it with checks and closes.
 
 use std::collections::BTreeMap;
@@ -273,7 +274,13 @@ impl Pulls for Github {
 
     fn merge(&self, number: NonZeroU64, head: &str) -> Result<(), ForgeError> {
         let mut state = self.state();
-        let branch = state.pull_mut(number)?.branch.clone();
+        let pull = state.pull_mut(number)?;
+        if pull.draft || pull.state != PullState::Open {
+            return Err(ForgeError::Failed(
+                "Pull request is not mergeable: it is a draft or already ended.".to_owned(),
+            ));
+        }
+        let branch = pull.branch.clone();
         if state.heads.get(&branch).map(String::as_str) != Some(head) {
             return Err(ForgeError::Failed(
                 "Head branch was modified. Review and try the merge again.".to_owned(),
@@ -285,5 +292,34 @@ impl Pulls for Github {
 
     fn disable_auto_merge(&self, number: NonZeroU64) -> Result<(), ForgeError> {
         self.state().pull_mut(number).map(drop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft_on_main() -> (Github, NonZeroU64) {
+        let github = Github::new();
+        github.push("kelpie/7", "abc");
+        let number = github
+            .create_draft("kelpie/7", "main", "feat: x", "Resolves #7")
+            .unwrap();
+        (github, number)
+    }
+
+    #[test]
+    fn a_draft_or_an_ended_pull_request_is_refused_a_merge_as_github_refuses_it() {
+        let (github, number) = draft_on_main();
+
+        let draft = github.merge(number, "abc");
+        github.mark_ready(number).unwrap();
+        let ready = github.merge(number, "abc");
+        let again = github.merge(number, "abc");
+
+        assert!(matches!(draft, Err(ForgeError::Failed(_))), "{draft:?}");
+        assert_eq!(ready, Ok(()));
+        assert!(matches!(again, Err(ForgeError::Failed(_))), "{again:?}");
+        assert_eq!(Pulls::state(&github, number), Ok(PullState::Merged));
     }
 }
