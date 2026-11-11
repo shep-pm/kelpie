@@ -82,7 +82,10 @@ impl Rig {
         git(&other, &["pull", "--quiet", "origin", "main"]);
         write_in(&other, file, text);
         git(&other, &["add", file]);
-        git(&other, &["commit", "--quiet", "-m", &format!("main sets {file}")]);
+        git(
+            &other,
+            &["commit", "--quiet", "-m", &format!("main sets {file}")],
+        );
         git(&other, &["push", "--quiet", "origin", "main"]);
         git(&self.repo(), &["fetch", "--quiet", "origin"]);
     }
@@ -132,8 +135,15 @@ fn a_branch_behind_its_base_is_rebased_and_pushed_with_a_lease() {
 
     assert_eq!(rig.parents_of(&caught), vec![rig.origin_main()]);
     assert_eq!(rig.in_origin("kelpie/7"), caught);
-    assert_eq!(head(&rig.tree, &rig.repo(), &rig.worktree()).unwrap(), caught);
-    assert!(uncommitted(&rig.tree, &rig.repo(), &rig.worktree()).unwrap().is_empty());
+    assert_eq!(
+        head(&rig.tree, &rig.repo(), &rig.worktree()).unwrap(),
+        caught
+    );
+    assert!(
+        uncommitted(&rig.tree, &rig.repo(), &rig.worktree())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -144,7 +154,10 @@ fn a_rebase_never_overwrites_a_branch_that_moved_on_the_remote() {
     // Someone else pushes to the branch after the worker's head was read.
     let other = rig.root.join("other");
     git(&other, &["fetch", "--quiet", "origin"]);
-    git(&other, &["checkout", "--quiet", "-b", "kelpie/7", "origin/kelpie/7"]);
+    git(
+        &other,
+        &["checkout", "--quiet", "-b", "kelpie/7", "origin/kelpie/7"],
+    );
     write_in(&other, "theirs.txt", "theirs\n");
     git(&other, &["add", "theirs.txt"]);
     git(&other, &["commit", "--quiet", "-m", "someone else"]);
@@ -191,11 +204,22 @@ fn a_rebase_that_conflicts_where_a_merge_would_not_is_merged_and_pushed() {
     let caught = rig.pushed(&work);
 
     assert_eq!(rig.parents_of(&caught), vec![work, rig.origin_main()]);
-    assert_eq!(rig.in_worktree(&["show", &format!("{caught}:shared.txt")]), "main");
+    assert_eq!(
+        rig.in_worktree(&["show", &format!("{caught}:shared.txt")]),
+        "main"
+    );
     assert_eq!(rig.in_origin("kelpie/7"), caught);
     // The rebase that conflicted is not left in progress.
-    assert!(!clone::git_dir_of(&rig.worktree()).join("rebase-merge").exists());
-    assert!(!clone::git_dir_of(&rig.worktree()).join("rebase-apply").exists());
+    assert!(
+        !clone::git_dir_of(&rig.worktree())
+            .join("rebase-merge")
+            .exists()
+    );
+    assert!(
+        !clone::git_dir_of(&rig.worktree())
+            .join("rebase-apply")
+            .exists()
+    );
 }
 
 #[test]
@@ -237,10 +261,17 @@ fn a_push_the_remote_refuses_puts_the_branch_back_at_its_head() {
 
     let rebased = rig.rebase(&work, true);
 
-    assert!(matches!(rebased, Err(WorktreeError::Git { .. })), "{rebased:?}");
+    assert!(
+        matches!(rebased, Err(WorktreeError::Git { .. })),
+        "{rebased:?}"
+    );
     assert_eq!(head(&rig.tree, &rig.repo(), &rig.worktree()).unwrap(), work);
     assert_eq!(rig.in_origin("kelpie/7"), work);
-    assert!(uncommitted(&rig.tree, &rig.repo(), &rig.worktree()).unwrap().is_empty());
+    assert!(
+        uncommitted(&rig.tree, &rig.repo(), &rig.worktree())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -335,6 +366,14 @@ fn abort_merge_leaves_the_worktree_at_its_head() {
     abort_merge(&rig.tree, &rig.repo(), &rig.worktree()).unwrap();
 
     assert_eq!(head(&rig.tree, &rig.repo(), &rig.worktree()).unwrap(), work);
-    assert!(uncommitted(&rig.tree, &rig.repo(), &rig.worktree()).unwrap().is_empty());
-    assert!(!clone::git_dir_of(&rig.worktree()).join("MERGE_HEAD").exists());
+    assert!(
+        uncommitted(&rig.tree, &rig.repo(), &rig.worktree())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !clone::git_dir_of(&rig.worktree())
+            .join("MERGE_HEAD")
+            .exists()
+    );
 }
