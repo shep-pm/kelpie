@@ -268,6 +268,52 @@ describe("the chat store", () => {
     expect(pmSandbox).toHaveBeenCalledTimes(1);
   });
 
+  it("send again sends the failed turn's message once, as a new turn, and not twice", async () => {
+    await useChat.getState().send("plan the slice");
+    emit({ kind: "failed", message: "the sandbox cannot start" });
+    const failed = useChat.getState().turns[0];
+
+    await Promise.all([
+      useChat.getState().resend(),
+      useChat.getState().resend(),
+    ]);
+
+    expect(pmSend).toHaveBeenCalledTimes(2);
+    expect(pmSend).toHaveBeenLastCalledWith(
+      "plan the slice",
+      expect.anything(),
+    );
+    const { turns } = useChat.getState();
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      user: "plan the slice",
+      state: "running",
+    });
+    expect(turns[0]?.id).not.toBe(failed?.id);
+  });
+
+  it("send again does nothing when the last turn did not fail", async () => {
+    await useChat.getState().send("go");
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+
+    await useChat.getState().resend();
+
+    expect(pmSend).toHaveBeenCalledTimes(1);
+    expect(useChat.getState().turns).toHaveLength(1);
+  });
+
+  it("a send that fails with no refusal recorded shows the error line, not a refusal", async () => {
+    pmSend.mockRejectedValue("the project is in the home folder");
+    await useChat.getState().send("go");
+
+    expect(useChat.getState().turns[0]).toMatchObject({
+      state: "failed",
+      error: "the project is in the home folder",
+    });
+    await vi.waitFor(() => expect(pmSandbox).toHaveBeenCalledTimes(1));
+    expect(useChat.getState().sandbox).toEqual(none);
+  });
+
   it("a turn that goes on after a failed event is running again", async () => {
     await useChat.getState().send("go");
     emit({ kind: "failed", message: "kept the default model" });

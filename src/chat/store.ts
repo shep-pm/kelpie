@@ -70,6 +70,13 @@ type Chat = {
   send: (text: string) => Promise<void>;
   /** Send the interrupted last message again, in place of the interrupted turn. */
   retry: () => Promise<void>;
+  /**
+   * Send the failed last turn's message again, as a new turn in its place, so
+   * the maintainer need not retype it after fixing what stopped it. Does
+   * nothing unless the last turn failed, so a second call while the first runs
+   * sends nothing.
+   */
+  resend: () => Promise<void>;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
   /**
@@ -308,6 +315,16 @@ export const useChat = create<Chat>()((set, get) => {
       set((s) => ({ turns: s.turns.slice(0, -1) }));
       await run(begin(last.user, last.dividers), (channel) =>
         commands.pmRetry(channel),
+      );
+    },
+
+    async resend() {
+      await get().load();
+      const last = get().turns.at(-1);
+      if (last?.state !== "failed") return;
+      set((s) => ({ turns: s.turns.slice(0, -1) }));
+      await run(begin(last.user, last.dividers), (channel) =>
+        commands.pmSend(last.user, channel),
       );
     },
 
