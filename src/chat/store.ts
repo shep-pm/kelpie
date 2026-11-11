@@ -3,13 +3,14 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 import type {
   InstallOutcome,
   LogEntry,
+  NoteOutcome,
   SandboxAnswer,
   SandboxView,
   SessionEvent,
   ToolStatus,
   Usage,
 } from "@/bindings";
-import { pmTransport, type Transport } from "./transport";
+import { type Outcome, pmTransport, type Transport } from "./transport";
 
 export type Step = { id: string; title: string; status: ToolStatus };
 
@@ -32,21 +33,62 @@ export type SandboxRequest = {
  * A message the maintainer sent to a session that is not a turn of its own.
  *
  * A worker's Note sent while its turn runs waits in the ticket's record, and shows
- * under the turn it waits behind. `error` is why the message never reached the
- * session, in kelpie's own words.
+ * under the turn it waits behind. `line` is what the session answered it with, and
+ * `error` is why the message never reached the session, in kelpie's own words.
  */
 export type Note = {
   text: string;
-  /** What kelpie did with it, in one line. */
-  line: string;
+  /**
+   * What kelpie did with it, in one line.
+   *
+   * Absent when the message never reached the session, which `error` says instead.
+   */
+  line?: string;
   error?: string;
 };
 
 /** A Note the worker reads when the turn it is running ends. */
 const QUEUED = "Queued, the worker reads it when its turn ends";
 
+/** A Note the record kept for a worker that has no turn running. */
+const KEPT = "Queued, kelpie sends it when the worker next runs";
+
 /** What a Stop and tell sent as the prompt of the turn that follows. */
 const NEXT_PROMPT = "Sent as the worker's next prompt";
+
+/**
+ * What the session answered a tell with, in the one line the chat shows.
+ *
+ * Only a tell behind a running turn uses it: a Note the record kept between turns says
+ * so with `KEPT`, under [`kept`].
+ */
+function line(told: NoteOutcome | undefined): string {
+  return told === "sent" ? NEXT_PROMPT : QUEUED;
+}
+
+/**
+ * Put the text `run` opened a turn for back where the session kept it.
+ *
+ * The turn goes, since nothing streams into a turn kelpie started no work for, and the
+ * note goes under the turn before it. A chat whose session ran no turn before this one
+ * keeps the note on its own turn, which ends there: the session has the text, and no
+ * turn of it has started.
+ */
+function kept(turns: Turn[], id: number, text: string): Turn[] {
+  const note = { text, line: KEPT };
+  const rest = turns.filter((turn) => turn.id !== id);
+  const last = rest.at(-1);
+  if (!last) {
+    return turns.map((turn) =>
+      turn.id === id
+        ? { ...turn, state: "done" as const, notes: [...turn.notes, note] }
+        : turn,
+    );
+  }
+  return rest.map((turn) =>
+    turn.id === last.id ? { ...turn, notes: [...turn.notes, note] } : turn,
+  );
+}
 
 /** `interrupted`: the log has the message and no end, because kelpie quit mid-turn. */
 export type TurnState =
@@ -99,16 +141,17 @@ export type Chat = {
   /**
    * Send `text` to a session the maintainer steers.
    *
-   * While a turn runs it is a Note under that turn, which the worker reads when the
-   * turn ends. Between turns it is a plain message, and the turn it starts.
+   * While a turn runs it is a Note under that turn. Between turns it is the turn the
+   * session runs next, unless the session keeps the text in its record, which the note
+   * says either way.
    */
   note: (text: string) => Promise<void>;
   /**
    * Interrupt the turn in flight and send `text` as the next one.
    *
-   * The text shows under the turn it interrupts. A session that has no turn to
-   * interrupt is told as a Note, and a transport that cannot be steered sends
-   * nothing.
+   * The text shows under the turn it interrupts, as sent or as kept, which is what the
+   * session answered. A session that has no turn to interrupt is told as a Note, and a
+   * transport that cannot be steered sends nothing.
    */
   stopAndTell: (text: string) => Promise<void>;
   /** Send the interrupted last message again, in place of the interrupted turn. */
@@ -338,34 +381,48 @@ export function createChat(transport: Transport): ChatStore {
       }
     }
 
-    /** Show `note` under the turn `id`, then send it with `call`, which says so when it fails. */
-    async function tell(id: number, note: Note, call: () => Promise<unknown>) {
-      set((s) => ({
-        turns: patch(s.turns, id, (t) => ({ ...t, notes: [...t.notes, note] })),
-      }));
+    /**
+     * Tell the turn `id` `text` with `call`, and show what the session answered.
+     *
+     * The line is the session's own answer, since only it knows whether the text went
+     * out or is kept. A call that never reached the session says so instead: the message
+     * is on the screen and the session has it not.
+     */
+    async function tell(
+      id: number,
+      text: string,
+      call: () => Promise<Outcome>,
+    ) {
       try {
-        await call();
-      } catch (error) {
-        // The message is on the screen and the session never got it, so the note
-        // says what kelpie could not do instead of what it did with it.
+        const answer = await call();
         set((s) => ({
-          turns: patch(s.turns, id, (t) => {
-            const notes = [...t.notes];
-            const last = notes.pop();
-            return last
-              ? { ...t, notes: [...notes, { ...last, error: String(error) }] }
-              : t;
-          }),
+          turns: patch(s.turns, id, (t) => ({
+            ...t,
+            notes: [...t.notes, { text, line: line(answer.told) }],
+          })),
+        }));
+      } catch (error) {
+        set((s) => ({
+          turns: patch(s.turns, id, (t) => ({
+            ...t,
+            notes: [...t.notes, { text, error: String(error) }],
+          })),
         }));
       }
     }
 
-    /** Show `turn` as the last turn, and stream what `call` sends into it. */
+    /**
+     * Show `turn` as the last turn, and stream what `call` sends into it.
+     *
+     * `note` is the text of a message a session the maintainer steers may keep instead
+     * of running. When `call` answers `queued`, `turn` goes back and the text is kept as
+     * a note under the turn before it, so the maintainer is never shown a turn that runs
+     * with nothing ever streaming into it.
+     */
     async function run(
       turn: Turn,
-      call: (
-        channel: Channel<SessionEvent>,
-      ) => Promise<string | null | undefined>,
+      call: (channel: Channel<SessionEvent>) => Promise<Outcome>,
+      note?: string,
     ) {
       const { id } = turn;
       set((s) => ({ turns: [...s.turns, turn] }));
@@ -378,8 +435,13 @@ export function createChat(transport: Transport): ChatStore {
         if (event.kind === "turn_ended") void lookAtSandbox();
       };
       try {
+        const answer = await call(channel);
+        if (note !== undefined && answer.told === "queued") {
+          set((s) => ({ turns: kept(s.turns, id, note) }));
+          return;
+        }
         // A send that switched the harness answers with the divider it logged
-        const divider = await call(channel);
+        const divider = answer.divider;
         if (divider) {
           set((s) => ({
             turns: patch(s.turns, id, (t) => ({
@@ -450,16 +512,20 @@ export function createChat(transport: Transport): ChatStore {
         await get().load();
         if (get().installing) return;
         const running = get().turns.at(-1);
-        if (running?.state !== "running") {
-          // Between turns there is nothing to wait behind, so the note is the
-          // worker's next turn and shows as a plain message.
-          await run(begin(text), (channel) => transport.send(text, channel));
+        if (running?.state === "running") {
+          // A turn runs, so the note waits behind it, and the session says when it is read
+          await tell(running.id, text, () =>
+            // A steered session streams on the channel its `watch` was given, and a
+            // note starts no turn of its own to stream into a fresh one.
+            transport.send(text, watching ?? new Channel<SessionEvent>()),
+          );
           return;
         }
-        await tell(running.id, { text, line: QUEUED }, () =>
-          // A steered session streams on the channel its `watch` was given, and a
-          // note starts no turn of its own to stream into a fresh one.
-          transport.send(text, watching ?? new Channel<SessionEvent>()),
+        // Between turns the note is the session's next turn, unless it keeps the text
+        await run(
+          begin(text),
+          (channel) => transport.send(text, channel),
+          text,
         );
       },
 
@@ -469,9 +535,7 @@ export function createChat(transport: Transport): ChatStore {
         if (running?.state !== "running") return get().note(text);
         const steered = transport.stopAndTell;
         if (!steered) return;
-        await tell(running.id, { text, line: NEXT_PROMPT }, () =>
-          steered(text),
-        );
+        await tell(running.id, text, () => steered(text));
       },
 
       async retry() {
@@ -489,8 +553,10 @@ export function createChat(transport: Transport): ChatStore {
         const last = get().turns.at(-1);
         if (last?.state !== "failed") return;
         set((s) => ({ turns: s.turns.slice(0, -1) }));
-        await run(begin(last.user, last.dividers), (channel) =>
-          transport.send(last.user, channel),
+        await run(
+          begin(last.user, last.dividers),
+          (channel) => transport.send(last.user, channel),
+          last.user,
         );
       },
 

@@ -270,7 +270,8 @@ describe("a worker's tab", () => {
     ).toBeTruthy();
   });
 
-  it("a Note between turns calls workerNote and shows as a message of its own", async () => {
+  it("a Note between turns that went out shows as a message of its own", async () => {
+    workerNote.mockResolvedValueOnce(ok("sent"));
     await open(past.slice(0, 3));
     const box = await screen.findByPlaceholderText("Message the worker on #13");
 
@@ -282,8 +283,67 @@ describe("a worker's tab", () => {
     );
     expect(await screen.findByText("carry on")).toBeTruthy();
     expect(
+      screen.queryByText("Queued, kelpie sends it when the worker next runs"),
+    ).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
+
+  it("a Note between turns that the record kept says so, and is no turn", async () => {
+    workerNote.mockResolvedValueOnce(ok("queued"));
+    await open(past.slice(0, 3));
+    const box = await screen.findByPlaceholderText("Message the worker on #13");
+
+    fireEvent.change(box, { target: { value: "carry on" } });
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+
+    expect(
+      await screen.findByText(
+        "Queued, kelpie sends it when the worker next runs",
+      ),
+    ).toBeTruthy();
+    expect(await screen.findByText("carry on")).toBeTruthy();
+    expect(
       screen.queryByText("Queued, the worker reads it when its turn ends"),
     ).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop and tell" })).toBeNull();
+  });
+
+  it("a Note the session sent as its next turn says so, and not that it waits", async () => {
+    workerNote.mockResolvedValueOnce(ok("sent"));
+    await open();
+    const box = await runningTurn();
+
+    fireEvent.change(box, { target: { value: "use the new name" } });
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+
+    expect(
+      await screen.findByText("Sent as the worker's next prompt"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Queued, the worker reads it when its turn ends"),
+    ).toBeNull();
+  });
+
+  it("a Stop and tell the session kept says so, and not that it went out", async () => {
+    workerStopAndTell.mockResolvedValueOnce(ok("queued"));
+    await open();
+    const box = await runningTurn();
+
+    fireEvent.change(box, { target: { value: "stop, fetch the log" } });
+    fireEvent.click(screen.getByRole("button", { name: "Stop and tell" }));
+
+    await waitFor(() =>
+      expect(workerStopAndTell).toHaveBeenCalledWith(
+        "13",
+        "stop, fetch the log",
+      ),
+    );
+    expect(
+      await screen.findByText("Queued, the worker reads it when its turn ends"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Sent as the worker's next prompt")).toBeNull();
   });
 
   it("Stop and tell calls workerStopAndTell with the composer's text, and Stop calls workerCancel", async () => {
