@@ -17,6 +17,9 @@ mod tickets;
 // The gate's three fields, in their own file beside the types they read
 mod ci;
 
+// The catch-up choice, in its own file beside the type it reads
+mod git;
+
 /// A config folder of its own for one test, never written over by another
 struct Dir(PathBuf);
 
@@ -210,6 +213,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
             },
             ci_wait: Layered {
                 value: BUILT_IN.ci_wait,
+                from: Layer::BuiltIn,
+            },
+            catch_up: Layered {
+                value: CatchUp::Always,
                 from: Layer::BuiltIn,
             },
         }

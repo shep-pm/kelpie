@@ -341,6 +341,7 @@ fn fields(
                 resolved.fix_attempts.from,
             ),
             Field::CiWait => layered(field, &resolved.ci_wait.value, resolved.ci_wait.from),
+            Field::CatchUp => layered(field, &resolved.catch_up.value, resolved.catch_up.from),
             // `Field` grows with each slice's settings, and a form shows only those it has
             _ => FieldView {
                 key: field.key().to_owned(),

@@ -29,6 +29,7 @@ const LABELS: Record<string, string> = {
   "ci-holds-merge": "CI holds the merge",
   "fix-attempts": "Fix attempts",
   "ci-wait": "CI wait",
+  "catch-up": "Catch up",
 };
 
 /** Fields the form leaves out: each bridge's update row is on the harness's login row, and a lease's capacity has no row of its own yet. */

@@ -20,6 +20,21 @@
         }
       ]
     },
+    "CatchUp": {
+      "description": "When a pull request behind the base is caught up with it\n\n`Always` rebases it whenever it lacks the latest base, and the rebase is\ntested again. `Conflicts` rebases it only when merging it into the base\nconflicts: a branch that merges cleanly goes on unrebased, and what tests the\ncombination is the repo's merge queue or the base's own CI. Where a merge\nqueue tests the combination, rebasing every Review ticket on each base move\nonly reruns CI.",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Always",
+          "type": "string"
+        },
+        {
+          "const": "conflicts",
+          "description": "Only on conflict",
+          "type": "string"
+        }
+      ]
+    },
     "Harness": {
       "description": "A harness kelpie can run a session on",
       "oneOf": [
@@ -108,6 +123,18 @@
         "object",
         "null"
       ]
+    },
+    "catch-up": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CatchUp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When a pull request behind the base is caught up with it: always, or only on a conflict. A branch that merges cleanly then goes on unrebased, and the merge queue or the base's CI tests the combination."
     },
     "ci-holds-merge": {
       "default": null,

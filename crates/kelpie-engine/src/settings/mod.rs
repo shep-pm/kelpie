@@ -39,6 +39,7 @@ use serde_json::{Map, Value};
 pub mod ci;
 mod counts;
 mod error;
+pub mod git;
 pub mod layers;
 mod schema;
 pub mod theme;
@@ -50,6 +51,7 @@ mod tests;
 pub use ci::{CiWait, FixAttempts};
 pub use counts::{CARGO_TEST_CAPACITY, Capacity, Slots, TurnTimeout};
 pub use error::SettingsError;
+pub use git::CatchUp;
 pub use layers::{Layer, LayerFile, Layered};
 pub use theme::Theme;
 pub use tickets::{DoneWindow, PickUp};
@@ -315,11 +317,14 @@ pub enum Field {
 
     /// How long CI is waited on
     CiWait,
+
+    /// When a pull request behind the base is caught up with it
+    CatchUp,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 24] = [
+    pub const ALL: [Field; 25] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -344,6 +349,7 @@ impl Field {
         Field::CiHoldsMerge,
         Field::FixAttempts,
         Field::CiWait,
+        Field::CatchUp,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -374,6 +380,7 @@ impl Field {
             Self::CiHoldsMerge => "ci-holds-merge",
             Self::FixAttempts => "fix-attempts",
             Self::CiWait => "ci-wait",
+            Self::CatchUp => "catch-up",
         }
     }
 }
@@ -464,6 +471,9 @@ pub struct Settings {
 
     /// How many minutes a check may sit queued before a rerun, and how long a head with no check waits before a ruling
     pub ci_wait: Option<CiWait>,
+
+    /// When a pull request behind the base is caught up with it: always, or only on a conflict. A branch that merges cleanly then goes on unrebased, and the merge queue or the base's CI tests the combination.
+    pub catch_up: Option<CatchUp>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -540,6 +550,9 @@ pub struct Defaults {
 
     /// How long CI is waited on when no project says
     pub ci_wait: CiWait,
+
+    /// When a pull request behind the base is caught up when no project says
+    pub catch_up: CatchUp,
 }
 
 /// kelpie's built-in layer, in code rather than a shipped file
@@ -570,6 +583,7 @@ pub const BUILT_IN: Defaults = Defaults {
     ci_holds_merge: true,
     fix_attempts: None,
     ci_wait: ci::AN_HOUR,
+    catch_up: CatchUp::Always,
 };
 
 /// Every setting's value, each with the layer kelpie took it from
@@ -646,6 +660,9 @@ pub struct Resolved {
 
     /// How long CI is waited on
     pub ci_wait: Layered<CiWait>,
+
+    /// When a pull request behind the base is caught up with it
+    pub catch_up: Layered<CatchUp>,
 }
 
 impl Resolved {
