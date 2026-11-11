@@ -62,7 +62,7 @@ As SK's `Finding` (`core/ports/findings.rs`): a severity of low (a nit), medium 
 
 1. Every finding goes to the worker at the reviewer's own severity, nits included (SK ADR 0007).
 2. A nit-only fix starts no new read.
-3. The worker writes which findings it defers and which it disputes, with a reason, beside the findings file. A finding disputed once and raised again by a later reader is a ruling: two readers disagree, and the maintainer settles it.
+3. The worker writes which findings it defers and which it disputes, with a reason, beside the findings file. A finding the pass disputed and a later reader raises again goes to the worker's fix turn, but it cannot be disputed again: a fix that leaves it is a ruling, since two readers disagree and the maintainer settles it (SK's `review/disputes.rs`).
 4. A fix that pushes nothing for findings above a nit, and is not every one deferred or disputed, is a ruling: fix not pushed.
 
 ### A reviewer's failing test
@@ -77,7 +77,7 @@ As SK's `gate/unread.rs` for a project whose PM does not yet rule on threads: a 
 
 A reviewer's read opens as a tab in the PM panel beside the worker's, in the same chat view, and its findings are the worker's next message, so the worker's tab shows what it was asked to fix. Nothing is posted to GitHub except disputes no reviewer read, as one comment at the gate, as SK does.
 
-The Review card's status line (`gate-and-merge.md`, The Review column) gains `reviewing, read 1 of 2` and `fixing findings`. A fix turn moves the ticket to Building, as a CI fix turn does.
+The Review card's status line (`gate-and-merge.md`, The Review column) gains `reviewing, read 1 of 2`. A fix turn moves the ticket to Building, as a CI fix turn does, where its worker's tab shows the findings.
 
 ### Deferred: bot reviewers
 
