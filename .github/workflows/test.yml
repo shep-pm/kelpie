@@ -1,7 +1,7 @@
 name: test
-# The Rust gates, on the maintainer's runner pool. The pool image has no Rust,
-# so every job installs its own toolchain. Only main saves the cache: a pull
-# request reads main's build, and the repo holds one cache per job.
+# The Rust gates, on GitHub's hosted runners. Only main saves the cache: a pull
+# request and a merge queue group read main's build, and the repo holds one
+# cache per job.
 #
 # Every job carries `timeout-minutes`, a ceiling against a hang rather than a
 # performance budget. GitHub's default when absent is 360. The Rust jobs compile
@@ -15,6 +15,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,7 +28,7 @@ env:
 jobs:
   lint:
     name: fmt and clippy
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,76 +51,43 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   # The sandbox tests run a real command inside crabpot, which on Linux is
-  # bubblewrap: it needs a user namespace, a mount of its own and a fresh
-  # `/proc`. Docker's defaults refuse all three, so this one job runs in a
-  # container with each of them lifted, as a user that is not root. Nothing is
-  # changed on the host or in the runner image. The rest of the jobs stay as
-  # they were.
-  #
-  # The three options are each load-bearing, tested with `bwrap --ro-bind / /
-  # --dev /dev --proc /proc --unshare-all true` as a non-root user: seccomp
-  # refuses the namespace, AppArmor refuses the mounts, and Docker's masked
-  # `/proc` refuses a fresh proc mount.
+  # bubblewrap. GitHub's Ubuntu 24.04 image ships with
+  # `kernel.apparmor_restrict_unprivileged_userns=1`, which gives bwrap's user
+  # namespace no capabilities, so the job turns it off first. The VM is thrown
+  # away after the job, and the tests run as the image's own user, not root.
   test:
-    # ARM64 only: those hosts are Ubuntu 22.04, and the x86 one is 24.04, whose AppArmor gives bwrap's user namespace no capabilities
-    runs-on: [self-hosted, ARM64]
-    # No rust-cache here: it keys on the user that runs it, and the build is
-    # the user's, not root's. So the build is cold, which the ceiling allows for.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    container:
-      image: ubuntu:22.04
-      options: >-
-        --security-opt seccomp=unconfined
-        --security-opt apparmor=unconfined
-        --security-opt systempaths=unconfined
-    env:
-      CARGO_TERM_COLOR: always
-      DEBIAN_FRONTEND: noninteractive
     steps:
-      # The image is bare and the step runs as root, so no `sudo`
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the packages the build and the sandbox need
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl wget file git build-essential pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Make the user the tests run as
-        run: |
-          # The workspace is the host runner's folder, bind-mounted in, so its
-          # owner is noted here and handed back by the last step
-          echo "WORKSPACE_OWNER=$(stat -c %u:%g "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
-          useradd --create-home kelpie
-          chown -R kelpie "$GITHUB_WORKSPACE"
-      - name: Install the toolchain as that user
-        run: |
-          runuser -u kelpie -- env HOME=/home/kelpie sh -c 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap
+      - name: Let an unprivileged user namespace keep its capabilities
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The reaper sidecar, which `src-tauri/build.rs` needs before anything in
       # src-tauri compiles. See the `lint` job.
-      - name: Build the reaper sidecar as that user
-        run: |
-          runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" scripts/build-reaper.sh --debug
-      # What the sandbox tests depend on and the job's options cannot change,
-      # printed so a red run says which host it ran on and why. It fails nothing.
+      - run: scripts/build-reaper.sh --debug
+      # What the sandbox tests depend on, printed so a red run says why. It
+      # fails nothing.
       - name: Say what this host does about user namespaces
         run: |
-          echo "runner: ${RUNNER_NAME:-unknown}"
           uname -sr
           for sysctl in kernel/apparmor_restrict_unprivileged_userns kernel/unprivileged_userns_clone user/max_user_namespaces; do
             echo "$sysctl: $(cat /proc/sys/$sysctl 2>&1)"
           done
-          runuser -u kelpie -- bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap --unshare-all: ok" || echo "bwrap --unshare-all: failed"
-      - name: Test as that user
-        run: |
-          runuser -u kelpie -- env HOME=/home/kelpie PATH=/home/kelpie/.cargo/bin:"$PATH" CARGO_TERM_COLOR=always cargo test --workspace --locked
-      # The checkout and `target/` are the user's now. The next job on this host
-      # checks out into the same folder as the runner's own user, which cannot
-      # clean files it does not own, so they go back, pass or fail.
-      - name: Give the workspace back to the runner's user
-        if: always()
-        run: |
-          [ -z "$WORKSPACE_OWNER" ] || chown -R "$WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap --unshare-all: ok" || echo "bwrap --unshare-all: failed"
+      - run: cargo test --workspace --locked
 
   docs:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUSTDOCFLAGS: -D warnings
@@ -140,7 +109,7 @@ jobs:
       - run: cargo doc --workspace --no-deps --locked
 
   msrv:
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,8 +132,8 @@ jobs:
   app:
     name: app
     # `tauri build` compiles the whole Tauri tree in release and links
-    # WebKitGTK. Pinned to the x86 box: the pool's arm64 boxes do it far slower.
-    runs-on: [self-hosted, X64]
+    # WebKitGTK.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
