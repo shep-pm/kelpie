@@ -19,19 +19,28 @@ use crate::ci::{FailedCheck, HeadStatus, Queued};
 use crate::github::ForgeSlug;
 use crate::ticket::ForgeError;
 
-// The rollup's first hundred contexts, and the first fifty suites. A check run
+// The rollup's first hundred contexts, and the first `suites` suites. A check run
 // names its workflow through its suite's run, since `CheckRun` names none of its
 // own. The suites count their check runs by `totalCount`, which is all
 // `Suites::fold` reads of them.
 //
-// `COMMIT_FIELDS` is what `Commit` reads, shared with the open pull request
-// listing, which asks for it on each pull request's last commit.
-pub(super) const COMMIT_FIELDS: &str = "statusCheckRollup { contexts(first: 100) { nodes { __typename \
-    ... on CheckRun { name status conclusion completedAt startedAt detailsUrl \
-    checkSuite { workflowRun { workflow { name } } } } \
-    ... on StatusContext { context state targetUrl } } } } \
-    checkSuites(first: 50) { nodes { conclusion checkRuns(first: 1) { totalCount } \
-    workflowRun { url file { path } } } }";
+// `commit_fields` is what `Commit` reads, shared with the open pull request
+// listing, which asks for it on each pull request's last commit. GitHub prices a
+// query by the page sizes it asks for, and each suite costs one more request for
+// its `checkRuns`, so the listing asks for fewer suites than a single head does.
+pub(super) fn commit_fields(suites: u32) -> String {
+    format!(
+        "statusCheckRollup {{ contexts(first: 100) {{ nodes {{ __typename \
+        ... on CheckRun {{ name status conclusion completedAt startedAt detailsUrl \
+        checkSuite {{ workflowRun {{ workflow {{ name }} }} }} }} \
+        ... on StatusContext {{ context state targetUrl }} }} }} }} \
+        checkSuites(first: {suites}) {{ nodes {{ conclusion checkRuns(first: 1) {{ totalCount }} \
+        workflowRun {{ url file {{ path }} }} }} }}"
+    )
+}
+
+// A head read alone has its first fifty suites
+const HEAD_SUITES: u32 = 50;
 
 const QUERY_HEAD: &str = "query($owner: String!, $name: String!, $oid: GitObjectID!) { \
     repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { ";
@@ -43,7 +52,10 @@ pub(super) fn head_status(
     repo: &ForgeSlug,
     head: &str,
 ) -> Result<HeadStatus, ForgeError> {
-    let query = format!("query={QUERY_HEAD}{COMMIT_FIELDS}{QUERY_TAIL}");
+    let query = format!(
+        "query={QUERY_HEAD}{}{QUERY_TAIL}",
+        commit_fields(HEAD_SUITES)
+    );
     let owner = format!("owner={}", repo.owner());
     let name = format!("name={}", repo.name());
     let oid = format!("oid={head}");
