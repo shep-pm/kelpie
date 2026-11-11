@@ -29,6 +29,12 @@ pub struct WorkerPlan {
     /// Whether the harness reads the person's own global folder (`harness-global-folder`)
     pub harness_global_folder: bool,
 
+    /// The provider a goose worker runs on (`provider`). No other harness reads it.
+    pub provider: Option<String>,
+
+    /// Where that provider answers (`host`)
+    pub host: Option<String>,
+
     /// What a worker runs as: `kelpie:worker`, then the global `worker.md`, then
     /// the project's own setting
     pub binding: Binding,
@@ -52,6 +58,8 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<WorkerPlan, String> 
         network_allowlist: settings.network_allowlist.value,
         reads: Reads::from_setting(settings.read_anywhere.value),
         harness_global_folder: settings.harness_global_folder.value,
+        provider: settings.provider.value,
+        host: settings.host.value,
         binding,
     })
 }

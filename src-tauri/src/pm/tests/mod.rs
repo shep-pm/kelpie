@@ -994,4 +994,5 @@ fn a_project_answer_the_sandbox_could_not_take_says_so_and_saves_nothing() {
 }
 
 mod confinement;
+mod goose;
 mod plan;

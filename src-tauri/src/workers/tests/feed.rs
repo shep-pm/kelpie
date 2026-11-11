@@ -3,8 +3,6 @@
 //! A stand-in agent plays the worker's turns and its session writes a log in a
 //! folder of the test's own, so no test needs a model.
 
-use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -293,43 +291,7 @@ fn watching_a_ticket_with_no_worker_is_refused_by_name() {
     assert!(said.contains("12") && said.contains("no worker"), "{said}");
 }
 
-/// Run `git` in `folder`, as the checkout of a project would be made
-fn git(folder: &Path, args: &[&str]) {
-    let done = Command::new("git")
-        .current_dir(folder)
-        .args([
-            "-c",
-            "user.name=kelpie",
-            "-c",
-            "user.email=kelpie@example.com",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        done.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&done.stderr)
-    );
-}
-
 impl Rig {
-    /// Make the project's checkout a repo with an origin holding `main`
-    fn with_origin(&self) {
-        let checkout = self.dir.join("checkout");
-        git(
-            &self.dir,
-            &["init", "--quiet", "--bare", "-b", "main", "origin.git"],
-        );
-        git(&checkout, &["init", "--quiet", "-b", "main"]);
-        git(&checkout, &["remote", "add", "origin", "../origin.git"]);
-        git(
-            &checkout,
-            &["commit", "--quiet", "--allow-empty", "-m", "init"],
-        );
-        git(&checkout, &["push", "--quiet", "origin", "main"]);
-    }
-
     /// What `resume_on` does for `ticket`, with `agent` as the worker's harness
     fn resume(&self, agent: &FakeAgent, ticket: &str) -> Result<super::WorkerStarted, String> {
         resume_on(&self.state, &self.project, ticket, &|_, opening| {
