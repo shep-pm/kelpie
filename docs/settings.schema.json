@@ -35,6 +35,21 @@
         }
       ]
     },
+    "PickUp": {
+      "description": "Who a project's tickets come from\n\nAn issue carrying the ready label is a ticket whichever way this is set.",
+      "oneOf": [
+        {
+          "const": "me",
+          "description": "Me: the issues the signed-in login opened",
+          "type": "string"
+        },
+        {
+          "const": "everyone",
+          "description": "Everyone: every open issue",
+          "type": "string"
+        }
+      ]
+    },
     "ReplyStyle": {
       "description": "How kelpie asks a harness to phrase its replies",
       "oneOf": [
@@ -94,6 +109,16 @@
         "null"
       ]
     },
+    "done-window": {
+      "default": null,
+      "description": "How many days a closed ticket stays in the board's Done column. A closed ticket older than this is off the board.",
+      "maximum": 365,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "harness-global-folder": {
       "default": null,
       "description": "Whether a harness may read the global config folder it keeps for itself: Claude Code's `~/.claude`, or `CLAUDE_CONFIG_DIR` when the person set it, and goose's `~/.config/goose`, or the `config` folder under `GOOSE_PATH_ROOT` when the person set it. Each applies when the session next starts.",
@@ -133,6 +158,18 @@
         "array",
         "null"
       ]
+    },
+    "pick-up": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PickUp"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Whose of a project's issues kelpie picks up as tickets. An issue carrying the ready label is a ticket either way."
     },
     "pm-effort": {
       "default": null,
@@ -175,6 +212,14 @@
       "description": "Whether an agent reads anywhere, instead of only the project it works in and the folders beside it. Every harness's login, every secret and every other session's state folder stay denied. The change lands when the session next starts, on a relaunch or a harness switch.",
       "type": [
         "boolean",
+        "null"
+      ]
+    },
+    "ready-label": {
+      "default": null,
+      "description": "The label a ticket carries to be Ready, named as the ticket source names it. It names one label, so it holds no comma.",
+      "type": [
+        "string",
         "null"
       ]
     },

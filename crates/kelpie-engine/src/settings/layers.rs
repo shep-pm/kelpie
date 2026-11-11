@@ -83,7 +83,10 @@ impl Field {
     ///
     /// The PM's and the worker's harness, model and effort are a project's
     /// setting only: their global value is the global `pm` or `worker` agent's
-    /// own keys, so one value is never kept in two files.
+    /// own keys, so one value is never kept in two files. Whose issues a project
+    /// picks up, and what it calls Ready, are its own for the same reason: the
+    /// ticket source is the project's. How far back Done reaches is the
+    /// machine's, or one project's, since how far back to look is a person's.
     #[must_use]
     pub fn layers(self) -> &'static [Layer] {
         const PROJECT: &[Layer] = &[Layer::Project];
@@ -103,10 +106,13 @@ impl Field {
             Self::NetworkAllowlist
             | Self::ReadAnywhere
             | Self::HarnessGlobalFolder
-            | Self::RunWithoutSandbox => PROJECT,
+            | Self::RunWithoutSandbox
+            | Self::PickUp
+            | Self::ReadyLabel => PROJECT,
             // A lease is the machine's, so its capacity is one value for every
             // project, and so is the appearance of the window they share
             Self::BridgeUpdates | Self::LeaseCapacity | Self::Theme => GLOBAL,
+            Self::DoneWindow => GLOBAL_AND_PROJECT,
         }
     }
 }
@@ -190,6 +196,13 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
                 .map(|(name, capacity)| ((*name).to_string(), *capacity))
                 .collect(),
         )?,
+        pick_up: Field::PickUp.resolve(global, project, BUILT_IN.pick_up)?,
+        ready_label: Field::ReadyLabel.resolve(
+            global,
+            project,
+            BUILT_IN.ready_label.to_string(),
+        )?,
+        done_window: Field::DoneWindow.resolve(global, project, BUILT_IN.done_window)?,
     })
 }
 

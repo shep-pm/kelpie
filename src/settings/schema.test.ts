@@ -10,6 +10,21 @@ import { formSchema, ordered } from "./schema";
  */
 const raw: Value = {
   $defs: {
+    PickUp: {
+      description: "Who a project's tickets come from",
+      oneOf: [
+        {
+          const: "me",
+          description: "Me: the issues the signed-in login opened",
+          type: "string",
+        },
+        {
+          const: "everyone",
+          description: "Everyone: every open issue",
+          type: "string",
+        },
+      ],
+    },
     Theme: {
       description: "How kelpie's window looks",
       oneOf: [
@@ -35,6 +50,24 @@ const raw: Value = {
       default: null,
       description: "Whether the project's PM runs without a sandbox.",
       type: ["boolean", "null"],
+    },
+    "pick-up": {
+      anyOf: [{ $ref: "#/$defs/PickUp" }, { type: "null" }],
+      default: null,
+      description: "Whose of a project's issues kelpie picks up as tickets.",
+    },
+    "ready-label": {
+      default: null,
+      description: "The label a ticket carries to be Ready.",
+      type: ["string", "null"],
+    },
+    "done-window": {
+      default: null,
+      description:
+        "How many days a closed ticket stays in the board's Done column.",
+      maximum: 365,
+      minimum: 1,
+      type: ["integer", "null"],
     },
     "worker-slots": {
       default: null,
@@ -110,5 +143,38 @@ describe("the settings form's fields", () => {
     expect(run.title).toBe("Run without a sandbox");
     expect(run.type).toBe("boolean");
     expect(run.oneOf).toBeUndefined();
+  });
+
+  it("draws whose issues a project picks up as a choice of Me and Everyone", () => {
+    const board = formSchema(raw, ["pick-up", "ready-label", "done-window"]);
+
+    const pick = field("pick-up", board) ?? {};
+    expect(pick.title).toBe("Pick up issues from");
+    expect(pick.type).toBe("string");
+    expect(pick.oneOf).toEqual([
+      { const: "me", title: "Me: the issues the signed-in login opened" },
+      { const: "everyone", title: "Everyone: every open issue" },
+    ]);
+  });
+
+  it("draws the ready label as text and the Done window as a whole number of days", () => {
+    const board = formSchema(raw, ["pick-up", "ready-label", "done-window"]);
+
+    const label = field("ready-label", board) ?? {};
+    expect(label.title).toBe("Ready label");
+    expect(label.type).toBe("string");
+    expect(label.oneOf).toBeUndefined();
+
+    const days = field("done-window", board) ?? {};
+    expect(days.title).toBe("Done window (days)");
+    expect(days.type).toBe("integer");
+    expect(days.minimum).toBe(1);
+    expect(days.maximum).toBe(365);
+  });
+
+  it("shows the board's fields after the sandbox ones", () => {
+    expect(
+      ordered(["done-window", "ready-label", "pick-up", "read-anywhere"]),
+    ).toEqual(["read-anywhere", "pick-up", "ready-label", "done-window"]);
   });
 });

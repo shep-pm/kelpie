@@ -96,6 +96,7 @@ pub(crate) fn read(dir: &ConfigDir, at: LayerFile<'_>) -> Result<LayerDoc, Setti
     // check asks which layer set it
     doc.fields.retain(|_, value| !value.is_null());
     holds_only_its_layer(&doc, at.layer())?;
+    holds_no_refused_value(&doc)?;
     if let Some((path, reason)) = check(document(), &Value::Object(doc.fields.clone()), "") {
         return Err(SettingsError::FileRefused {
             file: doc.file,
@@ -137,6 +138,27 @@ fn holds_only_its_layer(doc: &LayerDoc, layer: Layer) -> Result<(), SettingsErro
                     "is not a setting kelpie has".to_string(),
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a file whose value breaks a rule of kelpie's own that the schema cannot say
+///
+/// [`Field::own_rule`] is what a person's editor cannot check, so the read that
+/// takes the file in checks it too, and a file kelpie wrote and a file someone
+/// typed refuse the same way.
+fn holds_no_refused_value(doc: &LayerDoc) -> Result<(), SettingsError> {
+    for field in Field::ALL {
+        let Some(value) = doc.fields.get(field.key()) else {
+            continue;
+        };
+        if let Some(reason) = field.own_rule(value) {
+            return Err(SettingsError::FileRefused {
+                file: doc.file.clone(),
+                path: format!("/{}", field.key()),
+                reason: reason.to_string(),
+            });
         }
     }
     Ok(())
