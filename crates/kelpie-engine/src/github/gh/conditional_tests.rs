@@ -21,9 +21,9 @@ enum Confirms {
     InOutput,
     // A 304 only in the debug lines, with a failing exit
     InStderr,
-    // An error that names a 304 in words kelpie does not know
+    // An error line that names HTTP 304, which is not in the output or the debug lines
     Odd,
-    // An error that names nothing of a 304
+    // An error that names a 502, with a URL that has the digits 304 in it
     Never,
 }
 
@@ -97,8 +97,12 @@ impl Runner for FakeGithub {
             return match state.confirms {
                 Confirms::InOutput => answered("HTTP/2.0 304 Not Modified\r\n\r\n"),
                 Confirms::InStderr => refused("< HTTP/2.0 304 Not Modified\n<\ngh: HTTP 304\n"),
-                Confirms::Odd => refused("gh: unexpected 304 from the server"),
-                Confirms::Never => refused("gh: Bad Gateway (HTTP 502)"),
+                Confirms::Odd => refused(&format!(
+                    "HTTP 304: Not Modified (https://api.github.com/{path})"
+                )),
+                Confirms::Never => refused(&format!(
+                    "HTTP 502: Bad Gateway (https://api.github.com/{path})"
+                )),
             };
         }
         answered(&format!(
@@ -198,18 +202,21 @@ fn a_read_that_fails_naming_a_304_is_made_again_without_a_tag_and_no_tag_is_sent
 }
 
 #[test]
-fn a_failure_that_names_no_304_is_that_reads_failure_and_tags_stay_on() {
+fn a_failure_whose_url_has_the_digits_304_is_that_reads_failure_and_tags_stay_on() {
+    let path = "repos/o/r/issues/304/comments?per_page=100&page=1";
     let github = FakeGithub::new();
-    github.answers("p", "[1]");
+    github.answers(path, "[1]");
     github.confirms(Confirms::Never);
     let (hold, etags) = (github.hold(), Etags::new());
-    etags.get(&hold, "p").unwrap();
+    etags.get(&hold, path).unwrap();
 
-    let error = etags.get(&hold, "p").unwrap_err();
+    let error = etags.get(&hold, path).unwrap_err();
 
     assert!(matches!(error, ForgeError::Failed(_)), "{error:?}");
-    assert!(github.asked()[1].1.is_some());
     assert_eq!(github.asked().len(), 2, "not made again");
+    github.confirms(Confirms::InOutput);
+    etags.get(&hold, path).unwrap();
+    assert!(github.asked()[2].1.is_some(), "the tag is still sent");
 }
 
 #[test]

@@ -173,9 +173,11 @@ fn request(gh: &Gh, path: &str, etag: Option<&str>) -> Result<Fetched, ForgeErro
     }
 }
 
-// Whether a failure says a 304, which `gh` may print as an error
+// Whether a failure says the status was 304, as `HTTP 304: Not Modified`. The
+// digits alone do not count: a path in the error's URL may hold them.
 fn names_304(said: &str) -> bool {
-    said.contains("304") || said.to_ascii_lowercase().contains("not modified")
+    let said = said.to_ascii_lowercase();
+    said.contains("http 304") || said.contains("not modified")
 }
 
 // The debug lines `GH_DEBUG=api` prints for the response
