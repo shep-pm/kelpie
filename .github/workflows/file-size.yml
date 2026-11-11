@@ -2,14 +2,15 @@ name: file size
 # The mechanical half of IR-48: no `.rs` file over 1000 lines.
 #
 # The job is copied from shep-pm/rust-house-style's
-# `.github/workflows/file-size.yml@v0.1.0`, which is a reusable workflow whose
-# job runs on `ubuntu-latest`. That would bill GitHub-hosted minutes on this
-# private repo, so it runs on the pool here instead. Re-copy it when that
+# `.github/workflows/file-size.yml@v0.1.0`, a reusable workflow, with a
+# `merge_group` trigger added for the merge queue. Re-copy it when that
 # workflow changes, rather than editing this one into something new.
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   file-size:
     name: 1000-line cap on .rs files
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
