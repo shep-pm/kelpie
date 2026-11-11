@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Kelpie</vendor>
+  <vendor_url>https://github.com/shep-pm/kelpie</vendor_url>
+
+  <!-- Install in Attention: `pkexec` runs the packaged helper, and polkit
+       matches this action by the helper's path alone. -->
+  <action id="pm.shep.kelpie.install-profile">
+    <description>Load Kelpie's sandbox profile</description>
+    <message>Kelpie needs your password to load its sandbox profile into AppArmor</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/kelpie-app/install-profile</annotate>
+  </action>
+</policyconfig>

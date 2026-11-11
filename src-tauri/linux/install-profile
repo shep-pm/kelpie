@@ -1,0 +1,8 @@
+#!/bin/sh
+# Loads kelpie's AppArmor profile: copy the packaged profile, then load it.
+# `pkexec` runs this as root, and `pm.shep.kelpie.policy` gives its password
+# prompt a sentence. It takes no arguments and reads nothing from its
+# environment, so every path is absolute and fixed.
+set -eu
+
+/usr/bin/install -m 0644 /usr/share/kelpie-app/kelpie.apparmor /etc/apparmor.d/kelpie && /usr/sbin/apparmor_parser -r /etc/apparmor.d/kelpie
