@@ -74,7 +74,7 @@ const LOG_FILE: &str = "log.jsonl";
 
 /// The hand-over file a worker writes a pull request's title and body in, by
 /// name, in its state folder (`docs/design/workers.md`, Pushing and the pull request)
-const PULL_REQUEST_FILE: &str = "pull-request.md";
+pub(super) const PULL_REQUEST_FILE: &str = "pull-request.md";
 
 /// The prefix every ticket's branch carries, as SK's `home/paths.rs` has it
 const BRANCH_PREFIX: &str = "kelpie/";

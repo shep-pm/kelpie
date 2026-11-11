@@ -7,7 +7,8 @@
 //! 0007). [`start()`] is the one function that begins a worker, for the Start
 //! button, the PM's `start_worker` and the board's dispatch alike. [`ceiling`]
 //! stops a turn that runs past its `worker-turn-timeout`, [`turn_end`] checks
-//! what a turn left on its branch, [`login`] writes the token a worker pushes
+//! what a turn left on its branch, [`after_turn`] opens or edits the draft a turn
+//! hands over from the file its worker left, [`login`] writes the token a worker pushes
 //! with into a `gh` folder of its own, [`record`] keeps what each one is
 //! doing, outside every folder it writes, and [`note`], [`stop_and_tell`] and
 //! [`stop`] are how the maintainer steers one that runs.
@@ -34,8 +35,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod ceiling;
 mod credential;
+pub mod hand_over;
 mod instructions;
 pub mod login;
+mod paragraphs;
 pub mod record;
 pub mod slots;
 pub mod start;
@@ -43,6 +46,7 @@ mod tell;
 pub mod turn_end;
 mod turn_events;
 
+pub use hand_over::{HandOver, Outcome, after_turn};
 pub use record::{Record, Records};
 pub use slots::{Seat, seat};
 pub use start::{Opening, Paths, Project, StartError, Started, Ticket, start};
