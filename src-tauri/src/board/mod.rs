@@ -122,7 +122,9 @@ const HELD: &str = "Waiting on you";
 /// Each wait on the maintainer of the worker on `ticket`, one line each
 ///
 /// A record that waits on the maintainer gives its reason, and a Paused one says
-/// so. Each sandbox request still waiting on the worker's feed gives the host it
+/// so, with its reason after the pause when it has one: a worker whose sandbox
+/// cannot start is Paused with why. The line keeps `Paused` first, which the
+/// worker tab's Resume button reads. Each sandbox request still waiting on the worker's feed gives the host it
 /// wants. `requests` holds those hosts by ticket.
 fn needs_you(
     ticket: &str,
@@ -134,7 +136,10 @@ fn needs_you(
         Status::WaitingOnMaintainer => {
             Some(record.reason.clone().unwrap_or_else(|| HELD.to_owned()))
         }
-        Status::Paused => Some(PAUSED.to_owned()),
+        Status::Paused => Some(match &record.reason {
+            Some(reason) => format!("{PAUSED}: {reason}"),
+            None => PAUSED.to_owned(),
+        }),
         _ => None,
     });
     let asked = requests.get(ticket).into_iter().flatten();

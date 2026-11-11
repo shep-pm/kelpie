@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use kelpie_engine::harness::{HarnessError, goose};
 use kelpie_engine::lease::SOCKET_VAR;
 use kelpie_engine::login::Store;
-use kelpie_engine::sandbox::Sandbox;
+use kelpie_engine::sandbox::{Sandbox, SandboxError};
 use kelpie_engine::session::Choice;
 use kelpie_engine::session::Harness as SessionHarness;
 use kelpie_engine::session::Session;
@@ -23,12 +23,12 @@ use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::settings::Field;
 use kelpie_engine::ticket::Tickets;
 use kelpie_engine::ticket::fake::FakeTickets;
-use kelpie_engine::worker::{Opening, Paths};
+use kelpie_engine::worker::{Opening, Paths, Refused};
 use kelpie_protocol::SessionEvent;
 use serde_json::json;
 
 use super::{Rig, git_out, id, issue};
-use crate::workers::open::{goose_session, open_with};
+use crate::workers::open::{goose_session_with, open_with};
 use crate::workers::{OpenOn, WorkerStarted, lock, plan, start_on};
 
 /// How long a test waits for a worker's turn to end
@@ -153,7 +153,7 @@ fn opened(
     rig: &Rig,
     agent: &FakeAgent,
     seen: &Seen,
-    sandbox: &dyn Fn(&SessionHarness) -> Result<Sandbox, String>,
+    sandbox: &dyn Fn(&SessionHarness) -> Result<Sandbox, SandboxError>,
 ) -> Result<Session, String> {
     let plan = plan(rig.config(), &rig.project).unwrap();
     let logins = Store::memory();
@@ -180,8 +180,15 @@ fn opened(
         env: vec![("CARGO_TARGET_DIR".to_owned(), "/build".to_owned())],
         lease: None,
         sandbox,
+        refused: Refused::default(),
     };
-    open_with(&on, &opening, found(agent, &seen.asks), goose_session)
+    // No unit test runs bwrap, so the probe of a sandbox that started passes
+    open_with(
+        &on,
+        &opening,
+        found(agent, &seen.asks),
+        |opening, harness| goose_session_with(opening, harness, |_| Ok(())),
+    )
 }
 
 /// The tickets holding one open issue `12`
@@ -339,9 +346,9 @@ fn a_worker_on_goose_hands_the_goose_harness_to_the_worker_sandbox() {
     let agent = FakeAgent::new();
     let seen = Seen::default();
     let asked: Mutex<Vec<SessionHarness>> = Mutex::new(Vec::new());
-    let refused = |harness: &SessionHarness| -> Result<Sandbox, String> {
+    let refused = |harness: &SessionHarness| -> Result<Sandbox, SandboxError> {
         lock(&asked).push(harness.clone());
-        Err("the sandbox cannot start".to_owned())
+        Err(SandboxError::Probe("the sandbox cannot start".to_owned()))
     };
 
     let said = opened(&rig, &agent, &seen, &refused).expect_err("no sandbox, no worker");

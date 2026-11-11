@@ -81,6 +81,20 @@ fn a_paused_worker_marks_its_ticket_paused() {
 }
 
 #[test]
+fn a_paused_worker_with_a_reason_says_it_after_the_pause() {
+    let mut rig = two_tickets();
+    let reason = "its sandbox cannot start because the kernel does not allow user namespaces";
+    wait(&rig, "12", Status::Paused, Some(reason));
+
+    let board = view(rig.poller.place());
+
+    assert_eq!(
+        ticket(&board, "12").needs_you,
+        [format!("Paused, resumes when you say so: {reason}")]
+    );
+}
+
+#[test]
 fn each_waiting_sandbox_request_is_its_own_line_and_its_own_count() {
     let mut rig = two_tickets();
     let feed = rig.feed("12");

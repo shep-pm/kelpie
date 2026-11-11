@@ -14,6 +14,12 @@
 //! version's sandbox from them. A goose worker swaps no version, so its sandbox
 //! comes from `Opening::sandbox` and covers its whole session. A worker never runs
 //! without a sandbox: where it cannot start, the worker does not either.
+//!
+//! Starting a sandbox only builds crabpot's settings, and bwrap's refusal first
+//! shows when something runs inside it. So each start probes the sandbox its
+//! session runs in ([`confine`]) before the session is built, and a sandbox bwrap
+//! refuses parks the worker Paused with the refusal's words
+//! (`docs/design/sandbox-setup.md`, Running without a sandbox).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -24,7 +30,7 @@ use kelpie_engine::bridge;
 use kelpie_engine::harness::{HarnessError, claude, goose};
 use kelpie_engine::lease::SessionLease;
 use kelpie_engine::login::Store;
-use kelpie_engine::sandbox::{self, Sandbox};
+use kelpie_engine::sandbox::{self, Sandbox, SandboxError};
 use kelpie_engine::session::{Harness as SessionHarness, Session, Started, sandboxed_launcher};
 use kelpie_engine::settings::{ConfigDir, Harness};
 use kelpie_engine::tools::SessionTools;
@@ -34,6 +40,7 @@ use kelpie_engine::worktree::clone;
 
 use super::WorkerPlan;
 use crate::pm;
+use crate::sandbox_setup::proven;
 
 /// What the app builds a worker's session from, besides what the engine hands the opener
 #[derive(Debug, Clone, Copy)]
@@ -144,16 +151,33 @@ fn goose_worker(
 /// `Opening::sandbox` is [`Sandbox::start_worker`] with the worker's worktree,
 /// git dirs, state folder and lease door, which is the policy every worker's
 /// sandbox gets whatever its harness is. goose swaps no version, so this one
-/// sandbox covers its whole session.
+/// sandbox covers its whole session. It is probed once, before the session is
+/// built.
 ///
 /// # Errors
 ///
-/// The worker's sandbox cannot start. The text says why.
+/// The worker's sandbox cannot start, or bwrap refuses it. The text says why.
 pub(super) fn goose_session(
     opening: &Opening<'_>,
     harness: SessionHarness,
 ) -> Result<Session, String> {
-    let sandbox = (opening.sandbox)(&harness)?;
+    goose_session_with(opening, harness, |sandbox| sandbox.ready(opening.tree))
+}
+
+/// [`goose_session`] with `ready` as the probe of the sandbox
+///
+/// The app hands in [`Sandbox::ready`], which runs a command in bwrap. A test
+/// hands in its own, since no unit test runs bwrap.
+///
+/// # Errors
+///
+/// As [`goose_session`].
+pub(super) fn goose_session_with(
+    opening: &Opening<'_>,
+    harness: SessionHarness,
+    ready: impl FnOnce(&Sandbox) -> Result<(), SandboxError>,
+) -> Result<Session, String> {
+    let sandbox = confine(opening, (opening.sandbox)(&harness), ready)?;
     Ok(Session::sandboxed(
         Arc::clone(opening.tree),
         harness,
@@ -162,6 +186,26 @@ pub(super) fn goose_session(
         opening.resume.clone(),
         opening.choice.clone(),
     ))
+}
+
+/// The started sandbox, once `ready` has run in it and passed
+///
+/// A refusal is named to `opening`, which is what parks the worker Paused and
+/// holds no slot for it ([`Opening::refuse`]). Any other error fails the start
+/// and gives the slot back.
+///
+/// # Errors
+///
+/// The words of the refusal, or of the error the start or `ready` gave.
+pub(super) fn confine<T>(
+    opening: &Opening<'_>,
+    started: Result<T, SandboxError>,
+    ready: impl FnOnce(&T) -> Result<(), SandboxError>,
+) -> Result<T, String> {
+    proven(started, ready).map_err(|error| match error {
+        SandboxError::Refused(refusal) => opening.refuse(refusal),
+        other => format!("could not start the worker's sandbox: {other}"),
+    })
 }
 
 /// What every version's sandbox is started from
@@ -193,7 +237,7 @@ fn claude_worker(on: &OpenOn<'_>, opening: &Opening<'_>) -> Result<Session, Stri
     std::fs::create_dir_all(state_dir)
         .map_err(|error| format!("could not make {}: {error}", state_dir.display()))?;
     // kelpie's own pin is always there to fall back to
-    bridge::ensure(on.data_dir, claude::pin()).map_err(|error| error.to_string())?;
+    let pinned = bridge::ensure(on.data_dir, claude::pin()).map_err(|error| error.to_string())?;
     let mut env: Vec<(OsString, OsString)> = opening
         .env
         .iter()
@@ -219,6 +263,12 @@ fn claude_worker(on: &OpenOn<'_>, opening: &Opening<'_>) -> Result<Session, Stri
         lease: opening.lease.clone(),
         env,
     };
+    // One probe per start, in the sandbox the session runs in. A bridge version
+    // swap later starts its sandbox unprobed.
+    let probed = folders.harness(pinned)?;
+    confine(opening, folders.sandbox(&probed), |sandbox| {
+        sandbox.ready(opening.tree)
+    })?;
     let bridge = pm::claude_bridge(on.data_dir, on.config, on.project_id, move |cmd| {
         folders.start(cmd)
     });
@@ -231,8 +281,8 @@ fn claude_worker(on: &OpenOn<'_>, opening: &Opening<'_>) -> Result<Session, Stri
 }
 
 impl Folders {
-    /// The worker's harness on the bridge `cmd`, and the sandbox it runs in
-    fn start(&self, cmd: PathBuf) -> Result<Started, String> {
+    /// The worker's harness on the bridge `cmd`
+    fn harness(&self, cmd: PathBuf) -> Result<SessionHarness, String> {
         let mut harness = claude::harness(
             cmd,
             &self.state_dir,
@@ -241,6 +291,11 @@ impl Folders {
         )
         .map_err(|error| error.to_string())?;
         harness.env.extend(self.env.iter().cloned());
+        Ok(harness)
+    }
+
+    /// The sandbox `harness` runs in, as the worker's policy has it
+    fn sandbox(&self, harness: &SessionHarness) -> Result<Sandbox, SandboxError> {
         let reach = sandbox::Project {
             folder: &self.reach.folder,
             network_allowlist: &self.reach.network_allowlist,
@@ -256,7 +311,14 @@ impl Folders {
             door: self.tools.as_ref().map(SessionTools::door),
             lease: self.lease.as_ref().map(SessionLease::door),
         };
-        let sandbox = Sandbox::start_worker(&harness, &reach, &worker)
+        Sandbox::start_worker(harness, &reach, &worker)
+    }
+
+    /// The worker's harness on the bridge `cmd`, and the sandbox it runs in
+    fn start(&self, cmd: PathBuf) -> Result<Started, String> {
+        let harness = self.harness(cmd)?;
+        let sandbox = self
+            .sandbox(&harness)
             .map_err(|error| format!("could not start the worker's sandbox: {error}"))?;
         Ok(Started {
             launch: sandboxed_launcher(

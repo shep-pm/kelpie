@@ -479,6 +479,16 @@ impl Workers {
         }
     }
 
+    /// Whether the worker on `ticket` has had a turn, which gave it a session to resume
+    fn has_session(&self, project_id: &str, ticket: &str) -> Result<bool, String> {
+        let records = self.records(project_id)?;
+        let records = lock(&records);
+        records
+            .get(ticket)
+            .map(|record| record.session.is_some())
+            .ok_or_else(|| format!("there is no worker on ticket {ticket}"))
+    }
+
     /// What the record of the worker on `ticket` says it is doing
     fn status_of(&self, project_id: &str, ticket: &str) -> Result<Status, String> {
         let records = self.records(project_id)?;
@@ -491,16 +501,22 @@ impl Workers {
 
     /// Start the next turn of the Paused worker on `ticket`, with "Carry on from where you stopped." as its message
     ///
+    /// A worker that never had a turn, as one whose sandbox was refused on its
+    /// first start, has no conversation to carry on: its message is the ticket's own
+    /// text, read from `source`, as a start sends it.
+    ///
     /// # Errors
     ///
     /// The project has no worker on `ticket`, or it is not Paused: the line says what
-    /// it is doing. Or the start fails (see [`Workers::start`]).
+    /// it is doing. Or a worker with no session has no ticket to read (see
+    /// [`ticket_of`]). Or the start fails (see [`Workers::start`]).
     pub fn resume(
         &self,
         project_id: &str,
         folder: &Path,
         tools: Option<&Tools>,
         ticket: &str,
+        source: Result<&dyn Tickets, String>,
         open: &Opener<'_>,
     ) -> Result<WorkerStarted, String> {
         let ticket = ticket_id(ticket)?;
@@ -513,9 +529,13 @@ impl Workers {
                 ));
             }
         }
-        let ticket = Ticket {
-            id: ticket,
-            text: CARRY_ON.to_owned(),
+        let ticket = if self.has_session(project_id, &ticket)? {
+            Ticket {
+                id: ticket,
+                text: CARRY_ON.to_owned(),
+            }
+        } else {
+            ticket_of(source?, &ticket)?
         };
         self.start(project_id, folder, tools, &ticket, open)
     }
@@ -775,7 +795,9 @@ pub fn start_ticket(state: &AppState, ticket: &str) -> Result<WorkerStarted, Str
 
 /// Resume the Paused worker on `ticket` of the project `project_id`
 ///
-/// `open` builds the session, which the app's opener does in `open.rs`.
+/// `source` is read only for a worker that never had a turn (see
+/// [`Workers::resume`]). `open` builds the session, which the app's opener does in
+/// `open.rs`.
 ///
 /// # Errors
 ///
@@ -785,6 +807,7 @@ pub fn resume_on(
     state: &AppState,
     project_id: &str,
     ticket: &str,
+    source: Result<&dyn Tickets, String>,
     open: &Opener<'_>,
 ) -> Result<WorkerStarted, String> {
     let folder = state
@@ -792,7 +815,7 @@ pub fn resume_on(
         .ok_or_else(|| format!("kelpie has no project {project_id}"))?;
     state
         .workers()
-        .resume(project_id, &folder, state.tools(), ticket, open)
+        .resume(project_id, &folder, state.tools(), ticket, source, open)
 }
 
 /// Read the past of the worker on the ticket, and follow it live on `on_event`
@@ -844,7 +867,15 @@ pub fn worker_unwatch(
 #[specta::specta]
 pub fn worker_resume(state: State<'_, AppState>, ticket: String) -> Result<WorkerStarted, String> {
     let project = state.project_id(None)?;
-    resume_on(&state, &project, &ticket, &open::open)
+    let source = state.source(&project);
+    let source = source.as_ref().map(|source| &**source as &dyn Tickets);
+    resume_on(
+        &state,
+        &project,
+        &ticket,
+        source.map_err(Clone::clone),
+        &open::open,
+    )
 }
 
 /// Tell the worker on the ticket `text`, without interrupting its turn

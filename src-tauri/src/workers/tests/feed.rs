@@ -11,6 +11,8 @@ use std::time::Duration;
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{Choice, Session};
+use kelpie_engine::ticket::Tickets;
+use kelpie_engine::ticket::fake::FakeTickets;
 use kelpie_engine::worker::{Paths, Record, Status};
 use kelpie_protocol::{LogEntry, SessionEvent};
 
@@ -294,13 +296,22 @@ fn watching_a_ticket_with_no_worker_is_refused_by_name() {
 impl Rig {
     /// What `resume_on` does for `ticket`, with `agent` as the worker's harness
     fn resume(&self, agent: &FakeAgent, ticket: &str) -> Result<super::WorkerStarted, String> {
-        resume_on(&self.state, &self.project, ticket, &|_, opening| {
-            Ok(agent.session(
-                opening.worktree.to_path_buf(),
-                opening.resume.clone(),
-                Choice::default(),
-            ))
-        })
+        // A worker that has a session carries on, and reads no ticket
+        let tickets = FakeTickets::new();
+        let source: &dyn Tickets = &tickets;
+        resume_on(
+            &self.state,
+            &self.project,
+            ticket,
+            Ok(source),
+            &|_, opening| {
+                Ok(agent.session(
+                    opening.worktree.to_path_buf(),
+                    opening.resume.clone(),
+                    Choice::default(),
+                ))
+            },
+        )
     }
 }
 
@@ -333,7 +344,19 @@ fn resume_sends_the_carry_on_text_to_a_paused_worker() {
     let rig = Rig::new();
     rig.with_origin();
     rig.worker("12", Status::Paused);
-    let agent = FakeAgent::new().turn(Turn::new().text("Carrying on."));
+    // It has had a turn, so its session carries on
+    rig.state
+        .workers()
+        .records(&rig.project)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .set_session("12", &"s1".into())
+        .unwrap();
+    let agent = FakeAgent::new()
+        .can_resume()
+        .knows("s1")
+        .turn(Turn::new().text("Carrying on."));
     let (send, heard) = listener();
     rig.state
         .workers()

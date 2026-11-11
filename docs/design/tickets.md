@@ -50,7 +50,7 @@ An issue is a ticket when the per-project setting Pick up issues from says so: M
 2. A ticket on the board shows its number, the title, the priority label and the needs-you marker. Tickets sort by priority, then oldest first.
 3. Ready tickets carry Start.
 4. Clicking a Building ticket opens its worker's tab. Clicking any other opens its issue, or its pull request in Review, on GitHub.
-5. The marker shows while the ticket's worker waits on the maintainer: a sandbox request, a fence refusal holding the ticket (#83), or Paused after a quit. Phase 3 adds rulings. It counts toward the project's badge in the rail (`docs/design/ux.md`, Attention).
+5. The marker shows while the ticket's worker waits on the maintainer: a sandbox request, a fence refusal holding the ticket (#83), or Paused after a quit or because its sandbox cannot start, which says why. Phase 3 adds rulings. It counts toward the project's badge in the rail (`docs/design/ux.md`, Attention).
 
 The board is chelone's `KanbanBoard` (`packages/react/src/components/kanban/`, MIT, the maintainer's own), adapted: chelone's list, resource, router and i18n hooks come out, and tickets go in. It brings dnd-kit, a hold before a touch drag so a swipe still scrolls, the keyboard's Move to menu, and the optimistic move that puts a ticket back when the move fails.
 
