@@ -197,6 +197,7 @@ fn an_old_workers_json_with_no_notes_still_loads() {
     let records = Records::load(rig.paths.records()).unwrap();
 
     assert_eq!(records.get("74").unwrap().notes, Vec::<String>::new());
+    assert_eq!(records.get("74").unwrap().refused, None, "and no refusal");
 }
 
 #[test]

@@ -61,6 +61,19 @@ pub struct Record {
     /// state. A record from before reasons had none.
     #[serde(default)]
     pub reason: Option<String>,
+
+    /// The refusal kelpie last told this worker about its hand-over file
+    ///
+    /// A hand-over file kelpie will not open is told to the worker once, and the
+    /// telling is kept here so the next turn's end can tell whether the worker took
+    /// it in: the same refusal back is one the worker left as it was, which kelpie
+    /// rules on instead of telling again
+    /// (`docs/design/workers.md`, Pushing and the pull request). Kept here rather
+    /// than beside the hand-over file, which sits in a folder the worker writes: a
+    /// refusal the worker could erase is one it could be told over and over. A
+    /// record from before refusals had none.
+    #[serde(default)]
+    pub refused: Option<String>,
 }
 
 impl Record {
@@ -76,6 +89,7 @@ impl Record {
             seat: Seat::Without,
             notes: Vec::new(),
             reason: None,
+            refused: None,
         }
     }
 
@@ -312,6 +326,22 @@ impl Records {
             return Ok(());
         }
         record.reason = reason;
+        write(&self.file, &self.list)
+    }
+
+    /// Keep `refused` as what `ticket`'s worker was last told about its hand-over file, and write the file when it changed
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn set_refused(&mut self, ticket: &str, refused: Option<String>) -> io::Result<()> {
+        let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) else {
+            return Ok(());
+        };
+        if record.refused == refused {
+            return Ok(());
+        }
+        record.refused = refused;
         write(&self.file, &self.list)
     }
 

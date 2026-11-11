@@ -22,6 +22,7 @@ use crate::state::AppState;
 
 mod feed;
 mod goose;
+mod hand_over;
 mod plan;
 
 /// An app state in a folder of its own, with one project picked

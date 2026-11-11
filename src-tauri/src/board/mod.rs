@@ -344,6 +344,13 @@ fn poller_of(
 ) -> Result<Poller<GithubSource>, String> {
     let records = state.workers().records(project)?;
     let waiting = state.workers().requests_of(project);
+    let folder = state
+        .project_path_of(project)
+        .ok_or_else(|| format!("kelpie has no project {project}"))?;
+    let plan = workers::plan(state.config(), project)?;
+    // Each read hands over again for the workers that still owe the forge a draft
+    let hands = state.workers().hands(project, &folder, &plan)?;
+    let retry = Box::new(move |records: &[Record]| hands.retry(records));
     let config = state.config().clone();
     let project = project.to_owned();
     let choose = Box::new(move || {
@@ -355,7 +362,7 @@ fn poller_of(
         })
     });
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    Ok(Poller::new(source, choose, records, waiting, clock))
+    Ok(Poller::new(source, choose, records, waiting, retry, clock))
 }
 
 /// Stream the project's board to the window, and keep it current

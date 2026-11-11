@@ -8,7 +8,8 @@
 //! button, the PM's `start_worker` and the board's dispatch alike. [`ceiling`]
 //! stops a turn that runs past its `worker-turn-timeout`, [`turn_end`] checks
 //! what a turn left on its branch, [`after_turn`] opens or edits the draft a turn
-//! hands over from the file its worker left, [`login`] writes the token a worker pushes
+//! hands over from the file its worker left and [`hand_over::owes_a_draft`] says which
+//! workers still owe one, [`login`] writes the token a worker pushes
 //! with into a `gh` folder of its own, [`record`] keeps what each one is
 //! doing, outside every folder it writes, and [`note`], [`stop_and_tell`] and
 //! [`stop`] are how the maintainer steers one that runs.
@@ -46,7 +47,7 @@ mod tell;
 pub mod turn_end;
 mod turn_events;
 
-pub use hand_over::{HandOver, Outcome, after_turn};
+pub use hand_over::{HandOver, Outcome, after_turn, owes_a_draft};
 pub use record::{Record, Records};
 pub use slots::{Seat, seat};
 pub use start::{Opening, Paths, Project, StartError, Started, Ticket, start};

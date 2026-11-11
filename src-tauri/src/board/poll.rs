@@ -1,4 +1,8 @@
 //! The poller: one read of GitHub a minute, one placing every two seconds
+//!
+//! Each read also hands over the drafts the project's finished turns still owe the
+//! forge ([`Retry`]), which is the retry a worker parked on a failed open is told to
+//! expect (`docs/design/tickets.md`, Use case).
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -9,7 +13,7 @@ use kelpie_engine::board::{Board, Read, Rules, place};
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::settings::PickUp;
 use kelpie_engine::ticket::{ForgeError, GithubTickets};
-use kelpie_engine::worker::Records;
+use kelpie_engine::worker::{Record, Records};
 
 use super::{BoardEvent, BoardView};
 
@@ -48,6 +52,14 @@ pub type Choose = Box<dyn Fn() -> Result<Choices, String> + Send>;
 /// A sandbox request lives in its worker's feed and not in its record, so the
 /// poller asks for the feeds' side each time it places.
 pub type Requests = Box<dyn Fn() -> BTreeMap<String, Vec<String>> + Send>;
+
+/// Where a read finds the workers that owe the forge a draft, and hands them over
+///
+/// A turn that ends hands its own draft over, on the thread its sink runs on
+/// ([`crate::workers::hand_over`]). A worker whose draft could not be opened, or whose
+/// file has since been rewritten, is handed over on the next read, which is what its
+/// reason promises: "kelpie tries again each minute".
+pub type Retry = Box<dyn Fn(&[Record]) + Send>;
 
 const DAY: u64 = 24 * 60 * 60;
 
@@ -91,6 +103,7 @@ pub struct Poller<F> {
     choose: Choose,
     records: Arc<Mutex<Records>>,
     requests: Requests,
+    retry: Retry,
     clock: Arc<dyn Clock>,
     last: Option<Last>,
     held: Option<Timestamp>,
@@ -104,13 +117,14 @@ impl<F> std::fmt::Debug for Poller<F> {
 }
 
 impl<F: Feed> Poller<F> {
-    /// A poller of `feed`'s board, with the workers' `records` and the sandbox
-    /// requests their feeds hold (`requests`)
+    /// A poller of `feed`'s board, with the workers' `records`, the sandbox requests
+    /// their feeds hold (`requests`) and the hand-overs owed to the forge (`retry`)
     pub fn new(
         feed: Arc<F>,
         choose: Choose,
         records: Arc<Mutex<Records>>,
         requests: Requests,
+        retry: Retry,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -118,6 +132,7 @@ impl<F: Feed> Poller<F> {
             choose,
             records,
             requests,
+            retry,
             clock,
             last: None,
             held: None,
@@ -125,7 +140,7 @@ impl<F: Feed> Poller<F> {
         }
     }
 
-    /// Read GitHub, then place what it said
+    /// Read GitHub, hand over for each worker that owes a draft, then place what it said
     ///
     /// `Some` only when what the window shows changes. A read that fails keeps
     /// the last board, and says so only when there is none.
@@ -137,7 +152,23 @@ impl<F: Feed> Poller<F> {
             }
             Err(error) => return self.failed(&error),
         }
+        self.hand_over();
         self.place()
+    }
+
+    /// Hand over again for each worker that owes the forge a draft
+    ///
+    /// Only on a read, which is what just asked GitHub, and never on a placing, which
+    /// asks nothing. The records are read under their lock and dropped before the first
+    /// hand-over starts, so a start on another thread is not held behind a call to
+    /// GitHub. A draft opened here shows on the board on the next read, which is the one
+    /// that will have seen it.
+    fn hand_over(&self) {
+        let records: Vec<Record> = {
+            let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
+            records.list().to_vec()
+        };
+        (self.retry)(&records);
     }
 
     fn fetch(&mut self) -> Result<Last, ForgeError> {

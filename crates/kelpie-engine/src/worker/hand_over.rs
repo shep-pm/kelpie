@@ -212,6 +212,22 @@ pub fn after_turn(ctx: &HandOver<'_>) -> Outcome {
     }
 }
 
+/// Whether `ticket`'s worker owes the forge a pull request for the file it left
+///
+/// No file, or a file that is the copy kelpie last sent, asks nothing of the forge. A
+/// caller that asks the forge once a read, for every worker of a project, runs this
+/// first, so it reads a branch and its open pull requests for none that has nothing to
+/// hand over. A file kelpie cannot read is one the forge has never been given.
+#[must_use]
+pub fn owes_a_draft(paths: &Paths, ticket: &str) -> bool {
+    let state = paths.state_dir(ticket);
+    match worker_folder::read(&state, Path::new(PULL_REQUEST_FILE)) {
+        Ok(Some(file)) => applied(&state).is_none_or(|sent| sent != file),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
 /// The title and body in `file`: its first line is the title, its leading `#`s
 /// left off, and the rest is the body, blank lines dropped from each end and its
 /// soft-wrapped lines joined by [`paragraphs::join`]
