@@ -10,7 +10,7 @@ Today SK's workers build kelpie headless: the maintainer sees a pull request at 
 
 1. A ticket is ready. The maintainer clicks Start on it, or the PM starts it.
 2. Kelpie makes the ticket a worktree and starts a worker there, on the harness and model the project's settings name.
-3. The maintainer opens the building ticket and sees the worker's stream, its diff so far and its processes. A Note reaches it at its next tool boundary. Stop and tell interrupts the turn.
+3. The maintainer opens the building ticket and sees the worker's stream, its diff so far and its processes. A Note reaches it when its turn ends. Stop and tell interrupts the turn.
 4. The worker commits and pushes its branch with a token that reaches that one repo alone, and writes the pull request's title and body to a file. When the turn ends, kelpie opens the draft pull request from it.
 5. When kelpie quits mid-turn, the worker comes back Paused on the next launch and resumes only when the maintainer says so.
 
@@ -87,8 +87,8 @@ Other forges bring their own token through the forge adapter. The cost: a token 
 
 As `docs/design/ux.md` (Workers) has it:
 
-1. **Note** is queued and delivered at the next tool boundary. A harness that cannot take a message mid-turn gets it when the turn ends, and its row in the harness facts table says so.
-2. **Stop and tell** cancels the turn over ACP and sends the message as the next prompt.
+1. **Note** is queued in the ticket's record. Phase 2 delivers it when the turn ends, on every harness: the notes go out together as the next prompt, one to a paragraph, and the worker stays Running with its slot. A worker whose turn ended takes the note as its next turn. A turn that ends held or Paused keeps its notes for the next start. Steering a turn in flight follows per harness (Claude Code's queued second prompt, goose's `_goose/unstable/session/steer`), so the behaviour is the same on each until then and `docs/parity.toml` needs no row.
+2. **Stop and tell** cancels the turn over ACP and sends the message as the next prompt. The cancelled turn's end settles nothing, so the worker stays Running and keeps its slot, and that end starts the new turn. A Stop before it keeps the message as a note, and a second Stop and tell before it goes out in the same prompt. **Stop** with no message cancels the turn and leaves the worker Paused, as the turn ceiling does, and the maintainer resumes it by hand.
 3. A note goes into the ticket's record. When it changes the scope, the PM updates the ticket's text. The PM gets one line saying what the maintainer told the worker.
 
 ### Slots, pacing and leases
