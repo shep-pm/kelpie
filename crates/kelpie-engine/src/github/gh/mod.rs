@@ -22,6 +22,7 @@ use crate::tree::ProcessTree;
 use crate::worker::login;
 
 pub mod account;
+mod checks;
 pub mod conditional;
 mod failed;
 pub mod hold;
@@ -34,6 +35,8 @@ pub use account::{RateBucket, RateLimits};
 pub use pulls::GithubPulls;
 pub use source::GithubSource;
 
+#[cfg(test)]
+mod checks_tests;
 #[cfg(test)]
 mod conditional_tests;
 #[cfg(test)]
