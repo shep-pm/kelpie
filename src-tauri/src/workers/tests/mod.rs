@@ -21,6 +21,7 @@ use super::{WorkerStarted, start_on, ticket_of};
 use crate::state::AppState;
 
 mod feed;
+mod fix_turn;
 mod goose;
 mod hand_over;
 mod plan;

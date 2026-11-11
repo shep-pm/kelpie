@@ -22,17 +22,20 @@ use std::time::{Duration, Instant};
 use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
+use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
 use kelpie_engine::settings::{ConfigDir, Field, LayerFile, PickUp, Settings};
 use kelpie_engine::ticket::{GithubTickets, Pulls, TicketId, Tickets};
-use kelpie_engine::worker::{Opening, Paths, Record, Ticket};
+use kelpie_engine::worker::{Opening, Paths, Record, Status, Ticket};
 use kelpie_protocol::SessionEvent;
 use serde_json::json;
 
 use crate::board::poll::{Choices, Poller, Retry};
 use crate::board::{BoardEvent, Column};
 use crate::state::AppState;
-use crate::workers::{Forge, Hands, NoteOutcome, WorkerStarted, note_on, plan, stop_and_tell_on};
+use crate::workers::{
+    Forge, Hands, NoteOutcome, WorkerStarted, note_through, plan, stop_and_tell_on,
+};
 
 mod cases;
 mod forge;
@@ -177,14 +180,6 @@ impl Rig {
 
     /// Start ticket `number`'s worker, as the window's Start does
     fn start(&self, number: u64) -> WorkerStarted {
-        let agent = lock(&self.agents)
-            .get(&number)
-            .expect("the ticket was put on the board")
-            .clone();
-        let ticket_name = number.to_string();
-        let heard = self.feed(number);
-        let (state, project) = (&self.state, &self.project);
-        let (forge, branch) = (Arc::clone(&self.github), format!("kelpie/{number}"));
         let issue = self
             .github
             .issue(&TicketId::from_issue(number).unwrap())
@@ -193,6 +188,7 @@ impl Rig {
             id: number.to_string(),
             text: format!("{}\n\n{}", issue.title, issue.body),
         };
+        let (state, project) = (&self.state, &self.project);
         let folder = state.project_path_of(project).unwrap();
         state
             .workers()
@@ -201,31 +197,74 @@ impl Rig {
                 &folder,
                 state.tools(),
                 &ticket,
-                // The feed is watched from inside the opener, so no event of the turn is missed
-                &|_, opening: &Opening<'_>| {
-                    // What a turn that pushed leaves on the forge: the branch at its worktree's commit
-                    forge.push(&branch, &git(opening.worktree, &["rev-parse", "HEAD"]));
-                    let heard = Arc::clone(&heard);
-                    state
-                        .workers()
-                        .watch(project, &ticket_name, WATCH, move |event| {
-                            lock(&heard).push(event);
-                            true
-                        })
-                        .expect("the worker has a record to watch");
-                    Ok(agent.session(
-                        opening.worktree.to_path_buf(),
-                        opening.resume.clone(),
-                        opening.choice.clone(),
-                    ))
-                },
+                &|_, opening: &Opening<'_>| Ok(self.session_for(number, opening)),
             )
             .expect("the worker starts")
     }
 
+    /// The session ticket `number`'s worker runs, built the way every start of it builds one
+    ///
+    /// The feed is watched from here, so no event of the turn is missed. What a turn that
+    /// pushed leaves on the forge is the branch at its worktree's commit.
+    fn session_for(&self, number: u64, opening: &Opening<'_>) -> Session {
+        let agent = lock(&self.agents)
+            .get(&number)
+            .expect("the ticket was put on the board")
+            .clone();
+        let heard = self.feed(number);
+        self.github.push(
+            &format!("kelpie/{number}"),
+            &git(opening.worktree, &["rev-parse", "HEAD"]),
+        );
+        self.state
+            .workers()
+            .watch(&self.project, &number.to_string(), WATCH, move |event| {
+                lock(&heard).push(event);
+                true
+            })
+            .expect("the worker has a record to watch");
+        agent.session(
+            opening.worktree.to_path_buf(),
+            opening.resume.clone(),
+            opening.choice.clone(),
+        )
+    }
+
     /// Tell ticket `number`'s worker `text` as a Note
     fn note(&self, number: u64, text: &str) -> NoteOutcome {
-        note_on(&self.state, &number.to_string(), text).unwrap()
+        let source: &dyn Tickets = self.github.as_ref();
+        note_through(
+            &self.state,
+            &number.to_string(),
+            text,
+            Ok(source),
+            // A worker told while it waits on a ruling is sent back, which starts its session again
+            &|_, opening: &Opening<'_>| Ok(self.session_for(number, opening)),
+        )
+        .unwrap()
+    }
+
+    /// Park ticket `number`'s worker the way a ruling does: waiting on the maintainer, with `reason`
+    fn rule(&self, number: u64, reason: &str) {
+        let records = self.state.workers().records(&self.project).unwrap();
+        let mut records = lock(&records);
+        let ticket = number.to_string();
+        records
+            .set_status(&ticket, Status::WaitingOnMaintainer)
+            .unwrap();
+        records
+            .set_reason(&ticket, Some(reason.to_owned()))
+            .unwrap();
+    }
+
+    /// Ticket `number`'s record
+    fn record(&self, number: u64) -> Record {
+        let records = self.state.workers().records(&self.project).unwrap();
+        let records = lock(&records);
+        records
+            .get(&number.to_string())
+            .expect("the ticket has a record")
+            .clone()
     }
 
     /// Cut ticket `number`'s turn short and send its worker `text` as the turn that follows
