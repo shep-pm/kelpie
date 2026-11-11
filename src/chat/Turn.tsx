@@ -109,21 +109,31 @@ function Failure({ id }: { id: number }) {
   const error = useField(id, "error");
   const state = useField(id, "state");
   const last = useChat((s) => s.turns.at(-1)?.id === id);
-  // An unsandboxed session runs past its refusal, so a failure in it is its own
-  const refusal = useChat((s) =>
-    s.sandbox?.unsandboxed ? null : (s.sandbox?.refusal ?? null),
-  );
-  if (!error) return null;
-  // Only the turn that found the refusal says it: an older failed turn kept its own error
-  if (refusal && last && state === "failed")
-    return <SandboxSetup refusal={refusal} />;
+  const sandbox = useChat((s) => s.sandbox);
+  const refusal = sandbox?.refusal ?? null;
+  const unsandboxed = sandbox?.unsandboxed ?? false;
+  // Only the last turn says it: an older failed turn kept its own error. A
+  // session that runs unsandboxed keeps the item on its last turn, whatever
+  // that turn did, since Install belongs on it.
+  const item =
+    refusal && last && (unsandboxed || (state === "failed" && !!error)) ? (
+      <SandboxSetup refusal={refusal} unsandboxed={unsandboxed} />
+    ) : null;
+  // The item stands in for the raw error of the turn the sandbox refused. An
+  // unsandboxed session runs past its refusal, so a failure in it is its own.
+  const refused = item !== null && !unsandboxed;
   return (
-    <p
-      role="alert"
-      className="rounded-md bg-status-failed-soft px-3 py-1.5 text-sm text-status-failed-fg"
-    >
-      {error}
-    </p>
+    <>
+      {error && !refused && (
+        <p
+          role="alert"
+          className="rounded-md bg-status-failed-soft px-3 py-1.5 text-sm text-status-failed-fg"
+        >
+          {error}
+        </p>
+      )}
+      {item}
+    </>
   );
 }
 
