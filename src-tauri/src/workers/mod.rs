@@ -11,7 +11,9 @@
 //! line saying which. A start does not refuse a ticket that is blocked or has
 //! sub-issues: dispatch does.
 //!
-//! A worker's events go to its log and nowhere else yet.
+//! A worker's events go to its log and to its [`Feed`], which the window watches
+//! with [`worker_watch`]. A Paused worker resumes with [`worker_resume`], when the
+//! maintainer says so.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,19 +23,23 @@ use kelpie_engine::github::gh::{Gh, GithubSource, hold::Hold};
 use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
 use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
-use kelpie_engine::session::Session;
+use kelpie_engine::session::{Session, log};
 use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
 use kelpie_engine::tools::Tools;
 use kelpie_engine::tree::ProcessTree;
-use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Ticket};
+use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Status, Ticket};
+use kelpie_protocol::{LogEntry, SessionEvent};
 use serde::Serialize;
 use specta::Type;
 use tauri::State;
+use tauri::ipc::Channel;
 
+mod feed;
 mod open;
 mod plan;
 
+pub use feed::Feed;
 use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
 
@@ -44,6 +50,9 @@ mod tests;
 
 /// The branch every GitHub project's worktrees are cut from
 const BASE: &str = "main";
+
+/// What Resume sends as the turn's message: a message the maintainer writes is a Note
+const CARRY_ON: &str = "Carry on from where you stopped.";
 
 /// What a start answers
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
@@ -76,6 +85,10 @@ pub struct Workers {
     /// one alive. [`Workers::session`] and every start give up the sessions of
     /// workers that no longer hold a slot.
     sessions: Mutex<BTreeMap<(String, String), Arc<Session>>>,
+    /// The channels watching each worker, by project and ticket
+    ///
+    /// A feed outlives its worker's turns, so a tab stays attached across a Resume.
+    feeds: Mutex<BTreeMap<(String, String), Arc<Feed>>>,
     sources: Mutex<BTreeMap<String, Arc<GithubSource>>>,
 }
 
@@ -111,6 +124,7 @@ impl Workers {
             leases: OnceLock::new(),
             records: Mutex::default(),
             sessions: Mutex::default(),
+            feeds: Mutex::default(),
             sources: Mutex::default(),
         }
     }
@@ -260,8 +274,10 @@ impl Workers {
             leases: Some(leases),
             open: &opener,
         };
-        // The session logs its own turn, which is all its events go to for now
-        let started = worker::start(&project, ticket, |_| {}).map_err(|error| error.to_string())?;
+        // The session logs its own turn, and the feed follows it live
+        let feed = self.feed(project_id, &ticket.id);
+        let started = worker::start(&project, ticket, move |event| feed.forward(event))
+            .map_err(|error| error.to_string())?;
         let waiting = matches!(started, Started::Waiting { .. });
         if let Started::Running { session, .. } = started {
             self.keep(project_id, &ticket.id, session);
@@ -270,6 +286,80 @@ impl Workers {
             ticket: ticket.id.clone(),
             waiting,
         })
+    }
+
+    /// The feed of the worker on `ticket`, made on the first ask
+    #[must_use]
+    pub fn feed(&self, project_id: &str, ticket: &str) -> Arc<Feed> {
+        let mut feeds = lock(&self.feeds);
+        let feed = feeds
+            .entry((project_id.to_owned(), ticket.to_owned()))
+            .or_default();
+        Arc::clone(feed)
+    }
+
+    /// The past of the worker on `ticket`, and `send` attached to follow it live
+    ///
+    /// The past is the worker's log, read under the feed's lock (see [`Feed::watch`]).
+    /// A worker with no log yet has no entries. `send` answers whether the event
+    /// was sent, and a `false` drops it from the feed.
+    ///
+    /// # Errors
+    ///
+    /// The project has no worker on `ticket`, or its log cannot be read.
+    pub fn watch(
+        &self,
+        project_id: &str,
+        ticket: &str,
+        send: impl Fn(SessionEvent) -> bool + Send + 'static,
+    ) -> Result<Vec<LogEntry>, String> {
+        let ticket = ticket_id(ticket)?;
+        self.status_of(project_id, &ticket)?;
+        let file = Paths::new(&self.data_dir, project_id).log_file(&ticket);
+        self.feed(project_id, &ticket)
+            .watch(|| log::read(&file), send)
+            .map_err(|error| format!("the log of ticket {ticket} cannot be read: {error}"))
+    }
+
+    /// What the record of the worker on `ticket` says it is doing
+    fn status_of(&self, project_id: &str, ticket: &str) -> Result<Status, String> {
+        let records = self.records(project_id)?;
+        let records = lock(&records);
+        records
+            .get(ticket)
+            .map(|record| record.status)
+            .ok_or_else(|| format!("there is no worker on ticket {ticket}"))
+    }
+
+    /// Start the next turn of the Paused worker on `ticket`, with "Carry on from where you stopped." as its message
+    ///
+    /// # Errors
+    ///
+    /// The project has no worker on `ticket`, or it is not Paused: the line says what
+    /// it is doing. Or the start fails (see [`Workers::start`]).
+    pub fn resume(
+        &self,
+        project_id: &str,
+        folder: &Path,
+        tools: Option<&Tools>,
+        ticket: &str,
+        open: &Opener<'_>,
+    ) -> Result<WorkerStarted, String> {
+        let ticket = ticket_id(ticket)?;
+        match self.status_of(project_id, &ticket)? {
+            Status::Paused => {}
+            other => {
+                return Err(format!(
+                    "ticket {ticket} is {}, so it does not resume",
+                    doing(other)
+                ));
+            }
+        }
+        let ticket = Ticket {
+            id: ticket,
+            text: CARRY_ON.to_owned(),
+        };
+        self.start(project_id, folder, tools, &ticket, open)
     }
 
     fn leases(&self, project_id: &str) -> Result<&Leases, String> {
@@ -282,6 +372,36 @@ impl Workers {
     }
 }
 
+/// The ticket id the issue number `number` names, whichever way it is written
+///
+/// The id is the number formatted back, so `012`, `+12` and `#12` are ticket 12
+/// and meet the worker already on it.
+///
+/// # Errors
+///
+/// `number` is not an issue number.
+fn ticket_id(number: &str) -> Result<String, String> {
+    number
+        .trim()
+        .trim_start_matches('#')
+        .parse()
+        .ok()
+        .and_then(TicketId::from_issue)
+        .map(|id| id.to_string())
+        .ok_or_else(|| format!("{number} is not an issue number"))
+}
+
+/// What a worker in `status` is doing, in a line's words
+fn doing(status: Status) -> &'static str {
+    match status {
+        Status::Running => "running",
+        Status::Paused => "paused",
+        Status::WaitingOnMaintainer => "waiting on the maintainer",
+        Status::Ended => "ended",
+        _ => "in a state kelpie has no word for",
+    }
+}
+
 /// The ticket `number` of `source`, as a worker's first message reads it
 ///
 /// The title, a blank line, then the body.
@@ -291,16 +411,12 @@ impl Workers {
 /// `number` is not an issue number, names no issue, names a closed one, or the
 /// source cannot be asked. The text says which.
 pub fn ticket_of(source: &dyn Tickets, number: &str) -> Result<Ticket, String> {
+    let number = ticket_id(number)?;
     let id = number
-        .trim()
-        .trim_start_matches('#')
         .parse()
         .ok()
         .and_then(TicketId::from_issue)
         .ok_or_else(|| format!("{number} is not an issue number"))?;
-    // The id is the number formatted back, so `012` and `+12` are ticket 12 and
-    // meet the worker already on it
-    let number = id.to_string();
     let issue = source.issue(&id).map_err(|error| match error {
         ForgeError::NoIssue { .. } => format!("there is no issue {number} in this project"),
         other => other.to_string(),
@@ -362,4 +478,61 @@ pub fn worker_start(state: State<'_, AppState>, ticket: String) -> Result<Worker
         &ticket,
         &open::open,
     )
+}
+
+/// Resume the Paused worker on `ticket` of the project `project_id`
+///
+/// `open` builds the session, which the app's opener does in `open.rs`.
+///
+/// # Errors
+///
+/// The project has no such checkout, or the resume is refused or fails (see
+/// [`Workers::resume`]).
+pub fn resume_on(
+    state: &AppState,
+    project_id: &str,
+    ticket: &str,
+    open: &Opener<'_>,
+) -> Result<WorkerStarted, String> {
+    let folder = state
+        .project_path_of(project_id)
+        .ok_or_else(|| format!("kelpie has no project {project_id}"))?;
+    state
+        .workers()
+        .resume(project_id, &folder, state.tools(), ticket, open)
+}
+
+/// Read the past of the worker on the ticket, and follow it live on `on_event`
+///
+/// Answers the worker's log, oldest first. Every event the worker sends after
+/// that goes to `on_event`, until the window closes it.
+///
+/// # Errors
+///
+/// The project has no worker on `ticket`, or its log cannot be read.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_watch(
+    state: State<'_, AppState>,
+    ticket: String,
+    on_event: Channel<SessionEvent>,
+) -> Result<Vec<LogEntry>, String> {
+    let project = state.project_id(None)?;
+    state
+        .workers()
+        .watch(&project, &ticket, move |event| on_event.send(event).is_ok())
+}
+
+/// Start the next turn of the Paused worker on the ticket
+///
+/// A worker that is not Paused is refused, with a line saying what it is doing.
+///
+/// # Errors
+///
+/// The ticket has no worker, it is not Paused, or the worker could not start.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_resume(state: State<'_, AppState>, ticket: String) -> Result<WorkerStarted, String> {
+    let project = state.project_id(None)?;
+    resume_on(&state, &project, &ticket, &open::open)
 }

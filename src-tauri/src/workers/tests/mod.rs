@@ -22,6 +22,7 @@ use super::open::{self, OpenOn};
 use super::{WorkerStarted, start_on, ticket_of};
 use crate::state::AppState;
 
+mod feed;
 mod plan;
 
 /// An app state in a folder of its own, with one project picked

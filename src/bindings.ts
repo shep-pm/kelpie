@@ -283,6 +283,27 @@ export const commands = {
 	 *  worker could not start. The text says why.
 	 */
 	workerStart: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_start", { ticket })),
+	/**
+	 *  Read the past of the worker on the ticket, and follow it live on `on_event`
+	 * 
+	 *  Answers the worker's log, oldest first. Every event the worker sends after
+	 *  that goes to `on_event`, until the window closes it.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The project has no worker on `ticket`, or its log cannot be read.
+	 */
+	workerWatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<LogEntry[], string>(__TAURI_INVOKE("worker_watch", { ticket, onEvent })),
+	/**
+	 *  Start the next turn of the Paused worker on the ticket
+	 * 
+	 *  A worker that is not Paused is refused, with a line saying what it is doing.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket has no worker, it is not Paused, or the worker could not start.
+	 */
+	workerResume: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_resume", { ticket })),
 };
 
 /* Types */
