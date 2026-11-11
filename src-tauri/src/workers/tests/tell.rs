@@ -184,6 +184,43 @@ fn a_note_on_a_running_worker_calls_the_engines_note_and_answers_queued() {
 }
 
 #[test]
+fn a_note_between_turns_is_the_workers_next_turn_and_answers_sent() {
+    let rig = Rig::new();
+    rig.with_origin();
+    let agent = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("on it"));
+    let (heard, kept) = session();
+    started(&rig, &agent, &FakeNetwork::default(), &heard, &kept);
+    until_turns(&heard, 1);
+    assert_eq!(
+        standing(&rig),
+        (Status::Ended, Seat::Without),
+        "the turn ended with nothing left on the branch",
+    );
+
+    let noted = note_on(&rig.state, "12", "one more thing").unwrap();
+
+    assert_eq!(
+        noted,
+        NoteOutcome::Sent,
+        "a worker whose turn ended keeps its session, so the note is its next turn",
+    );
+    until_turns(&heard, 2);
+    assert_eq!(
+        prompts(&agent)[1..],
+        ["one more thing"],
+        "the note went out as a prompt, and not into the record"
+    );
+    assert!(record(&rig).notes.is_empty(), "a sent note is not kept");
+    assert_eq!(
+        standing(&rig),
+        (Status::Ended, Seat::Without),
+        "the turn the note started settles the record as any other"
+    );
+}
+
+#[test]
 fn stop_and_tell_and_stop_call_their_engine_functions() {
     let rig = Rig::new();
     rig.with_origin();

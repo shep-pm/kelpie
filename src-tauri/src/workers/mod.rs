@@ -25,9 +25,10 @@
 //! and [`worker_cancel`] are the engine's own moves, and its sandbox request is answered
 //! there with [`worker_answer`], as the PM's is (`docs/design/workers.md`, Talking to a
 //! worker). Each refuses a ticket with no live session by name: kelpie keeps a worker's
-//! session only while it holds a slot, so a Paused or finished worker is resumed, not
-//! told. What each one calls is in `tell.rs`, which is where the engine's own telling
-//! lives too (`crates/kelpie-engine/src/worker/tell.rs`).
+//! session while its turn runs and after it ends with the work committed, so a Note
+//! between turns is that worker's next turn, and a Paused worker or one waiting on the
+//! maintainer is resumed, not told. What each one calls is in `tell.rs`, which is where
+//! the engine's own telling lives too (`crates/kelpie-engine/src/worker/tell.rs`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -260,10 +261,10 @@ impl Workers {
         Ok(calls)
     }
 
-    /// The session of the worker on `ticket` while it holds a slot
+    /// The session of the worker on `ticket`, while kelpie can still tell it
     ///
-    /// `None` once its turn ended or it was Paused, and then nothing of the
-    /// worker's is kept alive.
+    /// `None` for a worker that is Paused or waiting on the maintainer, whose next turn
+    /// is the start its Resume makes, and for one with no record.
     #[must_use]
     pub fn session(&self, project_id: &str, ticket: &str) -> Option<Arc<Session>> {
         self.give_up_idle();
@@ -280,7 +281,20 @@ impl Workers {
         drop(before);
     }
 
-    /// Drop the session of each worker whose record says it holds no slot
+    /// Drop the session of the worker on `ticket`, which is what a relaunch leaves
+    ///
+    /// While kelpie runs, an ended worker keeps its session ([`Workers::keeps_session`]).
+    /// A test that wants a worker whose session went with the launch that started it, and
+    /// whose record still says what it did, drops it here.
+    #[cfg(test)]
+    pub(crate) fn forget_session(&self, project_id: &str, ticket: &str) {
+        let gone = lock(&self.sessions)
+            .remove(&(project_id.to_owned(), ticket.to_owned()))
+            .is_some();
+        assert!(gone, "ticket {ticket} kept no session to forget");
+    }
+
+    /// Drop the session of each worker its record says kelpie cannot tell
     ///
     /// Run from the caller's thread and never from a session's own event sink:
     /// the last reference to a session stops its harness and joins its thread.
@@ -288,7 +302,7 @@ impl Workers {
         let keys: Vec<(String, String)> = lock(&self.sessions).keys().cloned().collect();
         let idle: Vec<_> = keys
             .into_iter()
-            .filter(|(project, ticket)| !self.holds_slot(project, ticket))
+            .filter(|(project, ticket)| !self.keeps_session(project, ticket))
             .collect();
         let given: Vec<_> = {
             let mut sessions = lock(&self.sessions);
@@ -297,12 +311,21 @@ impl Workers {
         drop(given);
     }
 
-    fn holds_slot(&self, project_id: &str, ticket: &str) -> bool {
+    /// Whether the worker on `ticket` keeps a session kelpie can tell
+    ///
+    /// A worker holds its session while its turn runs, and after that turn ends with the
+    /// work committed: [`worker::note`] sends a Note to a worker whose turn ended as its
+    /// next turn, and a review round resumes the same conversation
+    /// (`docs/design/workers.md`, Ending, quitting and resuming). A Paused worker, or one
+    /// waiting on the maintainer, gives its session up: its next turn is the start its
+    /// Resume makes, which builds a session of its own.
+    fn keeps_session(&self, project_id: &str, ticket: &str) -> bool {
         let records = lock(&self.records).get(project_id).cloned();
         records.is_some_and(|records| {
-            lock(&records)
-                .get(ticket)
-                .is_some_and(|r| r.status.needs_slot() && r.seat == Seat::Held)
+            lock(&records).get(ticket).is_some_and(|record| {
+                record.status == Status::Ended
+                    || (record.status == Status::Running && record.seat == Seat::Held)
+            })
         })
     }
 

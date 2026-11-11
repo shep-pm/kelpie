@@ -1,12 +1,14 @@
-//! Telling a worker that runs: a Note, a Stop and tell, a Stop, and an answer
+//! Telling a worker what to do: a Note, a Stop and tell, a Stop, and an answer
 //!
 //! A worker's tab steers the worker it shows (`docs/design/tickets.md`, Use case, and
 //! `docs/design/system/components/PMPanel`): [`Workers::note`] keeps a Note in the ticket's
 //! record while its turn runs, [`Workers::stop_and_tell`] cancels the turn and sends the
 //! text as the turn that follows, and [`Workers::stop`] cancels it and leaves the worker
 //! Paused. Each is the engine's own move (`crates/kelpie-engine/src/worker/tell.rs`), and
-//! each refuses a ticket with no live session by name: kelpie keeps a worker's session only
-//! while it holds a slot, so a Paused or finished worker is resumed, not told.
+//! each refuses a ticket with no live session by name. kelpie keeps a worker's session
+//! while its turn runs and after it ends with the work committed, which is how a Note
+//! between turns reaches the engine's idle path and becomes that worker's next turn. A
+//! Paused worker, or one waiting on the maintainer, is resumed, not told.
 //!
 //! [`Workers::answer`] answers the worker's own sandbox request through the session kept for
 //! it, and what the answer did is said the way the PM's is ([`crate::pm::pm_answer`]).
