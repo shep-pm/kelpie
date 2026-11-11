@@ -129,15 +129,18 @@ pub fn harness_options(
     // The ask belongs to no project, so it reads as narrowly as a session can:
     // `Reads::Project`, with every session's state folder closed to it.
     let sessions_root = state.sessions_root();
-    let sandbox = Sandbox::start(
-        &harness,
-        &sandbox::Project {
-            folder: &asked,
-            network_allowlist: &[],
-            reads: Reads::Project,
-            sessions_root: &sessions_root,
-        },
-        &asked,
+    let sandbox = crate::sandbox_setup::proven(
+        Sandbox::start(
+            &harness,
+            &sandbox::Project {
+                folder: &asked,
+                network_allowlist: &[],
+                reads: Reads::Project,
+                sessions_root: &sessions_root,
+            },
+            &asked,
+        ),
+        |sandbox| sandbox.ready(&state.tree()),
     )
     .map_err(|error| {
         format!(
