@@ -41,9 +41,9 @@ pub enum Column {
     Draft,
     /// Its issue carries the ready label
     Ready,
-    /// A worker on it is live, Paused and waiting on the maintainer included
+    /// A worker on it is live, Paused included, or waits with no pull request of its own
     Building,
-    /// A pull request closing it, or on its branch, is open
+    /// An open pull request closes it or sits on its branch, a waiting worker included
     Review,
     /// Its issue is closed
     Done,
