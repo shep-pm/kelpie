@@ -104,7 +104,7 @@ As `docs/design/ux.md` (Workers) has it:
 1. A worker ends when its turn ends with the work committed. Its session stays, so a review round in Phase 3 resumes the same conversation.
 2. When kelpie quits, every worker's process stops (ADR 0001). On the next launch each worker that was mid-turn is Paused: its worktree and session are kept, and it resumes only when the maintainer says so.
 3. A drain for an update lets running turns finish and starts no new ones.
-4. A worker whose sandbox cannot start waits Paused and holds no slot (`docs/design/sandbox-setup.md`, Running without a sandbox). Each start probes the sandbox the session runs in, and bwrap's refusal parks the worker with its words as the reason: the start answers with them and the Board's marker shows them. Its session id and notes are kept. The maintainer resumes it with Resume or Start once the sandbox can start, and Install resumes no worker.
+4. A worker whose sandbox cannot start waits Paused and holds no slot (`docs/design/sandbox-setup.md`, Running without a sandbox). Each start probes the sandbox the session runs in, and bwrap's refusal parks the worker with its words as the reason: the start answers with them and the Board's marker shows them. Its session id and notes are kept. A worker refused on its first start has no session, so its Resume sends the ticket's own text and not "Carry on". The maintainer resumes it with Resume or Start once the sandbox can start, and Install resumes no worker.
 
 ### Seeing the app
 

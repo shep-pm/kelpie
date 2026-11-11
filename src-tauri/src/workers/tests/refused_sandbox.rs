@@ -4,6 +4,8 @@
 //! and runs the app's own [`confine`], which names a refusal to the engine's
 //! start (`docs/design/sandbox-setup.md`, Running without a sandbox).
 
+use std::time::{Duration, Instant};
+
 use kelpie_engine::sandbox::{Refusal, SandboxError};
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::settings::Field;
@@ -15,6 +17,9 @@ use serde_json::json;
 use super::{Rig, id, issue};
 use crate::workers::open::{confine, open_with};
 use crate::workers::{WorkerStarted, resume_on, start_on};
+
+/// How long a test waits for a worker's turn to begin
+const WAIT: Duration = Duration::from_secs(20);
 
 /// What the probe of the worker's sandbox finds
 type Probe = fn() -> Result<(), SandboxError>;
@@ -133,6 +138,22 @@ fn a_goose_worker_whose_probe_fails_for_another_reason_gives_its_slot_back() {
     assert!(rig.recorded().is_empty(), "the failed start holds no slot");
 }
 
+impl Rig {
+    /// What `resume_on` does for ticket 12, with the sandbox's probe finding `allows`
+    fn resume_probed(&self, agent: &FakeAgent) -> Result<WorkerStarted, String> {
+        let tickets = FakeTickets::new();
+        tickets.script_issue(id(12), issue("Work on goose", "One turn.", true));
+        let source: &dyn Tickets = &tickets;
+        resume_on(
+            &self.state,
+            &self.project,
+            "12",
+            Ok(source),
+            &|on, opening| goose(agent, allows, on, opening),
+        )
+    }
+}
+
 #[test]
 fn a_refused_worker_resumes_through_resume_on_once_its_sandbox_can_start() {
     let rig = Rig::new();
@@ -141,14 +162,46 @@ fn a_refused_worker_resumes_through_resume_on_once_its_sandbox_can_start() {
     rig.start_probed(&agent, refuses)
         .expect_err("the sandbox is refused");
 
-    let resumed = resume_on(&rig.state, &rig.project, "12", &|on, opening| {
-        goose(&agent, allows, on, opening)
-    })
-    .expect("the sandbox can start now");
+    let resumed = rig
+        .resume_probed(&agent)
+        .expect("the sandbox can start now");
 
     assert!(!resumed.waiting);
     let record = rig.record_of_12().unwrap();
     assert_eq!(record.status, Status::Running);
     assert_eq!(record.seat, Seat::Held);
     assert_eq!(record.reason, None);
+}
+
+#[test]
+fn a_worker_refused_before_its_first_turn_resumes_on_the_tickets_own_text() {
+    let rig = Rig::new();
+    rig.goose_project();
+    let agent = FakeAgent::new().turn(Turn::new().text("working").until_cancelled());
+    rig.start_probed(&agent, refuses)
+        .expect_err("the sandbox is refused");
+    assert_eq!(
+        rig.record_of_12().unwrap().session,
+        None,
+        "no turn ever ran"
+    );
+
+    rig.resume_probed(&agent)
+        .expect("the sandbox can start now");
+
+    // The turn runs on its own thread: wait for its prompt to reach the harness
+    let since = Instant::now();
+    while agent.params("session/prompt").is_empty() {
+        assert!(since.elapsed() < WAIT, "the worker's turn never began");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // A fresh conversation has never seen the ticket, so Resume sends it. The
+    // worker's instructions come first in the same message.
+    let prompt = agent.params("session/prompt")[0]["prompt"][0]["text"].clone();
+    let prompt = prompt.as_str().expect("the prompt is text");
+    assert!(prompt.ends_with("Work on goose\n\nOne turn."), "{prompt}");
+    assert!(
+        !prompt.contains("Carry on from where you stopped."),
+        "{prompt}"
+    );
 }
