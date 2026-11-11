@@ -34,7 +34,7 @@ use kelpie_engine::run::RunId;
 use kelpie_engine::session::log::Log;
 use kelpie_engine::session::{LogEntry, Session, SessionId};
 use kelpie_engine::settings::{ConfigDir, Harness, Settings};
-use kelpie_engine::tools::Tools;
+use kelpie_engine::tools::{Tools, WorkerStarter};
 use kelpie_engine::tree::{ProcessTree, sweep_leftovers};
 use kelpie_engine::worker::{Paths, Records};
 use semver::Version;
@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::board::BoardHost;
 use crate::pm::{self, PmPlan};
 use crate::sandbox_setup::SandboxSetup;
-use crate::workers::Workers;
+use crate::workers::{Workers, starter_for};
 
 /// The run file's name in the data folder
 const RUN_FILE: &str = "run.json";
@@ -293,6 +293,10 @@ pub struct Opening<'a> {
     /// token each session's harness brings. `None` where the door could not open.
     pub tools: Option<&'a Tools>,
 
+    /// What the PM's `start_worker` starts a worker through: the app's one start
+    /// function, for this project's tickets
+    pub starter: &'a Arc<dyn WorkerStarter>,
+
     /// Where the start records why its sandbox could not make one, and clears
     /// it when one can be made
     pub sandbox_setup: &'a SandboxSetup,
@@ -339,7 +343,10 @@ pub struct AppState {
     picker: Picker,
     /// kelpie's tools server, with its door open for the whole run. `None` when
     /// the door could not open, which leaves the sessions without it.
-    tools: Option<Tools>,
+    ///
+    /// Held behind an `Arc` so the PM's `start_worker` can hand it to each worker
+    /// it starts.
+    tools: Option<Arc<Tools>>,
     /// What the PM's last start found about its sandbox
     sandbox_setup: SandboxSetup,
     /// Whether an Install is waiting on its password prompt, which ends the
@@ -348,7 +355,10 @@ pub struct AppState {
     /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
     bridge_checks: Mutex<Option<Sender<()>>>,
     /// What the app keeps for its workers across starts
-    workers: Workers,
+    ///
+    /// Held behind an `Arc` so the PM's `start_worker` can start one from a
+    /// thread of its own.
+    workers: Arc<Workers>,
     /// The poller that streams the board to the window
     board: BoardHost,
 }
@@ -404,9 +414,10 @@ impl AppState {
         pause_mid_turn_workers(&data_dir, projects.list());
         // A door that will not open costs the sessions kelpie's tools, not the app
         let tools = Tools::start(&data_dir)
+            .map(Arc::new)
             .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
             .ok();
-        let workers = Workers::new(&data_dir, &tree, &config, &logins);
+        let workers = Arc::new(Workers::new(&data_dir, &tree, &config, &logins));
         Ok(Self {
             data_dir,
             tree,
@@ -630,6 +641,7 @@ impl AppState {
             },
             ..project.clone()
         };
+        let starter = starter_for(&self.workers, &project.id, &on.path, self.tools.as_ref());
         let session = (self.opener)(&Opening {
             tree: &self.tree,
             data_dir: &self.data_dir,
@@ -639,7 +651,8 @@ impl AppState {
             logins: &self.logins,
             config: &self.config,
             pm: &plan,
-            tools: self.tools.as_ref(),
+            tools: self.tools.as_deref(),
+            starter: &starter,
             sandbox_setup: &self.sandbox_setup,
         })?
         .with_log(log.clone());
@@ -783,7 +796,7 @@ impl AppState {
     /// kelpie's tools server, `None` when its door did not open
     #[must_use]
     pub fn tools(&self) -> Option<&Tools> {
-        self.tools.as_ref()
+        self.tools.as_deref()
     }
 
     /// The tickets of the project `id`, one source for the project, shared with the poller

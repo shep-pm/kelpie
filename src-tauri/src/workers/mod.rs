@@ -26,7 +26,7 @@ use kelpie_engine::login::Store;
 use kelpie_engine::session::{Session, log};
 use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
-use kelpie_engine::tools::Tools;
+use kelpie_engine::tools::{Tools, WorkerStarter};
 use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Status, Ticket};
 use kelpie_protocol::{LogEntry, SessionEvent};
@@ -502,6 +502,60 @@ pub fn start_on(
     state
         .workers()
         .start(project_id, &folder, state.tools(), &ticket, open)
+}
+
+/// The PM's `start_worker`, for the project `project_id`, whose checkout is `folder`
+///
+/// `tools` is kelpie's tools server, which each worker this starts is given.
+#[must_use]
+pub fn starter_for(
+    workers: &Arc<Workers>,
+    project_id: &str,
+    folder: &Path,
+    tools: Option<&Arc<Tools>>,
+) -> Arc<dyn WorkerStarter> {
+    Arc::new(OnProject {
+        workers: Arc::clone(workers),
+        project_id: project_id.to_owned(),
+        folder: folder.to_owned(),
+        tools: tools.cloned(),
+    })
+}
+
+/// The PM's `start_worker` reaching the one start function, for one project
+///
+/// The ticket is read from the project's source exactly as the Start button and a
+/// drop on Building read it, so the PM is refused the same lines the maintainer
+/// would be. What a start answers becomes the tool's one line.
+#[derive(Debug)]
+struct OnProject {
+    workers: Arc<Workers>,
+    project_id: String,
+    folder: PathBuf,
+    tools: Option<Arc<Tools>>,
+}
+
+impl WorkerStarter for OnProject {
+    fn start(&self, ticket: &str) -> Result<String, String> {
+        let source = self.workers.source(&self.project_id, &self.folder)?;
+        let ticket = ticket_of(source.as_ref(), ticket)?;
+        let started = self.workers.start(
+            &self.project_id,
+            &self.folder,
+            self.tools.as_deref(),
+            &ticket,
+            &open::open,
+        )?;
+        Ok(said(&started))
+    }
+}
+
+/// What a start answers the PM, in one line
+fn said(started: &WorkerStarted) -> String {
+    if started.waiting {
+        return format!("#{} waits for a free slot", started.ticket);
+    }
+    format!("Started a worker on #{}", started.ticket)
 }
 
 /// Start a worker on the GitHub issue `ticket` of the project
