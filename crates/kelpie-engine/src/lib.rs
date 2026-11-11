@@ -23,7 +23,9 @@
 //! sandbox leaves open. [`ticket`] names a ticket and reads a project's tickets
 //! through the port its source answers. [`usage`] keeps one line for each of a
 //! project's worker turns, and the drafts of the turns running now. [`board`] puts each of those tickets in a
-//! column and says what a drop on a column does. The crate has no Tauri
+//! column and says what a drop on a column does. [`ci`] reads where CI stands on a
+//! head, reruns a run and reads the logs of the runs that failed, through a port
+//! GitHub Actions stands behind. The crate has no Tauri
 //! dependency, so the app crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
