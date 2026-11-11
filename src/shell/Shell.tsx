@@ -1,5 +1,6 @@
 import { KanbanSquare, MessageSquare } from "lucide-react";
 import { useState } from "react";
+import { Board } from "@/board/Board";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -56,8 +57,8 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
         {shown("board") && (
           <ResizablePanel id="board" minSize={PANEL_MIN} defaultSize="50%">
             <Panel title="Board" {...controls("board")}>
-              {/* The board of tickets fills this body (#149). */}
-              <div className="flex-1" />
+              {/* #151 gives Board the PM panel's worker tabs to open. */}
+              <Board />
             </Panel>
           </ResizablePanel>
         )}

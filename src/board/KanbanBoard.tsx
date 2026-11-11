@@ -159,6 +159,11 @@ export function KanbanBoard<C extends string, T extends KanbanTicket<C>>({
     });
   }, [tickets]);
 
+  // A notice that arrives is the newest word, so it replaces an older move's line.
+  useEffect(() => {
+    if (notice) setLine(null);
+  }, [notice]);
+
   const buckets = useMemo(
     () =>
       columns.map((column) => ({

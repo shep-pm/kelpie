@@ -8,7 +8,6 @@
 import {
   cleanup,
   fireEvent,
-  getConfig,
   render,
   screen,
   waitFor,
@@ -17,12 +16,19 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  StubIntersectionObserver,
-  StubPointerEvent,
-  StubResizeObserver,
-  stubAnimations,
-  stubPointerCapture,
-} from "@/test/drag-dom";
+  cardArea,
+  cardsIn,
+  centre,
+  column,
+  dragTo as dragCardTo,
+  insideArea,
+  moveOver,
+  pickUp as pickUpCard,
+  pointer,
+  settle,
+  stubBoardDragDom,
+  wait,
+} from "@/test/board-drag";
 import {
   KanbanBoard,
   type KanbanColumn,
@@ -71,11 +77,6 @@ function mount(props: Props = {}) {
   return render(board(props));
 }
 
-const column = (label: string) => screen.getByRole("group", { name: label });
-const cardsIn = (label: string) =>
-  Array.from(
-    column(label).querySelectorAll<HTMLElement>("[data-slot=kanban-card]"),
-  );
 const titleOf = (node: Element) =>
   node.querySelector("[data-slot=kanban-card-title]")?.textContent;
 const cardTitles = (label: string) => cardsIn(label).map(titleOf);
@@ -91,166 +92,21 @@ const cardWithId = (id: string) => {
   if (!found) throw new Error(`no card with id ${id}`);
   return found;
 };
-const cardArea = (label: string) => {
-  const found = column(label).querySelector<HTMLElement>(
-    "[data-slot=kanban-column-cards]",
-  );
-  if (!found) throw new Error(`no card area in ${label}`);
-  return found;
-};
 
-const COLUMN_IDS: string[] = COLUMNS.map((c) => c.id);
-const COLUMN_WIDTH = 280;
-const COLUMN_STRIDE = 300;
-const CARD_HEIGHT = 50;
-
-/** Where an element sits on the stubbed canvas: columns side by side, cards stacked. */
-function rectOf(el: Element): DOMRect {
-  const make = (
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-  ): DOMRect => ({
-    x,
-    y,
-    width,
-    height,
-    left: x,
-    top: y,
-    right: x + width,
-    bottom: y + height,
-    toJSON: () => ({}),
-  });
-  const area = el.closest("[data-slot=kanban-column-cards]");
-  const col = el.closest<HTMLElement>("[data-slot=kanban-column]");
-  // dnd-kit clips a rect to its ancestors, so they cover the whole window.
-  if (!area || !col) return make(0, 0, 1024, 768);
-  const x = COLUMN_IDS.indexOf(col.dataset.columnId ?? "") * COLUMN_STRIDE;
-  if (el === area) return make(x, 0, COLUMN_WIDTH, 600);
-  const cards = Array.from(area.querySelectorAll("[data-slot=kanban-card]"));
-  const at = cards.findIndex((c) => c === el || c.contains(el));
-  // dnd-kit moves the held card with a CSS translate, which jsdom does not lay out; it shows as a custom property.
-  const translate =
-    el instanceof HTMLElement
-      ? el.style.getPropertyValue("--dnd-translate")
-      : "";
-  const [dx, dy] = (translate || "0px 0px")
-    .split(" ")
-    .map((n) => Number.parseFloat(n) || 0);
-  return make(
-    x + 10 + (dx ?? 0),
-    10 + at * (CARD_HEIGHT + 10) + (dy ?? 0),
-    260,
-    CARD_HEIGHT,
-  );
-}
-
-beforeEach(() => {
-  vi.stubGlobal("PointerEvent", StubPointerEvent);
-  vi.stubGlobal("IntersectionObserver", StubIntersectionObserver);
-  vi.stubGlobal("ResizeObserver", StubResizeObserver);
-  stubAnimations();
-  stubPointerCapture();
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: Element) {
-      return rectOf(this);
-    },
-  );
-  // Every pointer is over the card area of the column whose x range holds it.
-  document.elementFromPoint = (x: number) =>
-    document.querySelectorAll<HTMLElement>("[data-slot=kanban-column-cards]")[
-      Math.floor(x / COLUMN_STRIDE)
-    ] ?? document.body;
-});
+beforeEach(() => stubBoardDragDom(COLUMNS.map((c) => c.id)));
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-/**
- * Real time outside `act`, for asserting that nothing happens: React holds back
- * renders queued inside an `act` scope, and dnd-kit waits for a render.
- */
-const wait = (ms: number) =>
-  getConfig().asyncWrapper(
-    () => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-  );
-const settle = () => wait(100);
-const centre = (el: Element) => {
-  const { x, y, width, height } = rectOf(el);
-  return { x: x + width / 2, y: y + height / 2 };
-};
-/** A point inside a column's card area, off its exact centre (a zero distance has no ranking). */
-const insideArea = (label: string) => {
-  const { x, y } = centre(cardArea(label));
-  return { x: x + 20, y: y + 20 };
-};
-const pointer = (
-  target: Element | Document,
-  type: "pointerdown" | "pointermove" | "pointerup",
-  at: { x: number; y: number },
-  pointerType: "mouse" | "touch" = "mouse",
-) => {
-  fireEvent(
-    target,
-    new PointerEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      clientX: at.x,
-      clientY: at.y,
-      pointerType,
-      pointerId: 1,
-      isPrimary: true,
-      button: 0,
-    }),
-  );
-};
-
-/** Press a card and move past the activation distance; the card is then held. */
-async function pickUp(title: string, pointerType: "mouse" | "touch" = "mouse") {
-  const held = card(title);
-  const from = centre(held);
-  pointer(held, "pointerdown", from, pointerType);
-  // A touch drag starts after its hold, a mouse drag after a few pixels.
-  if (pointerType === "mouse") {
-    pointer(
-      document,
-      "pointermove",
-      { x: from.x + 10, y: from.y },
-      pointerType,
-    );
-  }
-  await waitFor(() =>
-    expect(document.querySelector("[data-dragging]")).not.toBeNull(),
-  );
-}
-
-/** Move the held card over a column's card area and wait for the highlight. */
-async function moveOver(
-  label: string,
-  pointerType: "mouse" | "touch" = "mouse",
-) {
-  pointer(document, "pointermove", insideArea(label), pointerType);
-  await waitFor(() =>
-    expect(cardArea(label).hasAttribute("data-over")).toBe(true),
-  );
-}
-
-/** Pick a card up and drop it on a column's card area. */
-async function dragTo(
+const pickUp = (title: string, pointerType: "mouse" | "touch" = "mouse") =>
+  pickUpCard(card(title), pointerType);
+const dragTo = (
   title: string,
   label: string,
   pointerType: "mouse" | "touch" = "mouse",
-) {
-  await pickUp(title, pointerType);
-  await moveOver(label, pointerType);
-  pointer(document, "pointerup", insideArea(label), pointerType);
-  await waitFor(() =>
-    expect(document.querySelector("[data-dragging]")).toBeNull(),
-  );
-}
+) => dragCardTo(card(title), label, pointerType);
 
 describe("<KanbanBoard>", () => {
   it("renders a column per definition, in order, with its label and ticket count", () => {
@@ -406,6 +262,19 @@ describe("<KanbanBoard>", () => {
     mount({ notice: "#5 waits for a slot." });
 
     expect(screen.getByRole("status").textContent).toBe("#5 waits for a slot.");
+  });
+
+  it("a notice that arrives replaces the line of an earlier move", async () => {
+    const onMove = vi.fn(
+      async (): Promise<MoveOutcome> => ({ kind: "snap_back", line: "No." }),
+    );
+    const view = mount({ onMove });
+    await dragTo("Write it", "In progress");
+    await screen.findByText("No.");
+
+    view.rerender(board({ onMove, notice: "Opened." }));
+
+    expect(screen.getByRole("status").textContent).toBe("Opened.");
   });
 
   it("dropping a card on its own column asks nothing", async () => {
