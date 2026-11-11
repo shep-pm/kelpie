@@ -127,6 +127,12 @@ pub struct Workers {
     ///
     /// Built from [`Workers::calls`], or stood in by [`Workers::stand_in_forge`].
     forges: Mutex<BTreeMap<String, Arc<Forge>>>,
+    /// Each project's tickets with a hand-over at work, by project
+    ///
+    /// Held here, and not in a [`Hands`], so that every [`Hands`] of a project, the one
+    /// a start made and the one a board read made, shares one set
+    /// ([`hand_over::Busy`]).
+    handovers: Mutex<BTreeMap<String, hand_over::Busy>>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -164,6 +170,7 @@ impl Workers {
             feeds: Arc::default(),
             sources: Mutex::default(),
             forges: Mutex::default(),
+            handovers: Mutex::default(),
         }
     }
 

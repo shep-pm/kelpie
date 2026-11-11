@@ -5,13 +5,19 @@
 //! none needs `gh`, a model or the network. The draft is opened on a thread of its
 //! own, which is what the tests that name a thread are about.
 //!
-//! The last three are about the ruling a repeated refusal draws: the worker is told
-//! once, its next turn answers the telling, and a refusal that comes back the same is
-//! the worker leaving its file as it was.
+//! Three tests are about the ruling a repeated refusal draws: the worker is told once,
+//! its next turn answers the telling, and a refusal that comes back the same is the
+//! worker leaving its file as it was.
+//!
+//! Two more are about what a hand-over may not do while it waits on `gh`: open a second
+//! draft for a ticket another hand-over is at work on, or write over a record the
+//! maintainer moved. A draft the stand-in holds until the test lets it is how each one
+//! holds that window open.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
@@ -57,11 +63,26 @@ enum Asked {
 ///
 /// A hand-over runs git and `gh`, so it must not run on the session's sink thread.
 /// The thread a call arrived on is the only way to see that from the outside.
+///
+/// [`OnThreads::hold_drafts`] holds each draft it is asked for, which is how a test
+/// reaches the window a hand-over spends waiting on `gh`: while it is open, a board read
+/// can want the same ticket, or the maintainer can move its worker.
 #[derive(Debug, Default)]
 struct OnThreads {
     pulls: FakePulls,
     asked: Mutex<Vec<(Asked, ThreadId)>>,
+
+    /// Whether each draft is held until the test lets it answer
+    holds: AtomicBool,
+
+    /// How many drafts the test has let answer, in the order they were asked for
+    lets: AtomicUsize,
 }
+
+/// How long a held draft waits before it answers on its own
+///
+/// A test that lets none is a failed test, and a failed test is one that says so.
+const HOLD: Duration = Duration::from_secs(5);
 
 impl OnThreads {
     /// What the stand-in was asked, in order
@@ -80,6 +101,16 @@ impl OnThreads {
             .iter()
             .filter(|(asked, _)| *asked == Asked::Create)
             .count()
+    }
+
+    /// Hold each draft until the test lets it answer, or until [`HOLD`] passes
+    fn hold_drafts(&self) {
+        self.holds.store(true, Ordering::SeqCst);
+    }
+
+    /// Let the next held draft answer
+    fn let_next(&self) {
+        self.lets.fetch_add(1, Ordering::SeqCst);
     }
 
     /// What [`Pulls::branch_head`] answers for the ticket's branch
@@ -107,6 +138,15 @@ impl Pulls for OnThreads {
         body: &str,
     ) -> Result<NonZeroU64, ForgeError> {
         self.heard(Asked::Create);
+        if self.holds.load(Ordering::SeqCst) {
+            // Each draft waits for a let of its own, in the order they were asked for,
+            // so a test that lets one opens exactly one draft
+            let at = self.creates();
+            let since = Instant::now();
+            while self.lets.load(Ordering::SeqCst) < at && since.elapsed() < HOLD {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         self.pulls.create_draft(head, base, title, body)
     }
 
@@ -202,6 +242,23 @@ fn ruled(rig: &Rig) -> Record {
         let record = rig.record();
         (record.status == Status::WaitingOnMaintainer).then_some(record)
     })
+}
+
+/// Wait a second, asserting `ask` holds of ticket 12's record throughout
+///
+/// A hand-over's forge call has answered, and its write to the record follows it at
+/// once, so a second is long enough for a settle to have written what it means to. What
+/// it must not write is a record the maintainer moved while it waited.
+fn holds(rig: &Rig, mut ask: impl FnMut(&Record) -> bool) {
+    let since = Instant::now();
+    while since.elapsed() < Duration::from_secs(1) {
+        let record = rig.record();
+        assert!(
+            ask(&record),
+            "the record changed under the hand-over: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The project's board source, stood in for what the poller reads
@@ -691,4 +748,79 @@ fn a_file_fixed_after_a_ruling_opens_the_draft_and_clears_the_ruling() {
     });
     assert_eq!(record.reason, None, "and the ruling goes with the refusal");
     assert_eq!(pulls.creates(), 1, "the fixed file opened the draft");
+}
+
+#[test]
+fn a_board_read_hands_over_no_second_time_while_a_hand_over_is_at_work() {
+    let (rig, _tickets, pulls) = rig_with(FILE);
+    pulls.hold_drafts();
+    let agent = FakeAgent::new().turn(Turn::new().text("Pushed."));
+    ran(&rig, &agent, &pulls);
+
+    // The turn's hand-over is inside the draft call, which this test holds open
+    until_some(|| (pulls.creates() >= 1).then_some(()));
+
+    let hands = rig.hands();
+    hands.retry(&rig.listed());
+    assert_eq!(
+        pulls.creates(),
+        1,
+        "the read found a hand-over at work on the ticket and asked the forge nothing",
+    );
+
+    pulls.let_next();
+    until_some(|| (!owes_a_draft(&paths(&rig), TICKET)).then_some(()));
+    assert_eq!(
+        pulls.creates(),
+        1,
+        "and the draft the hand-over took the ticket for is opened once",
+    );
+    let record = rig.record();
+    assert_eq!(record.status, Status::Ended);
+    assert_eq!(
+        record.reason, None,
+        "and nothing is parked on a draft that went through",
+    );
+}
+
+#[test]
+fn a_hand_over_writes_nothing_to_a_record_the_maintainer_moved() {
+    let (rig, _tickets, pulls) = rig_with(FILE);
+    pulls.script_create(Err(ForgeError::Failed(
+        "gh: HTTP 500: Bad Gateway".to_owned(),
+    )));
+    pulls.hold_drafts();
+    let agent = FakeAgent::new().turn(Turn::new().text("Pushed."));
+    ran(&rig, &agent, &pulls);
+
+    // The turn's hand-over fails, and the read that retries it is the one the
+    // maintainer moves the worker out from under
+    pulls.let_next();
+    ruled(&rig);
+
+    let hands = rig.hands();
+    let listed = rig.listed();
+    let watched = Arc::clone(&pulls);
+    let read = thread::spawn(move || {
+        let since = Instant::now();
+        while watched.creates() < 2 && since.elapsed() < WAIT {
+            hands.retry(&listed);
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    until_some(|| (pulls.creates() >= 2).then_some(()));
+
+    // The maintainer starts the worker again while the read's hand-over waits on the draft
+    let records = rig.state.workers().records(&rig.project).unwrap();
+    let mut records = lock(&records);
+    records.set_status(TICKET, Status::Running).unwrap();
+    records.set_reason(TICKET, None).unwrap();
+    drop(records);
+
+    pulls.let_next();
+    read.join().expect("the read's hand-over ends");
+
+    holds(&rig, |record| {
+        record.status == Status::Running && record.reason.is_none()
+    });
 }

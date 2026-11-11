@@ -23,9 +23,17 @@
 //! which is the retry its reason promises, and a hand-over that then goes through sets
 //! the worker Ended and clears the reason.
 //!
+//! Two hand-overs never work on one ticket at once (`Hands::take`). A turn's end and a
+//! board read can both want the same draft, and a hand-over waits on git and `gh`: two
+//! of them would read the open pull requests, find none, and each open a draft. And a
+//! settle only writes the record it began from (`Standing`): a hand-over that finds the
+//! maintainer has started its worker or sent it a Note while it waited writes nothing,
+//! since that record is a live turn's.
+//!
 //! The draft is opened as the maintainer's login, never as the App, and the login never
 //! reaches the worker (`docs/design/tickets.md`, GitHub).
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
@@ -138,6 +146,58 @@ impl Sink {
     }
 }
 
+/// The tickets of a project whose hand-over is running, by ticket
+///
+/// A turn's end and a board read can both want one ticket's draft, and a hand-over
+/// waits on git and `gh`. Two of them read the open pull requests, find none, and each
+/// open a draft, which GitHub answers with a second draft or a 422 that parks the
+/// worker on a draft that is already open. One hand-over at a time per ticket rules
+/// that out.
+///
+/// One per project, held by [`Workers`], so every [`Hands`] of it shares the same set.
+pub(super) type Busy = Arc<Mutex<BTreeSet<String>>>;
+
+/// The ticket a hand-over is at work on, given back when it ends
+#[derive(Debug)]
+struct Working {
+    busy: Busy,
+    ticket: String,
+}
+
+impl Drop for Working {
+    fn drop(&mut self) {
+        lock(&self.busy).remove(&self.ticket);
+    }
+}
+
+/// What `ticket`'s record said when its hand-over began
+///
+/// A hand-over waits on git and `gh`, and while it waits the maintainer can start the
+/// worker or send it a Note. A settle writes the record it began from and no other: a
+/// live turn's record is settled by that turn's end, and writing over it would show a
+/// running worker as waiting on the maintainer, holding no slot, for a turn that has
+/// already ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Standing {
+    status: Status,
+    reason: Option<String>,
+}
+
+impl Standing {
+    /// The record it was read from
+    fn of(record: &Record) -> Self {
+        Self {
+            status: record.status,
+            reason: record.reason.clone(),
+        }
+    }
+
+    /// Whether `record` is still what the hand-over began from
+    fn holds(&self, record: &Record) -> bool {
+        record.status == self.status && record.reason == self.reason
+    }
+}
+
 /// What a project's finished turns hand over, and the retry its board read runs
 ///
 /// It holds what a start holds, so a hand-over can tell its worker from a thread of its
@@ -193,6 +253,9 @@ pub struct Hands {
     /// Held weakly for the same reason as [`Hands::records`]: a turn's sink reaches
     /// the session it is running on, and this module's sink reaches these sessions.
     sessions: Weak<SessionMap>,
+
+    /// The tickets of this project with a hand-over running, shared by every `Hands` of it
+    busy: Busy,
 }
 
 impl Hands {
@@ -227,12 +290,24 @@ impl Hands {
 
     /// Hand `ticket`'s finished turn over to the forge, and settle its record by what
     /// the forge answered
+    ///
+    /// One hand-over works on a ticket at a time ([`Hands::take`]), and what it may
+    /// settle is the record it began from ([`Standing`]), read before the git and `gh`
+    /// this waits on.
     fn hand_over(&self, ticket: &str) {
         let Some(forge) = &self.forge else {
             eprintln!(
                 "kelpie: project {} has no GitHub forge, so ticket {ticket} hands over nothing",
                 self.project_id
             );
+            return;
+        };
+        let Some(_at_work) = self.take(ticket) else {
+            // A hand-over is already at work on this ticket, and it will settle the
+            // record. A second one would ask the forge for the same draft twice.
+            return;
+        };
+        let Some(standing) = self.standing(ticket) else {
             return;
         };
         let ctx = worker::HandOver {
@@ -244,17 +319,44 @@ impl Hands {
             pulls: forge.pulls.as_ref(),
             tickets: forge.tickets.as_ref(),
         };
-        self.settle(ticket, worker::after_turn(&ctx));
+        self.settle(ticket, &standing, worker::after_turn(&ctx));
+    }
+
+    /// Take `ticket` for a hand-over, `None` when one is already at work on it
+    ///
+    /// The guard hands the ticket back when the hand-over ends, however it ends.
+    fn take(&self, ticket: &str) -> Option<Working> {
+        let busy = Arc::clone(&self.busy);
+        if !lock(&busy).insert(ticket.to_owned()) {
+            return None;
+        }
+        Some(Working {
+            busy,
+            ticket: ticket.to_owned(),
+        })
+    }
+
+    /// What `ticket`'s record says now, which is the only one this hand-over may settle
+    ///
+    /// Read before the git and `gh` it waits on, so a settle can tell whether the
+    /// maintainer moved the worker out from under it ([`Standing`]).
+    fn standing(&self, ticket: &str) -> Option<Standing> {
+        let records = self.kept()?;
+        let record = lock(&records).get(ticket).cloned()?;
+        Some(Standing::of(&record))
     }
 
     /// Settle `ticket`'s record by what the forge made of its hand-over
-    fn settle(&self, ticket: &str, outcome: worker::Outcome) {
+    ///
+    /// `standing` is the record it began from, which is the only one it may write
+    /// ([`Standing`]).
+    fn settle(&self, ticket: &str, standing: &Standing, outcome: worker::Outcome) {
         match outcome {
-            worker::Outcome::Told(text) => self.answer(ticket, &text),
-            worker::Outcome::Failed(why) => self.park(ticket, &why),
+            worker::Outcome::Told(text) => self.answer(ticket, &text, standing),
+            worker::Outcome::Failed(why) => self.park(ticket, &why, standing),
             worker::Outcome::Opened(..)
             | worker::Outcome::Edited(..)
-            | worker::Outcome::Unchanged => self.cleared(ticket),
+            | worker::Outcome::Unchanged => self.cleared(ticket, standing),
             // A file the worker took away leaves nothing owed of it, and the refusal
             // kelpie remembers for it goes with it
             worker::Outcome::NoFile => self.forget(ticket),
@@ -283,6 +385,29 @@ impl Hands {
         self.records.upgrade()
     }
 
+    /// The project's records, when `ticket`'s still says what it did at `standing`
+    ///
+    /// A hand-over waits on git and `gh`, and while it waits the maintainer can start
+    /// its worker or send it a Note. A settle that reaches such a record writes nothing
+    /// and says so: a live turn's record is settled by that turn's end, and a hand-over
+    /// that parked a running worker would show it waiting on the maintainer, holding no
+    /// slot, for a turn that ended before the maintainer moved it.
+    fn kept_as(&self, ticket: &str, standing: &Standing) -> Option<Arc<Mutex<Records>>> {
+        let records = self.kept()?;
+        let moved = {
+            let held = lock(&records);
+            held.get(ticket)
+                .is_none_or(|record| !standing.holds(record))
+        };
+        if moved {
+            eprintln!(
+                "kelpie: ticket {ticket} is not where its hand-over left it, so its hand-over settles nothing",
+            );
+            return None;
+        }
+        Some(records)
+    }
+
     /// Whether the engine settled `ticket`'s record as done, which is what a turn that
     /// ended with its branch clean leaves behind
     fn settled(&self, ticket: &str) -> bool {
@@ -304,7 +429,8 @@ impl Hands {
     ///
     /// The text is kept before the worker is told, so a turn that ends fast is answered
     /// by the ruling and not by a second telling.
-    fn answer(&self, ticket: &str, text: &str) {
+    ///
+    fn answer(&self, ticket: &str, text: &str, standing: &Standing) {
         let Some(records) = self.kept() else {
             return;
         };
@@ -313,7 +439,7 @@ impl Hands {
             .and_then(|record| record.refused.as_deref())
             .is_some_and(|before| before == text);
         if told {
-            self.rule(ticket, text);
+            self.rule(ticket, text, standing);
             return;
         }
         let written = lock(&records).set_refused(ticket, Some(text.to_owned()));
@@ -376,9 +502,10 @@ impl Hands {
     /// Park `ticket`'s worker on the maintainer with the reason, which holds no slot
     ///
     /// The reason goes with the status under one hold of the records' lock, as the
-    /// engine's own settling does.
-    fn park(&self, ticket: &str, why: &ForgeError) {
-        let Some(records) = self.kept() else {
+    /// engine's own settling does. A record the maintainer moved while this hand-over
+    /// was at work is left as they left it ([`Hands::kept_as`]).
+    fn park(&self, ticket: &str, why: &ForgeError, standing: &Standing) {
+        let Some(records) = self.kept_as(ticket, standing) else {
             return;
         };
         let mut records = lock(&records);
@@ -395,8 +522,8 @@ impl Hands {
     /// read retries a worker waiting on its draft ([`OWES`]), not one waiting on a
     /// ruling, so the next hand-over is the next turn's end, which the maintainer
     /// starts. A file kelpie can then open clears the ruling ([`Hands::cleared`]).
-    fn rule(&self, ticket: &str, text: &str) {
-        let Some(records) = self.kept() else {
+    fn rule(&self, ticket: &str, text: &str, standing: &Standing) {
+        let Some(records) = self.kept_as(ticket, standing) else {
             return;
         };
         let mut records = lock(&records);
@@ -412,28 +539,28 @@ impl Hands {
     /// A worker held for something else keeps its reason: only the one this module wrote
     /// is cleared. The refusal is forgotten whatever the worker was waiting on, since a
     /// file the forge has taken is one its worker was told to fix for nothing.
-    fn cleared(&self, ticket: &str) {
+    fn cleared(&self, ticket: &str, standing: &Standing) {
         let Some(records) = self.kept() else {
             return;
         };
-        let mut records = lock(&records);
-        let parked = records.get(ticket).is_some_and(|record| {
-            record.status == Status::WaitingOnMaintainer
-                && record
-                    .reason
-                    .as_deref()
-                    .is_some_and(|why| why.starts_with(OWES))
-        });
-        let draft = if parked {
-            records
-                .set_status(ticket, Status::Ended)
-                .and_then(|()| records.set_reason(ticket, None))
-        } else {
-            Ok(())
-        };
-        lost(ticket, draft, "its draft going through");
-        let refusal = records.set_refused(ticket, None);
+        let refusal = lock(&records).set_refused(ticket, None);
         lost(ticket, refusal, "its refusal going away");
+        let owed_a_draft = standing.status == Status::WaitingOnMaintainer
+            && standing
+                .reason
+                .as_deref()
+                .is_some_and(|why| why.starts_with(OWES));
+        if !owed_a_draft {
+            return;
+        }
+        let Some(records) = self.kept_as(ticket, standing) else {
+            return;
+        };
+        let mut records = lock(&records);
+        let written = records
+            .set_status(ticket, Status::Ended)
+            .and_then(|()| records.set_reason(ticket, None));
+        lost(ticket, written, "its draft going through");
     }
 
     /// Forget the refusal `ticket`'s worker was told, when its hand-over file is gone
@@ -495,6 +622,18 @@ impl Workers {
         lock(&self.forges).insert(project_id.to_owned(), forge);
     }
 
+    /// The tickets of `project_id` with a hand-over at work
+    ///
+    /// One set per project, so the hand-over a turn's end started and the one its board
+    /// read starts are the same hand-over as far as a ticket is concerned
+    /// ([`Hands::take`]).
+    fn busy(&self, project_id: &str) -> Busy {
+        let mut kept = lock(&self.handovers);
+        kept.entry(project_id.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(BTreeSet::new())))
+            .clone()
+    }
+
     /// What the finished turns of the project `project_id`, whose checkout is `folder`, hand over
     ///
     /// `plan` is what its workers run on, which a note is sent on. A project with no
@@ -528,6 +667,7 @@ impl Workers {
             gh: self.gh.clone(),
             leases: Arc::clone(self.leases(project_id)?),
             sessions: Arc::downgrade(&self.sessions),
+            busy: self.busy(project_id),
         })
     }
 }
