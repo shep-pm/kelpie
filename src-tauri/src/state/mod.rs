@@ -419,6 +419,7 @@ impl AppState {
             .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
             .ok();
         let workers = Arc::new(Workers::new(&data_dir, &tree, &config, &logins));
+        let sandbox_setup = SandboxSetup::detected(&data_dir);
         Ok(Self {
             data_dir,
             tree,
@@ -430,7 +431,7 @@ impl AppState {
             opener,
             picker,
             tools,
-            sandbox_setup: SandboxSetup::detected(),
+            sandbox_setup,
             installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
             workers,

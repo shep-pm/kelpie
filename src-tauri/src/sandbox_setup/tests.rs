@@ -8,6 +8,31 @@ use kelpie_engine::sandbox::{Refusal, SandboxError};
 use super::install::PROFILE;
 use super::{Install, RefusalView, SandboxSetup, SandboxView, proven};
 
+/// A data folder of its own
+struct Data(PathBuf);
+
+impl Data {
+    fn new() -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "kelpie-sandbox-record-{}",
+            kelpie_engine::run::RunId::new().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    /// The record a new launch over this folder starts from
+    fn launch(&self) -> SandboxSetup {
+        SandboxSetup::detected(&self.0)
+    }
+}
+
+impl Drop for Data {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn a_start_that_found_no_refusal_says_none() {
     let setup = SandboxSetup::default();
@@ -191,4 +216,46 @@ fn a_start_that_failed_runs_no_probe() {
     .unwrap_err();
 
     assert!(matches!(error, SandboxError::Probe(text) if text == "no bwrap"));
+}
+
+#[test]
+fn a_refusal_is_read_back_by_the_next_launch() {
+    let data = Data::new();
+    data.launch().record(Some(Refusal::NoCapabilities));
+
+    assert_eq!(
+        data.launch().view().refusal,
+        Some(RefusalView::NoCapabilities)
+    );
+}
+
+#[test]
+fn a_start_that_found_no_refusal_clears_what_the_next_launch_reads() {
+    let data = Data::new();
+    let setup = data.launch();
+    setup.record(Some(Refusal::NoNamespaces));
+    setup.record(None);
+
+    assert_eq!(data.launch().view().refusal, None);
+}
+
+#[test]
+fn an_unsandboxed_start_keeps_its_refusal_and_not_the_running_without() {
+    let data = Data::new();
+    data.launch().record_unsandboxed(Refusal::NoCapabilities);
+
+    let next = data.launch().view();
+
+    assert_eq!(next.refusal, Some(RefusalView::NoCapabilities));
+    assert!(!next.unsandboxed);
+}
+
+#[test]
+fn a_record_that_cannot_be_read_says_no_refusal() {
+    let data = Data::new();
+    std::fs::write(data.0.join("sandbox-refusal.json"), "not a refusal").unwrap();
+    assert_eq!(data.launch().view().refusal, None);
+
+    std::fs::write(data.0.join("sandbox-refusal.json"), r#""no_such_refusal""#).unwrap();
+    assert_eq!(data.launch().view().refusal, None);
 }

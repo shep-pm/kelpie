@@ -784,7 +784,7 @@ pub fn project_pick(state: State<'_, AppState>) -> Result<Option<String>, String
 /// the harness, which can take a while, so this runs off the main thread. The
 /// session id is saved to `projects.json` when the session starts, so the next
 /// launch resumes it. A failure before the session exists is the turn's only
-/// event, a `Failed`.
+/// event, a `Failed`, which is in the PM's log with the message.
 ///
 /// A send whose settings name another harness than the session runs on stops
 /// that session and starts a new one with a seed ahead of the message. It
@@ -848,6 +848,7 @@ fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) -> Opti
     let (session, project, divider) = match state.pm_session() {
         Ok(held) => held,
         Err(message) => {
+            log_refused_open(state, &text, &message);
             let _ = on_event.send(SessionEvent::Failed { message });
             return None;
         }
@@ -864,6 +865,32 @@ fn send(state: &AppState, text: String, on_event: Channel<SessionEvent>) -> Opti
         let _ = on_event.send(event);
     });
     divider
+}
+
+/// Leave `text` and the `Failed` that `message` says in the PM's log, for a send whose session never opened
+///
+/// [`Session::send`] logs a message and its events, and no session exists when
+/// the open fails, so the history would lose the send and its reason, a
+/// sandbox refusal among them. Nothing is logged before a project is picked. A
+/// log that cannot be written is said on stderr and changes nothing else.
+fn log_refused_open(state: &AppState, text: &str, message: &str) {
+    let Some(path) = state.pm_log_path() else {
+        return;
+    };
+    let written = log::Log::open(&path).and_then(|log| {
+        log.append(&LogEntry::User {
+            text: text.to_owned(),
+        })?;
+        log.append(&LogEntry::Event(SessionEvent::Failed {
+            message: message.to_owned(),
+        }))
+    });
+    if let Err(error) = written {
+        eprintln!(
+            "kelpie: could not log the refused send in {}: {error}",
+            path.display()
+        );
+    }
 }
 
 /// The history kelpie logged for the PM, oldest first, empty before a project or a message
