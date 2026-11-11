@@ -306,6 +306,11 @@ fn fields(
                 &resolved.harness_global_folder.value,
                 resolved.harness_global_folder.from,
             ),
+            Field::RunWithoutSandbox => layered(
+                field,
+                &resolved.run_without_sandbox.value,
+                resolved.run_without_sandbox.from,
+            ),
             Field::BridgeUpdates => layered(
                 field,
                 &resolved.bridge_updates.value,

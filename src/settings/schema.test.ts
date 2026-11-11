@@ -31,6 +31,11 @@ const raw: Value = {
       description: "Which harness the PM's next message runs on",
       type: ["string", "null"],
     },
+    "run-without-sandbox": {
+      default: null,
+      description: "Whether the project's PM runs without a sandbox.",
+      type: ["boolean", "null"],
+    },
     "worker-slots": {
       default: null,
       description: "How many of this project's workers run at once.",
@@ -95,5 +100,15 @@ describe("the settings form's fields", () => {
       "theme",
       "read-anywhere",
     ]);
+  });
+
+  it("draws Run without a sandbox as a plain boolean field", () => {
+    const run =
+      field("run-without-sandbox", formSchema(raw, ["run-without-sandbox"])) ??
+      {};
+
+    expect(run.title).toBe("Run without a sandbox");
+    expect(run.type).toBe("boolean");
+    expect(run.oneOf).toBeUndefined();
   });
 });
