@@ -50,7 +50,7 @@ const NO_AGENT: &str = "No authentication agent found";
 
 /// What `pkexec` prints when it falls back to its own text agent and has no terminal to ask in
 ///
-/// `pkexec` 124, run outside a desktop session, prints this and exits 127.
+/// polkit 124's `pkexec` prints this, and exits 127, outside a desktop session.
 const NO_TEXTUAL_AGENT: &str = "Error creating textual authentication agent";
 
 /// What `pkexec` exits with when the person dismissed the prompt
@@ -234,8 +234,8 @@ mod tests {
 
     #[test]
     fn no_textual_agent_shows_the_two_terminal_commands() {
-        // pkexec 124 with no agent and no terminal falls back to its own text
-        // agent, fails to open /dev/tty and exits 127 saying so
+        // polkit 124's pkexec with no agent and no terminal falls back to its
+        // own text agent, fails to open /dev/tty and exits 127 saying so
         let found = outcome(
             Some(127),
             "Error creating textual authentication agent: Error opening current \
