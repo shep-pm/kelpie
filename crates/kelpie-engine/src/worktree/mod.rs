@@ -36,6 +36,7 @@ mod cache;
 mod catch_up;
 #[cfg(test)]
 mod catch_up_tests;
+pub mod changed;
 pub mod clone;
 mod common;
 mod conflicts;
