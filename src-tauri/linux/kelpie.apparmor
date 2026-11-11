@@ -1,0 +1,34 @@
+# kelpie's AppArmor profile: three profiles in one file.
+#
+# docs/design/sandbox-setup.md (The profile) is the one source of these rules.
+# The .deb and .rpm install this file at
+# /usr/share/kelpie-app/kelpie.apparmor, and kelpie's Install step copies it to
+# /etc/apparmor.d/ and loads it with apparmor_parser -r through pkexec. Nothing
+# here loads it.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+# 1. kelpie's binary: starts /usr/bin/bwrap into the second profile, and runs
+#    everything else, including crabpot's helper, as itself.
+profile kelpie /usr/bin/kelpie-app {
+  file, network, capability, signal, ptrace, unix, dbus, mount, umount, pivot_root,
+  /** ix,
+  /usr/bin/bwrap Px -> kelpie_bwrap,
+}
+
+# 2. bwrap as kelpie started it, the only profile with userns. Its file rules are
+#    spelled out: `file,` grants ix on every path, which AppArmor refuses beside
+#    the Pix below.
+profile kelpie_bwrap flags=(attach_disconnected,mediate_deleted) {
+  /{,**} rwlkm, network, capability, signal, ptrace, unix, dbus, mount, umount, pivot_root, userns,
+  /usr/bin/kelpie-app ix,
+  /** Pix -> &kelpie_sandboxed,
+}
+
+# 3. the sandboxed command: no userns, no capability, no mount. bwrap set
+#    no_new_privs, so AppArmor allows this stack and no other change.
+profile kelpie_sandboxed flags=(attach_disconnected,mediate_deleted) {
+  file, network, signal, ptrace, unix, dbus,
+  /** ix,
+}
