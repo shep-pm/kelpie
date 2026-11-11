@@ -254,3 +254,53 @@ fn a_ledger_that_cannot_be_written_writes_no_line_and_keeps_no_draft() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_turn_opened_as_a_quit_drains_the_drafts_leaves_no_draft_behind() {
+    let dir = Dir::new("open against a quit");
+    let file = dir.path().join(FILE);
+    let flight = InFlight::new(&file);
+    let first = flight.open(draft_on("74"));
+    // A dispatch that starts a turn while the quit runs, racing `stop_all` for
+    // the drafts
+    let opening = {
+        let flight = flight.clone();
+        std::thread::spawn(move || {
+            (0..500)
+                .map(|_| flight.open(draft_on("75")))
+                .collect::<Vec<_>>()
+        })
+    };
+    let stopped = flight.stop_all(Timestamp::from_secs(1_700_000_090));
+    let raced = opening.join().unwrap();
+
+    assert!(
+        stopped.iter().any(|line| line.ticket == "74"),
+        "the draft opened before the quit is written as stopped: {stopped:#?}"
+    );
+    for turn in std::iter::once(first).chain(raced) {
+        assert!(
+            flight
+                .end(
+                    turn,
+                    Timestamp::from_secs(1_700_000_120),
+                    Ended::Failed,
+                    None,
+                )
+                .unwrap()
+                .is_none(),
+            "a turn is still open after the quit drained the drafts"
+        );
+    }
+    assert!(
+        flight
+            .stop_all(Timestamp::from_secs(1_700_000_150))
+            .is_empty(),
+        "none twice"
+    );
+    assert_eq!(
+        fs::read_to_string(&file).unwrap().lines().count(),
+        stopped.len(),
+        "one line for each turn the quit took, and none for a turn it never saw"
+    );
+}

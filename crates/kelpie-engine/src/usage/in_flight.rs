@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use kelpie_protocol::Usage;
@@ -29,6 +29,18 @@ use crate::session::SessionId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TurnId(u64);
 
+/// The drafts open now, and whether a quit has taken them
+///
+/// The two are one state behind one lock, so a turn can never be added to a set
+/// a quit has already drained.
+#[derive(Debug, Default)]
+struct Open {
+    /// Each turn running now, oldest first
+    drafts: BTreeMap<TurnId, Draft>,
+    /// Whether a quit has taken every draft left
+    stopping: bool,
+}
+
 /// What a project's turns are metered against
 #[derive(Debug)]
 struct Shared {
@@ -36,10 +48,8 @@ struct Shared {
     file: PathBuf,
     /// The id the next draft gets
     next: AtomicU64,
-    /// Each turn running now, oldest first
-    drafts: Mutex<BTreeMap<TurnId, Draft>>,
-    /// Whether a quit has taken every draft left
-    stopping: AtomicBool,
+    /// The turns running now, and whether a quit drained them
+    open: Mutex<Open>,
 }
 
 /// The drafts open now, shared between a project's turns and a quit
@@ -53,8 +63,7 @@ impl InFlight {
         Self(Arc::new(Shared {
             file: file.into(),
             next: AtomicU64::default(),
-            drafts: Mutex::new(BTreeMap::new()),
-            stopping: AtomicBool::new(false),
+            open: Mutex::default(),
         }))
     }
 
@@ -64,15 +73,19 @@ impl InFlight {
     /// took every draft left has none: its line is never written.
     pub fn open(&self, draft: Draft) -> TurnId {
         let id = TurnId(self.0.next.fetch_add(1, Ordering::Relaxed));
-        if !self.0.stopping.load(Ordering::Relaxed) {
-            lock(&self.0.drafts).insert(id, draft);
+        // Read `stopping` with the drafts in hand, which is the same lock
+        // `stop_all` drains under. A turn dispatched while kelpie quits is
+        // either in the set the quit took, or in no set at all.
+        let mut open = lock(&self.0.open);
+        if !open.stopping {
+            open.drafts.insert(id, draft);
         }
         id
     }
 
     /// Keep `session` as the id `turn`'s harness gave its session
     pub fn set_session(&self, turn: TurnId, session: &SessionId) {
-        if let Some(draft) = lock(&self.0.drafts).get_mut(&turn) {
+        if let Some(draft) = lock(&self.0.open).drafts.get_mut(&turn) {
             draft.session = Some(session.clone());
         }
     }
@@ -92,7 +105,7 @@ impl InFlight {
         ended: Ended,
         spent: Option<Usage>,
     ) -> io::Result<Option<Line>> {
-        let draft = lock(&self.0.drafts).remove(&turn);
+        let draft = lock(&self.0.open).drafts.remove(&turn);
         let Some(draft) = draft else {
             return Ok(None);
         };
@@ -111,9 +124,9 @@ impl InFlight {
     /// project's file costs the quit nothing.
     pub fn stop_all(&self, at: Timestamp) -> Vec<Line> {
         let left = {
-            let mut drafts = lock(&self.0.drafts);
-            self.0.stopping.store(true, Ordering::Relaxed);
-            std::mem::take(&mut *drafts)
+            let mut open = lock(&self.0.open);
+            open.stopping = true;
+            std::mem::take(&mut open.drafts)
         };
         let mut written = Vec::new();
         for draft in left.into_values() {
