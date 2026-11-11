@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BridgeField } from "./BridgeField";
+import { GithubField } from "./GithubField";
 import { HARNESSES } from "./harnesses";
 import { LayeredField, type SettingsContext, type Tab } from "./LayeredField";
 import { LoginField } from "./LoginField";
@@ -193,6 +194,7 @@ function Fields({ tab }: { tab: Tab }) {
       <>
         <TabForm tab="global" id={null} fields={view.global} below={[]} />
         <LoginFor fields={view.global} />
+        <GithubField />
         <BridgeFor fields={view.global} />
       </>
     );
