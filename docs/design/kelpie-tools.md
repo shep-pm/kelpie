@@ -50,6 +50,14 @@ The first tool is `request_network(host, why)`:
 
 Reads and writes outside the policy are not requests in this note. *Read anywhere by default* (#52) covers reads, and writes outside the PM's folder go through later tools by design.
 
+### Starting a worker, and who is given which tool
+
+The second tool is `start_worker(ticket)`, and **the PM alone is given it**. It calls the app's one start function, the one the Start button and a drop on Building call (`docs/design/workers.md`, Starting one), and answers in one line: *Started a worker on #155*, *#155 waits for a free slot*, or the start's own refusal, so the PM reads why nothing started. Like the button, it does not check that the ticket is Ready.
+
+Kelpie serves one server per session and knows which session a token belongs to, so it gates the tools by that. `Tools::session` is a worker's role and the least a session is ever given: `request_network` alone. `Tools::pm_session(starter)` is the PM's, which has `start_worker` as well. A worker's session does not list the tool, and calling it gets `kelpie has no tool named start_worker`, the answer an unknown name gets. The role rides the session's token, so a session cannot be handed another session's privileges.
+
+Every later kelpie tool takes this shape: the tool is on the server, and the role says who is given it.
+
 ### To check while building
 
 - That `allowTcp` reaches a listener on the host's `127.0.0.1` from inside the sandbox on Linux. The proxy lets an IP literal through on its listed port, which the code shows and crabpot's tests cover, but no run has tried it end to end
@@ -65,6 +73,7 @@ Reads and writes outside the policy are not requests in this note. *Read anywher
 | The prompt | The chat panel (#14) and the attention count |
 | The door and its Windows named pipe | SK's lease door (`crates/core/src/lease/door.rs` and `crates/core/src/ipc`), lifted |
 | Telling the PM to ask | `kelpie:pm` (#27) |
+| `start_worker` | The one start function `docs/design/workers.md` and `docs/design/tickets.md` place (`Workers::start`), so the PM starts work the way the maintainer does |
 | Every later kelpie tool | This server and its route out |
 
 It would duplicate ACP's own `session/request_permission`, which the harness sends before a tool runs. That prompt is off inside the sandbox (`pm-chat.md`, Permissions), and it cannot widen anything, so it stays off.
