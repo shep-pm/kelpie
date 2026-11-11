@@ -36,15 +36,15 @@ impl Remote {
         }
     }
 
-    // Where git is told to fetch from and push to.
-    fn target(&self) -> &str {
+    /// Where git is told to fetch from and push to
+    pub(super) fn target(&self) -> &str {
         match self {
             Self::Origin => "origin",
         }
     }
 
-    // The branch's full name on this remote, `branch` being the ticket's.
-    fn branch_ref(&self, branch: &str) -> String {
+    /// The branch's full name on this remote, `branch` being the ticket's
+    pub(super) fn branch_ref(&self, branch: &str) -> String {
         match self {
             Self::Origin => format!("refs/heads/{branch}"),
         }
