@@ -32,13 +32,13 @@
       "deb": {
         "depends": ["bubblewrap"],
         "files": {
-          "linux/kelpie.apparmor": "/usr/share/kelpie-app/kelpie.apparmor"
+          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor"
         }
       },
       "rpm": {
         "depends": ["bubblewrap"],
         "files": {
-          "linux/kelpie.apparmor": "/usr/share/kelpie-app/kelpie.apparmor"
+          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor"
         }
       }
     },

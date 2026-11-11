@@ -115,6 +115,11 @@ fn installed_binary() -> String {
 
 /// `package` installs the profile at `PROFILE_INSTALLED`, depends on `bubblewrap`,
 /// and runs no script of its own when it is installed
+///
+/// Tauri's bundler reads each `files` entry as `<path in the package>: <path on
+/// disk>`, the disk path relative to `src-tauri`, which it makes the current
+/// directory before bundling
+/// (`crates/tauri-bundler/src/utils/fs_utils.rs:155`, `.../linux/rpm.rs:231`).
 fn ships(
     package: &str,
     files: &HashMap<PathBuf, PathBuf>,
@@ -122,9 +127,13 @@ fn ships(
     script: &Option<PathBuf>,
 ) {
     assert_eq!(
-        files.get(Path::new(PROFILE_SOURCE)),
-        Some(&PathBuf::from(PROFILE_INSTALLED)),
+        files.get(Path::new(PROFILE_INSTALLED)),
+        Some(&PathBuf::from(PROFILE_SOURCE)),
         "the {package} must install the profile at {PROFILE_INSTALLED}, which no person can write"
+    );
+    assert!(
+        src_tauri().join(PROFILE_SOURCE).is_file(),
+        "the {package} names {PROFILE_SOURCE} as the file it ships"
     );
     assert!(
         depends.iter().flatten().any(|dep| dep == "bubblewrap"),
