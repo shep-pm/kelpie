@@ -774,6 +774,9 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
     kept.said_yes(HEAD);
     kept.merge_refused();
     kept.removals_seen(2);
+    kept.pull = Some(12);
+    kept.ruled_at(OTHER);
+    kept.ready_at(HEAD);
     book.entry(local).pushed(OTHER);
     book.save().unwrap();
 
@@ -791,6 +794,27 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
         (1, 1, 2)
     );
     assert_eq!(kept.queued.as_ref().unwrap().runs, [9]);
+    assert_eq!(kept.pull, Some(12));
+    assert!(kept.rules_at(OTHER) && !kept.rules_at(HEAD));
+    assert_eq!(kept.ready.as_deref(), Some(HEAD));
+}
+
+#[test]
+fn a_ruling_withdraws_ready_and_a_new_pass_gives_the_ruling_up() {
+    let mut kept = Kept::default();
+    kept.ready_at(HEAD);
+    kept.ruled_at(HEAD);
+    assert_eq!(kept.ready, None);
+    kept.unruled();
+    assert!(!kept.rules_at(HEAD));
+}
+
+#[test]
+fn a_refused_catch_up_names_why() {
+    let ruling = Ruling::CatchUpRefused {
+        why: "its worktree is in the middle of a merge".to_owned(),
+    };
+    assert!(ruling.reason().contains("in the middle of a merge"));
 }
 
 #[test]

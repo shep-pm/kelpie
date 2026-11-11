@@ -55,6 +55,11 @@ pub enum Ruling {
         /// The failing run's page, when a check has one
         link: Option<String>,
     },
+    /// Catch-up left the branch as it was, for a reason only the maintainer can settle
+    CatchUpRefused {
+        /// Why, as the catch-up said
+        why: String,
+    },
     /// Refused twice, or removed from the merge queue twice at one head
     MergeRefused {
         /// The head
@@ -138,6 +143,9 @@ impl Ruling {
                 checks.join(", "),
                 fix_turns_had(*turns)
             ),
+            Self::CatchUpRefused { why } => {
+                format!("Kelpie could not catch the branch up with its base: {why}.")
+            }
             Self::MergeRefused { head, why } => {
                 format!("Kelpie could not merge at {}: {why}.", short(head))
             }

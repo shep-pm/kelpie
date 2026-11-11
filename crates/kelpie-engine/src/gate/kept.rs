@@ -114,6 +114,17 @@ pub struct Kept {
     /// The merge queue removals already sent back
     #[serde(default)]
     pub queue_removals: u32,
+    /// The pull request's number, as the last listing had it, so a pull request that
+    /// left the listing is read once with its number
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull: Option<u64>,
+    /// The head the gate last ruled at, which a worker waiting on that ruling gets no
+    /// pass for until its head moves
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruled: Option<String>,
+    /// The head the gate found ready to merge, which the ticket's needs-you line says
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<String>,
 }
 
 impl Kept {
@@ -184,6 +195,28 @@ impl Kept {
             base: base.to_owned(),
             turns,
         });
+    }
+
+    /// Records that the gate ruled at `head`, which is no longer ready
+    pub fn ruled_at(&mut self, head: &str) {
+        self.ruled = Some(head.to_owned());
+        self.ready = None;
+    }
+
+    /// Gives up the ruling, so the gate passes over the ticket again
+    pub fn unruled(&mut self) {
+        self.ruled = None;
+    }
+
+    /// Whether the gate ruled at `head` and nothing has moved it since
+    #[must_use]
+    pub fn rules_at(&self, head: &str) -> bool {
+        self.ruled.as_deref() == Some(head)
+    }
+
+    /// Records that `head` is ready to merge on the maintainer's yes
+    pub fn ready_at(&mut self, head: &str) {
+        self.ready = Some(head.to_owned());
     }
 
     /// Records the maintainer's yes, which holds only for `head`
