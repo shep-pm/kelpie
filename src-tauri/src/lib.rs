@@ -26,6 +26,7 @@ use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::collect_commands;
 
 pub mod agents;
+pub mod board;
 pub mod bridges;
 pub mod github;
 pub mod pm;

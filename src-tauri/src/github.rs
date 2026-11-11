@@ -65,7 +65,7 @@ fn status_of(gh: Option<&Gh>) -> Result<GithubStatus, String> {
 
 // Whether `gh`'s line is about its login: the advice to sign in, or a 401 for a
 // token GitHub will not take
-fn says_no_login(line: &str) -> bool {
+pub(crate) fn says_no_login(line: &str) -> bool {
     line.to_lowercase().contains("auth login") || line.contains("HTTP 401")
 }
 
