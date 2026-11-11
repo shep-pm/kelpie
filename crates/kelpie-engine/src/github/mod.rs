@@ -6,6 +6,9 @@
 //! calls with the system's `curl` and signs with the system's `openssl`, both
 //! through the process tree (ADR 0001).
 //!
+//! [`gh`] is the other way in: every read and the draft pull request go out as
+//! the maintainer's own `gh` login, one child per call.
+//!
 //! Registering an App is the GitHub slice's own work: until it lands, kelpie
 //! reads what is on disk and a worker with no App is told it cannot push.
 //!
@@ -40,6 +43,7 @@ use crate::tree::ProcessTree;
 
 pub mod api;
 pub mod curl;
+pub mod gh;
 pub mod origin;
 pub mod slug;
 pub mod tokens;
