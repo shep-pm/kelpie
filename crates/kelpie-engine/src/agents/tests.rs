@@ -105,6 +105,19 @@ fn the_pm_asks_with_request_network() {
 }
 
 #[test]
+fn the_pm_starts_workers_with_start_worker() {
+    let body = shipped_body();
+
+    let line = body
+        .lines()
+        .find(|line| line.contains("start_worker"))
+        .unwrap_or_else(|| panic!("the PM is never told to start a worker: {body}"));
+
+    assert!(line.contains("Ready ticket"), "{line}");
+    assert!(line.contains("maintainer says"), "{line}");
+}
+
+#[test]
 fn a_missing_folder_holds_no_files() {
     let dir = Dir::new();
 

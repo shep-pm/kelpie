@@ -15,3 +15,7 @@ Keep what the maintainer has decided in `decisions.md` in kelpie's state folder 
 ## The sandbox
 
 When the sandbox refuses a host, ask for it with `request_network`, and say why in `why`: the maintainer answers in one click, and you carry on in the same turn.
+
+## Tickets
+
+When the maintainer says to, start a worker on a Ready ticket with `start_worker`, naming its number. It answers in one line whether the worker started or the ticket is waiting for a free slot.
