@@ -9,10 +9,11 @@
 //! its next turn answers the telling, and a refusal that comes back the same is the
 //! worker leaving its file as it was.
 //!
-//! Two more are about what a hand-over may not do while it waits on `gh`: open a second
-//! draft for a ticket another hand-over is at work on, or write over a record the
-//! maintainer moved. A draft the stand-in holds until the test lets it is how each one
-//! holds that window open.
+//! Three more are about what a hand-over may not do while it waits on `gh`: open a
+//! second draft for a ticket another hand-over is at work on, rule on a refusal its
+//! worker has had no turn to answer, or write over a record the maintainer moved. A
+//! draft the stand-in holds until the test lets it is how each one holds that window
+//! open.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -780,6 +781,65 @@ fn a_board_read_hands_over_no_second_time_while_a_hand_over_is_at_work() {
     assert_eq!(
         record.reason, None,
         "and nothing is parked on a draft that went through",
+    );
+}
+
+#[test]
+fn a_board_read_rules_on_no_refusal_the_worker_has_not_answered() {
+    let (rig, tickets, pulls) = rig_with(FILE);
+    pulls.script_create(Err(ForgeError::LocalPath));
+    pulls.hold_drafts();
+    let agent = FakeAgent::new().turn(Turn::new().text("Pushed."));
+    ran(&rig, &agent, &pulls);
+    until_some(|| (pulls.creates() >= 1).then_some(()));
+
+    // The worker's session goes, as it does when kelpie is relaunched, so the refusal
+    // has nowhere to go but its record: the worker is told nothing until it starts again
+    let gone = rig.state.workers().session(&rig.project, TICKET);
+    assert!(
+        gone.is_none(),
+        "a worker that holds no slot keeps no session, which is what drops it here",
+    );
+    pulls.let_next();
+
+    let told = until_some(|| {
+        let record = rig.record();
+        (record.refused.is_some() && !record.notes.is_empty()).then_some(record)
+    });
+    assert_eq!(
+        told.status,
+        Status::Ended,
+        "a refusal with its note still waiting parks nothing: {:?}",
+        told.reason,
+    );
+    assert_eq!(told.reason, None);
+
+    let mut poller = rig.poller(&tickets, &rig.hands());
+    pulls.let_next();
+    poller.read();
+    pulls.let_next();
+    poller.read();
+
+    let record = rig.record();
+    assert_eq!(
+        record.status,
+        Status::Ended,
+        "and a read rules on a refusal the worker has had no turn to answer",
+    );
+    assert_eq!(record.reason, None);
+    assert_eq!(
+        record.notes, told.notes,
+        "the telling still waits for the worker's next turn",
+    );
+    assert_eq!(
+        agent.params("session/prompt").len(),
+        1,
+        "and no turn is started to tell it in",
+    );
+    assert_eq!(
+        pulls.creates(),
+        3,
+        "and the read hands the file over again, once per read",
     );
 }
 

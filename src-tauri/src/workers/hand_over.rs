@@ -23,6 +23,12 @@
 //! which is the retry its reason promises, and a hand-over that then goes through sets
 //! the worker Ended and clears the reason.
 //!
+//! A ruling is an answer to a turn, and the board's read is not one. A refusal the read
+//! finds is told to the worker once, and a refusal its record already holds, as the text
+//! it was told or as a Note waiting in its record, is told no twice and ruled on not at
+//! all: the worker is ruled on at its next turn's end, which is the first hand-over that
+//! knows what it made of the telling.
+//!
 //! Two hand-overs never work on one ticket at once (`Hands::take`). A turn's end and a
 //! board read can both want the same draft, and a hand-over waits on git and `gh`: two
 //! of them would read the open pull requests, find none, and each open a draft. And a
@@ -170,6 +176,17 @@ impl Drop for Working {
     }
 }
 
+/// What ran a hand-over, which is what its answer may be
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    /// The worker's turn ended, which is the only hand-over that knows what the worker
+    /// made of what it was last told
+    TurnEnded,
+
+    /// The board's read of GitHub, which retries a draft the forge could not take
+    Read,
+}
+
 /// What `ticket`'s record said when its hand-over began
 ///
 /// A hand-over waits on git and `gh`, and while it waits the maintainer can start the
@@ -270,7 +287,7 @@ impl Hands {
         }
         let hands = self.clone();
         let ticket = ticket.to_owned();
-        thread::spawn(move || hands.hand_over(&ticket));
+        thread::spawn(move || hands.hand_over(&ticket, Trigger::TurnEnded));
     }
 
     /// Hand over again for every worker of the project that owes the forge a draft
@@ -284,7 +301,7 @@ impl Hands {
             if !self.owes(record) {
                 continue;
             }
-            self.hand_over(&record.ticket);
+            self.hand_over(&record.ticket, Trigger::Read);
         }
     }
 
@@ -294,7 +311,7 @@ impl Hands {
     /// One hand-over works on a ticket at a time ([`Hands::take`]), and what it may
     /// settle is the record it began from ([`Standing`]), read before the git and `gh`
     /// this waits on.
-    fn hand_over(&self, ticket: &str) {
+    fn hand_over(&self, ticket: &str, trigger: Trigger) {
         let Some(forge) = &self.forge else {
             eprintln!(
                 "kelpie: project {} has no GitHub forge, so ticket {ticket} hands over nothing",
@@ -319,7 +336,7 @@ impl Hands {
             pulls: forge.pulls.as_ref(),
             tickets: forge.tickets.as_ref(),
         };
-        self.settle(ticket, &standing, worker::after_turn(&ctx));
+        self.settle(ticket, trigger, &standing, worker::after_turn(&ctx));
     }
 
     /// Take `ticket` for a hand-over, `None` when one is already at work on it
@@ -348,11 +365,18 @@ impl Hands {
 
     /// Settle `ticket`'s record by what the forge made of its hand-over
     ///
+    /// `trigger` is what ran it, which is what the answer may be ([`Trigger`]), and
     /// `standing` is the record it began from, which is the only one it may write
     /// ([`Standing`]).
-    fn settle(&self, ticket: &str, standing: &Standing, outcome: worker::Outcome) {
+    fn settle(
+        &self,
+        ticket: &str,
+        trigger: Trigger,
+        standing: &Standing,
+        outcome: worker::Outcome,
+    ) {
         match outcome {
-            worker::Outcome::Told(text) => self.answer(ticket, &text, standing),
+            worker::Outcome::Told(text) => self.answer(ticket, &text, trigger, standing),
             worker::Outcome::Failed(why) => self.park(ticket, &why, standing),
             worker::Outcome::Opened(..)
             | worker::Outcome::Edited(..)
@@ -430,7 +454,12 @@ impl Hands {
     /// The text is kept before the worker is told, so a turn that ends fast is answered
     /// by the ruling and not by a second telling.
     ///
-    fn answer(&self, ticket: &str, text: &str, standing: &Standing) {
+    /// Only a turn's end is asked what the worker made of the telling ([`Trigger`]). A
+    /// board read that finds the refusal the record already holds rules on nothing: the
+    /// worker has had no turn since it was told, and its note may still be waiting in
+    /// its record, so "the same refusal stands" would be said of a worker that never
+    /// heard it.
+    fn answer(&self, ticket: &str, text: &str, trigger: Trigger, standing: &Standing) {
         let Some(records) = self.kept() else {
             return;
         };
@@ -439,7 +468,9 @@ impl Hands {
             .and_then(|record| record.refused.as_deref())
             .is_some_and(|before| before == text);
         if told {
-            self.rule(ticket, text, standing);
+            if trigger == Trigger::TurnEnded {
+                self.rule(ticket, text, standing);
+            }
             return;
         }
         let written = lock(&records).set_refused(ticket, Some(text.to_owned()));
