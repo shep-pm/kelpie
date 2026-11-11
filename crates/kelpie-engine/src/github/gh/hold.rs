@@ -180,7 +180,17 @@ impl Pace for LocalPace {
 }
 
 /// A [`Gh`] whose calls are held while a rate limit is used up, and paced
+///
+/// Cloning a hold gives another handle to the same one, so one repo's calls are one
+/// set: [`super::GithubSource`] reads its issues and [`super::GithubPulls`] opens its
+/// drafts through the same hold, and no second budget runs.
+#[derive(Clone)]
 pub struct Hold {
+    shared: Arc<Shared>,
+}
+
+/// What every handle of one hold shares
+struct Shared {
     gh: Gh,
     pace: Box<dyn Pace>,
     clock: Arc<dyn Wait>,
@@ -189,8 +199,8 @@ pub struct Hold {
 impl fmt::Debug for Hold {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Hold")
-            .field("gh", &self.gh)
-            .field("pace", &self.pace)
+            .field("gh", &self.shared.gh)
+            .field("pace", &self.shared.pace)
             .finish_non_exhaustive()
     }
 }
@@ -205,13 +215,15 @@ impl Hold {
     /// Calls through `gh`, held and spaced by `pace`, by `clock`'s time
     #[must_use]
     pub fn with(gh: Gh, pace: Box<dyn Pace>, clock: Arc<dyn Wait>) -> Self {
-        Self { gh, pace, clock }
+        Self {
+            shared: Arc::new(Shared { gh, pace, clock }),
+        }
     }
 
     /// When the hold lifts, while a limit is used up
     #[must_use]
     pub fn lifts_at(&self) -> Option<Timestamp> {
-        self.pace.held(self.clock.now())
+        self.shared.pace.held(self.shared.clock.now())
     }
 
     /// What `gh` printed on stdout for a call of `args`, as [`Gh::call`] says
@@ -250,12 +262,12 @@ impl Hold {
         if let Err(until) = self.admit() {
             return Err(ForgeError::Held(until));
         }
-        let now = self.clock.now();
-        let result = call(&self.gh);
+        let now = self.shared.clock.now();
+        let result = call(&self.shared.gh);
         if let Err(error) = &result
             && used_up(error)
         {
-            self.pace.hold(self.lifts_from(error, now));
+            self.shared.pace.hold(self.lifts_from(error, now));
         }
         result
     }
@@ -263,10 +275,10 @@ impl Hold {
     // Waits until the pace lets a call go, or says until when calls are held
     fn admit(&self) -> Result<(), Timestamp> {
         loop {
-            match self.pace.pass(self.clock.now()) {
+            match self.shared.pace.pass(self.shared.clock.now()) {
                 Pass::Go => return Ok(()),
                 Pass::Held(until) => return Err(until),
-                Pass::Wait(seconds) => self.clock.wait(seconds),
+                Pass::Wait(seconds) => self.shared.clock.wait(seconds),
             }
         }
     }
@@ -283,7 +295,7 @@ impl Hold {
     // hold set meanwhile answers for it.
     fn reset(&self, now: Timestamp) -> Option<Timestamp> {
         self.admit().ok()?;
-        let limits = self.gh.rate_limit().ok()?;
+        let limits = self.shared.gh.rate_limit().ok()?;
         [limits.core, limits.graphql, limits.search]
             .into_iter()
             .filter(|bucket| bucket.remaining == 0 && bucket.reset > now)
