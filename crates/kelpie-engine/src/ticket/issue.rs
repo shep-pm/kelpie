@@ -1,4 +1,6 @@
-//! A ticket as its source holds it, and an entry of a list of them
+//! A ticket as its source holds it, an entry of a list of them, and an open pull request
+
+use std::num::NonZeroU64;
 
 use super::TicketId;
 use crate::github::Timestamp;
@@ -29,4 +31,17 @@ pub struct Listed {
     pub author: String,
     /// When it was opened
     pub created: Timestamp,
+}
+
+/// An open pull request, and the tickets it closes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenPull {
+    /// Its number
+    pub number: NonZeroU64,
+    /// The branch it is opened from
+    pub branch: String,
+    /// Whether it is still a draft
+    pub draft: bool,
+    /// The tickets of this repo it closes when it merges, in the order GitHub lists them
+    pub closes: Vec<TicketId>,
 }

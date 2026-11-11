@@ -1,13 +1,14 @@
-//! The tickets of a GitHub project, read as its issues
+//! The tickets of a GitHub project, read as its issues and open pull requests
 
 use serde::Deserialize;
 
 use super::conditional::{Etags, PER_PAGE};
 use super::hold::Hold;
 use super::listing::{self, Entry};
+use super::pulls_read;
 use super::unreadable;
 use crate::github::{ForgeSlug, Timestamp};
-use crate::ticket::{ForgeError, GithubTickets, Issue, Listed, TicketId, Tickets};
+use crate::ticket::{ForgeError, GithubTickets, Issue, Listed, OpenPull, TicketId, Tickets};
 
 /// One GitHub repo's issues, as the ticket port reads them
 #[derive(Debug)]
@@ -144,5 +145,10 @@ impl GithubTickets for GithubSource {
             .filter(|entry| entry.closed.is_some_and(|closed| closed >= since))
             .map(|entry| entry.listed)
             .collect())
+    }
+
+    // GraphQL has no conditional read, so each poll of this costs one call
+    fn open_pulls(&self) -> Result<Vec<OpenPull>, ForgeError> {
+        pulls_read::open_pulls(&self.hold, &self.repo)
     }
 }
