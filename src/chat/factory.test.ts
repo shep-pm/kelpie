@@ -52,8 +52,8 @@ function workerTransport() {
       status: "ok" as const,
       data: [] as LogEntry[],
     })),
-    send: vi.fn(async (_text: string, _on: Channel<SessionEvent>) => null),
-    retry: vi.fn(async (_on: Channel<SessionEvent>) => null),
+    send: vi.fn(async (_text: string, _on: Channel<SessionEvent>) => ({})),
+    retry: vi.fn(async (_on: Channel<SessionEvent>) => ({})),
     cancel: vi.fn(async () => {}),
     answer: vi.fn(async (_id: string, _answer: string) => ({
       status: "ok" as const,

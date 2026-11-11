@@ -211,9 +211,15 @@ describe("the shell", () => {
     const tab = await screen.findByRole("tab", { name: "#13" });
     expect(tab.getAttribute("aria-selected")).toBe("true");
     expect(await screen.findByText("I read the issue.")).toBeTruthy();
-    // The PM's own composer stays mounted behind the tab, hidden.
+    // The tab's panel has the worker's own composer, and not the PM's, which
+    // stays mounted behind the tab, hidden.
     const panel = screen.getByText("I read the issue.").closest("main");
-    expect(panel && within(panel).queryByLabelText("Message")).toBeNull();
+    expect(
+      panel && within(panel).getByPlaceholderText("Message the worker on #13"),
+    ).toBeTruthy();
+    expect(
+      panel && within(panel).queryByPlaceholderText("Message the PM"),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Close #13" }));
     expect(screen.queryByRole("tab", { name: "#13" })).toBeNull();

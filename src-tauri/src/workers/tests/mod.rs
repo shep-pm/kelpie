@@ -24,6 +24,7 @@ mod feed;
 mod goose;
 mod hand_over;
 mod plan;
+mod tell;
 
 /// An app state in a folder of its own, with one project picked
 struct Rig {
@@ -139,7 +140,7 @@ fn a_number_written_another_way_names_the_same_ticket() {
 }
 
 #[test]
-fn a_session_is_given_up_once_its_worker_holds_no_slot() {
+fn a_session_is_given_up_once_its_worker_cannot_be_told() {
     let rig = Rig::new();
     let session = Arc::new(Session::new(
         rig.state.tree(),
@@ -158,7 +159,10 @@ fn a_session_is_given_up_once_its_worker_holds_no_slot() {
         records.seat(1).unwrap();
     }
     rig.state.workers().keep(&rig.project, "12", session);
-    assert!(rig.state.workers().session(&rig.project, "12").is_some());
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_some(),
+        "a worker holding its slot is told while its turn runs"
+    );
 
     {
         let records = rig.state.workers().records(&rig.project).unwrap();
@@ -166,11 +170,25 @@ fn a_session_is_given_up_once_its_worker_holds_no_slot() {
         records.set_status("12", Status::Ended).unwrap();
         records.seat(1).unwrap();
     }
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_some(),
+        "a worker whose turn ended keeps its session, which is how a Note between turns is its next turn",
+    );
 
-    assert!(rig.state.workers().session(&rig.project, "12").is_none());
+    {
+        let records = rig.state.workers().records(&rig.project).unwrap();
+        let mut records = records.lock().unwrap();
+        records.set_status("12", Status::Paused).unwrap();
+        records.seat(1).unwrap();
+    }
+
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_none(),
+        "a Paused worker gives its session up: its next turn is the start its Resume makes",
+    );
     assert!(
         weak.upgrade().is_none(),
-        "nothing keeps the ended worker's session alive"
+        "nothing keeps the Paused worker's session alive"
     );
 }
 

@@ -312,6 +312,50 @@ export const commands = {
 	 */
 	workerResume: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_resume", { ticket })),
 	/**
+	 *  Tell the worker on the ticket `text`, without interrupting its turn
+	 * 
+	 *  Answers `queued` when the text waits in the ticket's record for the worker's next prompt,
+	 *  and `sent` when it went out as a turn of its own.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket has no live session, or the record could not be written. The text says which.
+	 */
+	workerNote: (ticket: string, text: string) => typedError<NoteOutcome, string>(__TAURI_INVOKE("worker_note", { ticket, text })),
+	/**
+	 *  Cancel the worker on the ticket's turn and send it `text` as its next prompt
+	 * 
+	 *  Answers what [`worker_note`] does: `sent` for the text that goes out as the turn that
+	 *  follows the cancelled one, and `queued` for the text kept for the worker's next start.
+	 * 
+	 *  # Errors
+	 * 
+	 *  As [`worker_note`].
+	 */
+	workerStopAndTell: (ticket: string, text: string) => typedError<NoteOutcome, string>(__TAURI_INVOKE("worker_stop_and_tell", { ticket, text })),
+	/**
+	 *  Cancel the worker on the ticket's turn and leave it Paused
+	 * 
+	 *  The worker gives its slot back, and Resume starts its next turn.
+	 * 
+	 *  # Errors
+	 * 
+	 *  As [`worker_note`].
+	 */
+	workerCancel: (ticket: string) => typedError<null, string>(__TAURI_INVOKE("worker_cancel", { ticket })),
+	/**
+	 *  Answer the sandbox request `id` of the worker on the ticket
+	 * 
+	 *  The worker's session takes the answer, which lets the host through the sandbox its turn
+	 *  is still running in, and the board stops marking the ticket as needing the maintainer.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket has no live session, the request is over, the sandbox could not take the host,
+	 *  or the host could not be kept to the project. The text is for the maintainer to read.
+	 */
+	workerAnswer: (ticket: string, id: string, answer: SandboxAnswer) => typedError<null, string>(__TAURI_INVOKE("worker_answer", { ticket, id, answer })),
+	/**
 	 *  Stream the project's board to the window, and keep it current
 	 * 
 	 *  The first event is the board, or why there is none. It starts one poller for
@@ -566,6 +610,18 @@ waiting: boolean } |
 { kind: "snap_back"; 
 /**  Why the move does nothing */
 line: string };
+
+/**
+ *  What a Note, or a Stop and tell, became
+ * 
+ *  `queued` is the text kept in the ticket's record for the worker's next prompt, and
+ *  `sent` is the text the worker has been given as a turn.
+ */
+export type NoteOutcome = 
+/**  The text waits in the ticket's record and goes out with the worker's next prompt */
+"queued" | 
+/**  The text went to the worker as a turn */
+"sent";
 
 /**
  *  What a harness says it offers, listed by the harness itself

@@ -4,7 +4,7 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { useChatStore } from "./context";
+import { useChatStore, useWho } from "./context";
 import { Divider } from "./Divider";
 import { SandboxRequest } from "./SandboxRequest";
 import { SandboxSetup } from "./SandboxSetup";
@@ -56,6 +56,7 @@ function StepsOfTurn({ id }: { id: number }) {
  */
 function RequestsOfTurn({ id }: { id: number }) {
   const useChat = useChatStore();
+  const who = useWho();
   const requests = useField(id, "sandboxRequests") ?? [];
   const open = requests.filter((asked) => asked.answer === null);
   const first = open[0];
@@ -65,6 +66,7 @@ function RequestsOfTurn({ id }: { id: number }) {
         key={asked.id}
         request={asked}
         queued={asked === first ? open.length - 1 : 0}
+        who={who}
         onAnswer={(answer) => void useChat.getState().answer(asked.id, answer)}
       />
     ),
@@ -108,6 +110,40 @@ function Reply({ id }: { id: number }) {
       )}
     </Collapsible>
   );
+}
+
+/**
+ * The Notes the maintainer sent while this turn ran, under it.
+ *
+ * A worker's own message is what is being read, so a note keeps the maintainer's
+ * right-aligned bubble and adds the line saying what kelpie did with it.
+ */
+function NotesOfTurn({ id }: { id: number }) {
+  const notes = useField(id, "notes") ?? [];
+  // The same text can be noted twice: the repeat count keeps keys unique.
+  const seen = new Map<string, number>();
+  return notes.map((note) => {
+    const nth = seen.get(note.text) ?? 0;
+    seen.set(note.text, nth + 1);
+    return (
+      <div
+        key={`${note.text}#${nth}`}
+        className="flex flex-col items-end gap-1"
+      >
+        <p className="max-w-[85%] rounded-lg bg-secondary px-3 py-1.5 text-base whitespace-pre-wrap text-secondary-foreground">
+          {note.text}
+        </p>
+        <p
+          className={cn(
+            "text-label font-normal",
+            note.error ? "text-status-failed-fg" : "text-muted-foreground",
+          )}
+        >
+          {note.error ?? note.line}
+        </p>
+      </div>
+    );
+  });
 }
 
 function Failure({ id }: { id: number }) {
@@ -190,6 +226,7 @@ export function Turn({ id }: { id: number }) {
       <StepsOfTurn id={id} />
       <RequestsOfTurn id={id} />
       <Reply id={id} />
+      <NotesOfTurn id={id} />
       <Failure id={id} />
       <Footer id={id} />
     </article>

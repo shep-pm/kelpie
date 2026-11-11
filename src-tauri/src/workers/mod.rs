@@ -20,6 +20,15 @@
 //! A worker's events go to its log and to its [`Feed`], which the window watches
 //! with [`worker_watch`] and stops watching with [`worker_unwatch`]. A Paused
 //! worker resumes with [`worker_resume`], when the maintainer says so.
+//!
+//! A worker that runs is steered from its tab: [`worker_note`], [`worker_stop_and_tell`]
+//! and [`worker_cancel`] are the engine's own moves, and its sandbox request is answered
+//! there with [`worker_answer`], as the PM's is (`docs/design/workers.md`, Talking to a
+//! worker). Each refuses a ticket with no live session by name: kelpie keeps a worker's
+//! session while its turn runs and after it ends with the work committed, so a Note
+//! between turns is that worker's next turn, and a Paused worker or one waiting on the
+//! maintainer is resumed, not told. What each one calls is in `tell.rs`, which is where
+//! the engine's own telling lives too (`crates/kelpie-engine/src/worker/tell.rs`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -30,7 +39,7 @@ use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
 use kelpie_engine::lease::Leases;
 use kelpie_engine::local_paths::LocalPaths;
 use kelpie_engine::login::Store;
-use kelpie_engine::session::{Session, log};
+use kelpie_engine::session::{SandboxAnswer, Session, log};
 use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
 use kelpie_engine::tools::{Tools, WorkerStarter};
@@ -46,11 +55,13 @@ mod feed;
 pub mod hand_over;
 mod open;
 mod plan;
+mod tell;
 
 pub use feed::Feed;
 pub use hand_over::{Forge, Hands};
 use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
+pub use tell::{NoteOutcome, answer_on, cancel_on, note_on, stop_and_tell_on};
 
 use crate::board::poll::Requests;
 use crate::state::AppState;
@@ -98,6 +109,17 @@ type Sessions = Arc<SessionMap>;
 struct Calls {
     source: Arc<GithubSource>,
     pulls: Arc<GithubPulls>,
+}
+
+/// What one project's workers run on, read for one command
+///
+/// The plan, the folders and the records the engine's [`worker::Project`] borrows, held
+/// together so one call can hand all three to it.
+#[derive(Debug)]
+struct Standing {
+    plan: WorkerPlan,
+    paths: Paths,
+    records: Arc<Mutex<Records>>,
 }
 
 /// What the app keeps for its workers, across starts
@@ -239,10 +261,10 @@ impl Workers {
         Ok(calls)
     }
 
-    /// The session of the worker on `ticket` while it holds a slot
+    /// The session of the worker on `ticket`, while kelpie can still tell it
     ///
-    /// `None` once its turn ended or it was Paused, and then nothing of the
-    /// worker's is kept alive.
+    /// `None` for a worker that is Paused or waiting on the maintainer, whose next turn
+    /// is the start its Resume makes, and for one with no record.
     #[must_use]
     pub fn session(&self, project_id: &str, ticket: &str) -> Option<Arc<Session>> {
         self.give_up_idle();
@@ -259,7 +281,20 @@ impl Workers {
         drop(before);
     }
 
-    /// Drop the session of each worker whose record says it holds no slot
+    /// Drop the session of the worker on `ticket`, which is what a relaunch leaves
+    ///
+    /// While kelpie runs, an ended worker keeps its session ([`Workers::keeps_session`]).
+    /// A test that wants a worker whose session went with the launch that started it, and
+    /// whose record still says what it did, drops it here.
+    #[cfg(test)]
+    pub(crate) fn forget_session(&self, project_id: &str, ticket: &str) {
+        let gone = lock(&self.sessions)
+            .remove(&(project_id.to_owned(), ticket.to_owned()))
+            .is_some();
+        assert!(gone, "ticket {ticket} kept no session to forget");
+    }
+
+    /// Drop the session of each worker its record says kelpie cannot tell
     ///
     /// Run from the caller's thread and never from a session's own event sink:
     /// the last reference to a session stops its harness and joins its thread.
@@ -267,7 +302,7 @@ impl Workers {
         let keys: Vec<(String, String)> = lock(&self.sessions).keys().cloned().collect();
         let idle: Vec<_> = keys
             .into_iter()
-            .filter(|(project, ticket)| !self.holds_slot(project, ticket))
+            .filter(|(project, ticket)| !self.keeps_session(project, ticket))
             .collect();
         let given: Vec<_> = {
             let mut sessions = lock(&self.sessions);
@@ -276,12 +311,21 @@ impl Workers {
         drop(given);
     }
 
-    fn holds_slot(&self, project_id: &str, ticket: &str) -> bool {
+    /// Whether the worker on `ticket` keeps a session kelpie can tell
+    ///
+    /// A worker holds its session while its turn runs, and after that turn ends with the
+    /// work committed: [`worker::note`] sends a Note to a worker whose turn ended as its
+    /// next turn, and a review round resumes the same conversation
+    /// (`docs/design/workers.md`, Ending, quitting and resuming). A Paused worker, or one
+    /// waiting on the maintainer, gives its session up: its next turn is the start its
+    /// Resume makes, which builds a session of its own.
+    fn keeps_session(&self, project_id: &str, ticket: &str) -> bool {
         let records = lock(&self.records).get(project_id).cloned();
         records.is_some_and(|records| {
-            lock(&records)
-                .get(ticket)
-                .is_some_and(|r| r.status.needs_slot() && r.seat == Seat::Held)
+            lock(&records).get(ticket).is_some_and(|record| {
+                record.status == Status::Ended
+                    || (record.status == Status::Running && record.seat == Seat::Held)
+            })
         })
     }
 
@@ -309,39 +353,20 @@ impl Workers {
         open: &Opener<'_>,
     ) -> Result<WorkerStarted, String> {
         self.give_up_idle();
-        let plan = plan(&self.config, project_id)?;
-        let records = self.records(project_id)?;
-        let paths = Paths::new(&self.data_dir, project_id);
-        let leases = self.leases(project_id)?;
+        let standing = self.standing(project_id)?;
         let on = OpenOn {
             data_dir: &self.data_dir,
             logins: &self.logins,
             config: &self.config,
             project_id,
             folder,
-            plan: &plan,
+            plan: &standing.plan,
         };
         let opener = |opening: &Opening<'_>| open(&on, opening);
-        let project = worker::Project {
-            paths: &paths,
-            folder,
-            base: BASE,
-            tree: &self.tree,
-            slots: plan.slots,
-            turn_timeout: plan.turn_timeout,
-            records: &records,
-            binding: &plan.binding,
-            network_allowlist: &plan.network_allowlist,
-            reads: plan.reads,
-            tools,
-            tokens: Some(&self.tokens),
-            gh: self.gh.as_deref(),
-            leases: Some(leases.as_ref()),
-            open: &opener,
-        };
+        let project = self.project_of(&standing, project_id, folder, tools, &opener)?;
         // The session logs its own turn, the feed follows it live, and a turn that ends
         // with its branch clean hands its draft over, on a thread of its own
-        let hands = self.hands(project_id, folder, &plan)?;
+        let hands = self.hands(project_id, folder, &standing.plan)?;
         let mut sink = hand_over::Sink {
             feed: self.feed(project_id, &ticket.id),
             ticket: ticket.id.clone(),
@@ -474,6 +499,48 @@ impl Workers {
             text: CARRY_ON.to_owned(),
         };
         self.start(project_id, folder, tools, &ticket, open)
+    }
+
+    /// What the project `project_id` runs its workers on, its records read from disk on the first ask
+    ///
+    /// # Errors
+    ///
+    /// The settings cannot be used, or the records file cannot be read.
+    fn standing(&self, project_id: &str) -> Result<Standing, String> {
+        Ok(Standing {
+            plan: plan(&self.config, project_id)?,
+            paths: Paths::new(&self.data_dir, project_id),
+            records: self.records(project_id)?,
+        })
+    }
+
+    /// The engine's [`worker::Project`] for `standing`, whose workers it opens with `open`
+    fn project_of<'a>(
+        &'a self,
+        standing: &'a Standing,
+        project_id: &str,
+        folder: &'a Path,
+        tools: Option<&'a Tools>,
+        open: &'a dyn Fn(&Opening<'_>) -> Result<Session, String>,
+    ) -> Result<worker::Project<'a>, String> {
+        let leases = self.leases(project_id)?;
+        Ok(worker::Project {
+            paths: &standing.paths,
+            folder,
+            base: BASE,
+            tree: &self.tree,
+            slots: standing.plan.slots,
+            turn_timeout: standing.plan.turn_timeout,
+            records: &standing.records,
+            binding: &standing.plan.binding,
+            network_allowlist: &standing.plan.network_allowlist,
+            reads: standing.plan.reads,
+            tools,
+            tokens: Some(&self.tokens),
+            gh: self.gh.as_deref(),
+            leases: Some(leases.as_ref()),
+            open,
+        })
     }
 
     fn leases(&self, project_id: &str) -> Result<&Arc<Leases>, String> {
@@ -744,4 +811,73 @@ pub fn worker_unwatch(
 pub fn worker_resume(state: State<'_, AppState>, ticket: String) -> Result<WorkerStarted, String> {
     let project = state.project_id(None)?;
     resume_on(&state, &project, &ticket, &open::open)
+}
+
+/// Tell the worker on the ticket `text`, without interrupting its turn
+///
+/// Answers `queued` when the text waits in the ticket's record for the worker's next prompt,
+/// and `sent` when it went out as a turn of its own.
+///
+/// # Errors
+///
+/// The ticket has no live session, or the record could not be written. The text says which.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_note(
+    state: State<'_, AppState>,
+    ticket: String,
+    text: String,
+) -> Result<NoteOutcome, String> {
+    note_on(&state, &ticket, &text)
+}
+
+/// Cancel the worker on the ticket's turn and send it `text` as its next prompt
+///
+/// Answers what [`worker_note`] does: `sent` for the text that goes out as the turn that
+/// follows the cancelled one, and `queued` for the text kept for the worker's next start.
+///
+/// # Errors
+///
+/// As [`worker_note`].
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_stop_and_tell(
+    state: State<'_, AppState>,
+    ticket: String,
+    text: String,
+) -> Result<NoteOutcome, String> {
+    stop_and_tell_on(&state, &ticket, &text)
+}
+
+/// Cancel the worker on the ticket's turn and leave it Paused
+///
+/// The worker gives its slot back, and Resume starts its next turn.
+///
+/// # Errors
+///
+/// As [`worker_note`].
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_cancel(state: State<'_, AppState>, ticket: String) -> Result<(), String> {
+    cancel_on(&state, &ticket)
+}
+
+/// Answer the sandbox request `id` of the worker on the ticket
+///
+/// The worker's session takes the answer, which lets the host through the sandbox its turn
+/// is still running in, and the board stops marking the ticket as needing the maintainer.
+///
+/// # Errors
+///
+/// The ticket has no live session, the request is over, the sandbox could not take the host,
+/// or the host could not be kept to the project. The text is for the maintainer to read.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn worker_answer(
+    state: State<'_, AppState>,
+    ticket: String,
+    id: String,
+    answer: SandboxAnswer,
+) -> Result<(), String> {
+    answer_on(&state, &ticket, &id, answer)
 }
