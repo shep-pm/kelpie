@@ -6,7 +6,7 @@
 //! the command through a fresh exec of kelpie's binary, which the loaded
 //! profile confines, so the next session starts sandboxed without a relaunch.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -35,17 +35,43 @@ pub(super) fn through_profile(command: &Command) -> Option<Command> {
     Some(wrap(&exe, command))
 }
 
+/// Whether a `kelpie.<n>` profile is loaded on this machine
+///
+/// Install loads it, and so does each command the sandbox item asks the
+/// maintainer to run in a terminal. It says nothing about this process: a kelpie
+/// already running stays `unconfined` whatever is loaded. False where AppArmor
+/// has no profiles folder to read, as on macOS and Windows.
+#[must_use]
+pub fn profile_loaded() -> bool {
+    loaded_in(Path::new(PROFILES))
+}
+
+/// Whether `folder` holds a `kelpie.<n>` entry
+fn loaded_in(folder: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries
+        .filter_map(Result::ok)
+        .any(|entry| named_kelpie(entry.file_name()))
+}
+
+/// Whether a profile entry `name` is kelpie's, which AppArmor writes as `kelpie.<n>`
+fn named_kelpie(name: impl AsRef<OsStr>) -> bool {
+    name.as_ref()
+        .to_string_lossy()
+        .strip_prefix("kelpie.")
+        .is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 /// Whether kelpie runs unconfined while a `kelpie.<n>` profile is loaded
 ///
 /// It does not check that the binary's path is the one the profile names: an
 /// AppImage or a build run beside the package hops and stays unconfined.
 fn needed(attr: &str, profiles: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
-    attr.trim() == "unconfined"
-        && profiles.into_iter().any(|name| {
-            name.as_ref()
-                .strip_prefix("kelpie.")
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-        })
+    attr.trim() == "unconfined" && profiles.into_iter().any(|name| named_kelpie(name.as_ref()))
 }
 
 /// `command`, run by `exe --sandbox-hop`, with its directory and environment
