@@ -105,7 +105,7 @@ The gate's rulings use what Phase 2 already has (`GLOSSARY.md`, Ruling): the rea
 
 ### The Review column
 
-A Review ticket shows one status line naming where the gate is: catching up, waiting for CI, fixing red CI, ready to merge, in the merge queue, or the ruling's reason. A red run's line links to the failing run on GitHub. While a fix turn runs, the ticket moves to Building, since a worker's session is live, and comes back to Review when the turn ends.
+A Review ticket shows one status line naming where the gate is: catching up, waiting for CI, fixing red CI, ready to merge, in the merge queue, or the ruling's reason. A red run's line links to the failing run on GitHub. While a fix turn runs, the ticket moves to Building, since a worker's session is live, and comes back to Review when the turn ends. A ruling keeps it in Review: the worker waits on the maintainer and nothing runs for it, so the ruling's reason is the card's needs-you line (`docs/design/tickets.md`, The board).
 
 ### Settings
 

@@ -42,8 +42,8 @@ An issue is a ticket when the per-project setting Pick up issues from says so: M
 |---|---|
 | Draft | Its issue is open without the ready label |
 | Ready | Its issue carries the ready label |
-| Building | A worker's session on it is live, Paused included |
-| Review | Its pull request is open |
+| Building | A worker's session on it is live, Paused included, or its worker waits on the maintainer with no pull request of its own |
+| Review | Its pull request is open, its worker waiting on the maintainer included |
 | Done | Its issue is closed |
 
 1. A column is a fact read from GitHub and the engine, not a place the maintainer puts it.
@@ -51,6 +51,7 @@ An issue is a ticket when the per-project setting Pick up issues from says so: M
 3. Ready tickets carry Start.
 4. Clicking a Building ticket opens its worker's tab. Clicking any other opens its issue, or its pull request in Review, on GitHub.
 5. The marker shows while the ticket's worker waits on the maintainer: a sandbox request, a fence refusal holding the ticket (#83), or Paused after a quit or because its sandbox cannot start, which says why. Phase 3 adds rulings. It counts toward the project's badge in the rail (`docs/design/ux.md`, Attention).
+6. A ticket whose worker waits on the maintainer stays in Review while its pull request is open, since a gate ruling is that ticket's needs-you line and its card must not jump to Building (`docs/design/gate-and-merge.md`, The Review column). A waiting ticket with no pull request yet, such as one whose draft could not open, stays in Building.
 
 The board is chelone's `KanbanBoard` (`packages/react/src/components/kanban/`, MIT, the maintainer's own), adapted: chelone's list, resource, router and i18n hooks come out, and tickets go in. It brings dnd-kit, a hold before a touch drag so a swipe still scrolls, the keyboard's Move to menu, and the optimistic move that puts a ticket back when the move fails.
 
