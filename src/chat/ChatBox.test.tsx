@@ -47,6 +47,7 @@ const pmSandbox =
     () => Promise<{
       refusal: "no_capabilities" | "no_namespaces" | null;
       unsandboxed: boolean;
+      install: "available" | "package_only";
     }>
   >();
 
@@ -115,7 +116,11 @@ beforeEach(() => {
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
   pmSandbox.mockReset();
-  pmSandbox.mockResolvedValue({ refusal: null, unsandboxed: false });
+  pmSandbox.mockResolvedValue({
+    refusal: null,
+    unsandboxed: false,
+    install: "package_only",
+  });
   useChat.getState().reset();
 });
 
@@ -137,6 +142,21 @@ describe("the chat box", () => {
       expect(pmSend).toHaveBeenCalledWith("plan the slice", expect.anything()),
     );
     expect((box as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a message typed while an install waits on its prompt stays in the box and sends nothing", async () => {
+    const box = await openBox();
+    fireEvent.change(box, { target: { value: "plan the slice" } });
+    act(() => useChat.setState({ installing: true }));
+
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(pmSend).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("plan the slice");
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   it("Enter on an empty box sends nothing", async () => {
@@ -282,6 +302,7 @@ describe("the chat box", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: false,
+      install: "package_only",
     });
     await sendMessage("hello");
     emit({ kind: "failed", message: "bwrap: loopback: Failed RTM_NEWADDR" });
@@ -296,6 +317,7 @@ describe("the chat box", () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: true,
+      install: "package_only",
     });
     await sendMessage("hello");
     emit({ kind: "failed", message: "the model is overloaded" });

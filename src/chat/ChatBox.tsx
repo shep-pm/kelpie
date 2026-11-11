@@ -49,10 +49,12 @@ function Turns() {
 function Composer() {
   const [text, setText] = useState("");
   const running = useChat((s) => s.turns.at(-1)?.state === "running");
+  // An install ends the PM's session, so a message sent meanwhile would be cut off
+  const installing = useChat((s) => s.installing);
 
   function send() {
     const message = text.trim();
-    if (message === "" || running) return;
+    if (message === "" || running || installing) return;
     setText("");
     void useChat.getState().send(message);
   }
@@ -82,7 +84,7 @@ function Composer() {
           Stop
         </Button>
       ) : (
-        <Button onClick={send} disabled={text.trim() === ""}>
+        <Button onClick={send} disabled={text.trim() === "" || installing}>
           Send
         </Button>
       )}
