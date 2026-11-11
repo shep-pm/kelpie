@@ -114,13 +114,13 @@ Port `runner/several.rs` first. It is the acceptance suite for the loop: several
 
 | SK source | Verdict | Cut, and what comes with it |
 |---|---|---|
-| `runner/gate/` | adapt | The order (foreign change, agents' files, catch-up, CI, unread head, threads, merge), `back_to_worker`, `settled`, `lag.rs`, `borrowed.rs`, `unread.rs`. `queued/` and `rerun/` are GitHub Actions'. SK ADR 0008 |
+| `runner/gate/` | adapt, order lifted (#225) | The order (foreign change, agents' files, catch-up, CI, unread head, threads, merge), `back_to_worker`, `settled`, `lag.rs`, `borrowed.rs`, `unread.rs`. `queued/` and `rerun/` are GitHub Actions'. SK ADR 0008. Lifted in #225 as `crates/kelpie-engine/src/gate/`: the order (`check_ci`, `lag.rs`, `queued/`, `queued/none.rs`), `ci_failed` and `rerun/`, the ruling half of `catch_up.rs`, `fix_attempts.rs` and the red prompt, on plain values: `docs/lifted.md`. `borrowed.rs`, `unread.rs`, `threads.rs` and the rest of the pass stay SK's for notes 2 and 3 |
 | `core/ports/findings.rs`, `core/ports/reviewer.rs` | lift | `Finding` is what every reviewer returns. `Reviewer` is the port to implement with an ACP session |
 | `runner/review/` | adapt | One pass, each reviewer once, at most one fix turn each, then the gate (SK ADRs 0006, 0007). The bot stages are deferred to a slice of their own (`docs/design/review.md`, Deferred: bot reviewers). Tests: `review/tests/mod.rs` |
 | `runner/reviewers_check.rs` | adapt | `left_in`, `check_local` |
 | `runner/merge/` | adapt | `drop_work_item`'s refusals, `withdraw` (a yes holds only for the head it was asked about), `refused`, `merged`, `regate`, `cleanup`. `queue.rs` goes behind a merge queue trait |
 | `runner/close_merged.rs` | lift | Through `Tickets`. `FORGE_CLOSE_WAIT` (600 s) was never measured: SK's `docs/facts/ci-and-the-merge.md` leaves it to the maintainer |
-| `runner/rework/` | adapt | The review handed over verbatim, the first prompt, which refusals are settled, and starting from `origin`'s head, never a rewrite |
+| `runner/rework/` | adapt, red prompt lifted (#225) | The review handed over verbatim, the first prompt, which refusals are settled, and starting from `origin`'s head, never a rewrite. The red prompt and the merge queue prompt are lifted in `crates/kelpie-engine/src/gate/prompt.rs` (#225), and `back_to_worker`'s record is `Kept::fix_turn_sent`. The rest waits for the maintainer's review rework |
 | `runner/adopt/` | adapt, later | With repos the maintainer doesn't own (`ux.md`, Later). `own_push`, `pushed_by_someone_else`, `Failing`. SK ADR 0010 |
 | `runner/reread/` | adapt | `changed.rs` and the shape: validate as a start, then swap, and name what waits for the next start |
 

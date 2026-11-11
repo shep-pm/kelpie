@@ -70,7 +70,9 @@ const KEY: &str = "key.pem";
 /// A moment, as whole seconds since the Unix epoch
 ///
 /// GitHub's answers carry whole seconds, and a token's life is measured in them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+// wire format: the gate keeps its moments in `gate.json` as these seconds
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Timestamp(u64);
 
 impl Timestamp {
