@@ -36,6 +36,9 @@ pub(super) fn through_profile(command: &Command) -> Option<Command> {
 }
 
 /// Whether kelpie runs unconfined while a `kelpie.<n>` profile is loaded
+///
+/// It does not check that the binary's path is the one the profile names: an
+/// AppImage or a build run beside the package hops and stays unconfined.
 fn needed(attr: &str, profiles: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
     attr.trim() == "unconfined"
         && profiles.into_iter().any(|name| {
@@ -65,6 +68,7 @@ fn wrap(exe: &Path, command: &Command) -> Command {
     hopped
 }
 
+#[cfg(any(unix, test))]
 /// The program and arguments after `--sandbox-hop --` in `args`, which start
 /// with the binary's own name
 fn target(args: &[OsString]) -> Option<(&OsString, &[OsString])> {
