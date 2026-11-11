@@ -89,7 +89,7 @@ Most rows lift once a few seams are cut. Each is already a trait or a type in SK
 
 ## Phase 3: the work-item loop, review, leases and the PM board
 
-Port `runner/several.rs` first. It is the acceptance suite for the loop: several work items at once, through the runner's stand-ins, asserting only what the outside world sees. Replace its lease book with kelpie's.
+Port `runner/several.rs` first. It is the acceptance suite for the loop: several work items at once, through the runner's stand-ins, asserting only what the outside world sees. Replace its lease book with kelpie's. Shape lifted (#216): `src-tauri/src/several/`, with the gate's cases added by each slice.
 
 ### Work items, board and dispatch
 

@@ -46,9 +46,16 @@ const LOWEST_PRIORITY: u8 = 4;
 /// closed list's entry wins, then the ready list's, then the open list's.
 ///
 /// A ticket's column is the first that holds: Done when its issue is closed,
-/// Building when a worker on it is not Ended, Review when an open pull request
+/// Building when a worker on it is live, Review when an open pull request
 /// closes it or is opened from its `kelpie/<id>` branch, Ready when it is
 /// ready, and Draft otherwise.
+///
+/// A worker is live while it runs or may yet run: Running, Paused, or waiting on
+/// the maintainer with no pull request of its own, such as one whose draft could
+/// not open. A worker waiting on the maintainer with its pull request open is not
+/// live, since nothing runs for it, and its ticket stays in Review: the wait is
+/// the ticket's needs-you line there, and the card must not jump to Building
+/// (`docs/design/gate-and-merge.md`, The Review column).
 #[must_use]
 pub fn place(read: &Read, workers: &[Record], rules: &Rules) -> Board {
     let mut entries: BTreeMap<TicketId, Entry<'_>> = BTreeMap::new();
@@ -114,9 +121,15 @@ fn placed(entry: &Entry<'_>, workers: &[Record], pulls: &[OpenPull]) -> Placed {
         .filter(|pull| pull.closes.contains(&id) || pull.branch == branch)
         .map(|pull| pull.number)
         .min();
+    // A worker waiting on the maintainer runs nothing and holds no slot, so with its
+    // pull request open it is not live: its ticket stays in Review, where the wait
+    // shows as its needs-you line (`docs/design/gate-and-merge.md`, The Review column)
+    let live = |status: Status| {
+        status != Status::Ended && (pull.is_none() || status != Status::WaitingOnMaintainer)
+    };
     let building = workers
         .iter()
-        .any(|record| record.ticket == name && record.status != Status::Ended);
+        .any(|record| record.ticket == name && live(record.status));
     let column = if entry.closed {
         Column::Done
     } else if building {
