@@ -190,6 +190,14 @@
       "default": null,
       "description": "How kelpie asks a harness to phrase its replies"
     },
+    "run-without-sandbox": {
+      "default": null,
+      "description": "Whether the project's PM runs without a sandbox. It applies only while the machine's sandbox cannot start, and only to the PM: a worker never runs without one.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "theme": {
       "anyOf": [
         {

@@ -158,6 +158,48 @@ fn a_null_in_a_file_is_not_counted_as_that_layer_setting_it() {
 }
 
 #[test]
+fn run_without_a_sandbox_is_off_until_a_project_sets_it() {
+    let dir = Dir::new();
+    let before = Settings::load(&dir.config(), "web").unwrap();
+    assert!(!before.run_without_sandbox.value);
+    assert_eq!(before.run_without_sandbox.from, Layer::BuiltIn);
+
+    Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        Field::RunWithoutSandbox,
+        &json!(true),
+    )
+    .unwrap();
+
+    let web = Settings::load(&dir.config(), "web").unwrap();
+    assert!(web.run_without_sandbox.value);
+    assert_eq!(web.run_without_sandbox.from, Layer::Project);
+    let other = Settings::load(&dir.config(), "api").unwrap();
+    assert!(!other.run_without_sandbox.value);
+}
+
+#[test]
+fn run_without_a_sandbox_is_refused_in_the_global_layer() {
+    let dir = Dir::new();
+    let error = Settings::set(
+        &dir.config(),
+        LayerFile::Global,
+        Field::RunWithoutSandbox,
+        &json!(true),
+    )
+    .unwrap_err();
+    match error {
+        SettingsError::FieldNotInLayer { field, layer } => {
+            assert_eq!(field, Field::RunWithoutSandbox);
+            assert_eq!(layer, Layer::Global);
+        }
+        other => panic!("not a field out of its layer: {other}"),
+    }
+    assert!(!dir.config().file(LayerFile::Global).unwrap().exists());
+}
+
+#[test]
 fn a_field_only_another_layer_holds_is_refused() {
     let dir = Dir::new();
     let error = Settings::set(

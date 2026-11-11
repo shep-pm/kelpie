@@ -20,6 +20,7 @@ const LABELS: Record<string, string> = {
   "reply-style": "Reply style",
   theme: "Theme",
   "read-anywhere": "Read anywhere by default",
+  "run-without-sandbox": "Run without a sandbox",
   "harness-global-folder": "Read the harness's global folder",
   "network-allowlist": "Allowed domains",
 };

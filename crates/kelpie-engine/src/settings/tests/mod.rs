@@ -170,6 +170,10 @@ fn an_unset_field_comes_from_the_built_in_layer() {
                 value: false,
                 from: Layer::BuiltIn,
             },
+            run_without_sandbox: Layered {
+                value: false,
+                from: Layer::BuiltIn,
+            },
             bridge_updates: Layered {
                 value: BTreeMap::new(),
                 from: Layer::BuiltIn,
