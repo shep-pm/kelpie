@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use super::{ForgeError, GithubTickets, Issue, Listed, Pulls, TicketId, Tickets};
+use super::{ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets};
 use crate::github::Timestamp;
 
 /// What the stand-in was asked, in order
@@ -21,9 +21,12 @@ pub enum Asked {
     Open,
     /// [`GithubTickets::closed_issues`], and its `since`
     Closed(Timestamp),
+    /// [`GithubTickets::open_pulls`]
+    OpenPulls,
 }
 
 type Listing = Result<Vec<Listed>, ForgeError>;
+type PullListing = Result<Vec<OpenPull>, ForgeError>;
 
 #[derive(Debug, Default)]
 struct Script {
@@ -31,6 +34,7 @@ struct Script {
     ready: Option<Listing>,
     open: Option<Listing>,
     closed: Option<Listing>,
+    pulls: Option<PullListing>,
     asked: Vec<Asked>,
 }
 
@@ -68,6 +72,11 @@ impl FakeTickets {
     /// What [`GithubTickets::closed_issues`] answers, whatever `since` it is asked for
     pub fn script_closed(&self, answer: Listing) {
         self.script().closed = Some(answer);
+    }
+
+    /// What [`GithubTickets::open_pulls`] answers
+    pub fn script_pulls(&self, answer: PullListing) {
+        self.script().pulls = Some(answer);
     }
 
     /// What it was asked, in order
@@ -112,6 +121,12 @@ impl GithubTickets for FakeTickets {
         let mut script = self.script();
         script.asked.push(Asked::Closed(since));
         script.closed.clone().unwrap_or_else(|| Ok(Vec::new()))
+    }
+
+    fn open_pulls(&self) -> Result<Vec<OpenPull>, ForgeError> {
+        let mut script = self.script();
+        script.asked.push(Asked::OpenPulls);
+        script.pulls.clone().unwrap_or_else(|| Ok(Vec::new()))
     }
 }
 

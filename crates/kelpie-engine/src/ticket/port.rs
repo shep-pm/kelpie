@@ -1,6 +1,6 @@
 //! The port a project's tickets are read through
 
-use super::{ForgeError, Issue, Listed, TicketId};
+use super::{ForgeError, Issue, Listed, OpenPull, TicketId};
 use crate::github::Timestamp;
 
 /// The tickets of one project, as their source holds them
@@ -40,4 +40,13 @@ pub trait GithubTickets: Tickets {
     ///
     /// [`ForgeError`] when GitHub cannot be asked or its answer read.
     fn closed_issues(&self, since: Timestamp) -> Result<Vec<Listed>, ForgeError>;
+
+    /// Every open pull request, with the tickets of this repo each closes
+    ///
+    /// A ticket is in Review while a pull request closing it is open.
+    ///
+    /// # Errors
+    ///
+    /// [`ForgeError`] when GitHub cannot be asked or its answer read.
+    fn open_pulls(&self) -> Result<Vec<OpenPull>, ForgeError>;
 }

@@ -1,0 +1,49 @@
+{
+  "data": {
+    "repository": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "Y3Vyc29yOnYyOpHOAAAB"
+        },
+        "nodes": [
+          {
+            "number": 81,
+            "headRefName": "worktree-kelpie-79",
+            "isDraft": true,
+            "closingIssuesReferences": {
+              "nodes": []
+            }
+          },
+          {
+            "number": 66,
+            "headRefName": "kelpie/63",
+            "isDraft": false,
+            "closingIssuesReferences": {
+              "nodes": [
+                {
+                  "number": 63,
+                  "repository": {
+                    "name": "kelpie",
+                    "owner": {
+                      "login": "shep-pm"
+                    }
+                  }
+                },
+                {
+                  "number": 64,
+                  "repository": {
+                    "name": "kelpie",
+                    "owner": {
+                      "login": "shep-pm"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
