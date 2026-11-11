@@ -213,8 +213,8 @@ pub fn after_turn(ctx: &HandOver<'_>) -> Outcome {
 }
 
 /// The title and body in `file`: its first line is the title, its leading `#`s
-/// left off, and the rest is the body, its soft-wrapped lines joined by
-/// [`paragraphs::join`]
+/// left off, and the rest is the body, blank lines dropped from each end and its
+/// soft-wrapped lines joined by [`paragraphs::join`]
 ///
 /// [`Untitled`] when the first line is blank or is not a conventional commit
 /// subject. Any lowercase word is a type, since kelpie knows no project's list.
@@ -230,8 +230,25 @@ pub(super) fn parse(file: &str) -> Result<Text, Untitled> {
     }
     Ok(Text {
         title: title.to_owned(),
-        body: paragraphs::join(rest.trim()),
+        body: paragraphs::join(&blank_ends(rest)),
     })
+}
+
+/// `text` with its blank lines dropped from each end, every indent kept
+///
+/// [`str::trim`] would shave the four spaces off a body that opens with an
+/// indented code block, and [`paragraphs::join`] would then read its lines as an
+/// ordinary paragraph and join them into one line.
+fn blank_ends(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return String::new();
+    };
+    let last = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+    lines[first..=last].join("\n")
 }
 
 /// `type(scope)!: summary`, with any lowercase word as the type

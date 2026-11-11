@@ -291,6 +291,52 @@ const WRAPPED_BODY: &str = concat!(
     "Resolves #74",
 );
 
+// A worker that shows a command as an indented code block must keep it one: GitHub
+// renders four spaces as code, and a body whose first line lost its indent would
+// have its command folded into a paragraph on one line.
+#[test]
+fn a_body_that_opens_with_an_indented_code_block_opens_as_a_code_block() {
+    let rig = Rig::new("hand over indented code");
+    let worktree = worker(&rig);
+    commit(&worktree, "src/lib.rs", "work\n");
+    let pulls = FakePulls::new();
+    pushed(&rig, &worktree, &pulls);
+    left(
+        &rig,
+        concat!(
+            "feat(worker): keep the command readable\n",
+            "\n",
+            "    cargo test --workspace\n",
+            "    cargo clippy --all-targets\n",
+            "\n",
+            "Run both from the repo root.\n",
+            "\n",
+            "Resolves #74\n",
+        ),
+    );
+    let tickets = FakeTickets::new();
+
+    let outcome = after_turn(&hand_over(&rig, &pulls, &tickets));
+
+    assert_eq!(outcome, Outcome::Opened(NonZeroU64::MIN));
+    let calls = pulls.calls();
+    let [_, PullCall::Create { body, .. }] = calls.as_slice() else {
+        panic!("no draft was opened: {calls:?}");
+    };
+    assert_eq!(
+        body,
+        concat!(
+            "    cargo test --workspace\n",
+            "    cargo clippy --all-targets\n",
+            "\n",
+            "Run both from the repo root.\n",
+            "\n",
+            "Resolves #74",
+        ),
+        "{body}"
+    );
+}
+
 // A branch whose commit the forge does not hold is a turn that never got its work
 // out: kelpie opens nothing for it.
 #[test]
@@ -565,4 +611,15 @@ fn a_first_line_that_is_not_a_conventional_commit_subject_is_no_title() {
             "{line}"
         );
     }
+}
+
+// Only the blank lines around the body go: str::trim would shave the four spaces
+// off a body that opens with an indented code block, and join would then read its
+// lines as one paragraph.
+#[test]
+fn a_body_keeps_the_indent_of_its_first_line_and_drops_its_blank_ends() {
+    let text = parse("feat(x): a thing\n\n    cargo test --all\n    second line\n\n \n").unwrap();
+
+    assert_eq!(text.body, "    cargo test --all\n    second line");
+    assert_eq!(parse("feat(x): a thing\n\n   \n").unwrap().body, "");
 }
