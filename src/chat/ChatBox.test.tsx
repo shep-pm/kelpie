@@ -64,6 +64,7 @@ vi.mock("@/bindings", () => ({
   },
 }));
 
+import { useBoard } from "@/board/store";
 import { ChatBox } from "./ChatBox";
 import { useChat } from "./store";
 
@@ -124,7 +125,10 @@ beforeEach(() => {
   useChat.getState().reset();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("the chat box", () => {
   it("Enter sends and Shift+Enter adds a line", async () => {
@@ -373,6 +377,35 @@ describe("the chat box", () => {
 
     expect(projectPick).toHaveBeenCalledTimes(1);
     expect(await screen.findByPlaceholderText("Message the PM")).toBeTruthy();
+  });
+
+  it("picking a folder asks the board to watch again", async () => {
+    projectGet.mockResolvedValue(null);
+    projectPick.mockResolvedValue({ status: "ok", data: "/work/project" });
+    const rewatch = vi.spyOn(useBoard.getState(), "rewatch");
+    render(<ChatBox />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pick a folder" }),
+    );
+
+    await screen.findByPlaceholderText("Message the PM");
+    expect(rewatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a closed folder dialog does not ask the board to watch again", async () => {
+    projectGet.mockResolvedValue(null);
+    projectPick.mockResolvedValue({ status: "ok", data: null });
+    const rewatch = vi.spyOn(useBoard.getState(), "rewatch");
+    render(<ChatBox />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Pick a folder" }),
+    );
+
+    await waitFor(() => expect(projectPick).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(rewatch).not.toHaveBeenCalled();
   });
 
   it("shows the history from the log before anything is sent", async () => {
