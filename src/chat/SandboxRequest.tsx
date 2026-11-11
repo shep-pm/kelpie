@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import type { SandboxRequest as Asked } from "./store";
 
 /** kelpie's own needs-you glyph: a filled diamond, 12px (`docs/design/system/`, StatusBadge). */
-function NeedsYou() {
+export function NeedsYou() {
   return (
     <svg
       viewBox="0 0 12 12"

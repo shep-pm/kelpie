@@ -1,6 +1,11 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogEntry, SandboxAnswer, SessionEvent } from "@/bindings";
+import type {
+  LogEntry,
+  SandboxAnswer,
+  SandboxView,
+  SessionEvent,
+} from "@/bindings";
 
 // The real Channel needs Tauri's IPC bridge, which jsdom has not got.
 vi.mock("@tauri-apps/api/core", () => ({
@@ -34,6 +39,8 @@ const pmAnswer =
     >
   >();
 
+const pmSandbox = vi.fn<() => Promise<SandboxView>>();
+
 vi.mock("@/bindings", () => ({
   commands: {
     pmSend: (text: string, on: Channel<SessionEvent>) => pmSend(text, on),
@@ -41,6 +48,7 @@ vi.mock("@/bindings", () => ({
     pmRetry: (on: Channel<SessionEvent>) => pmRetry(on),
     pmHistory: () => pmHistory(),
     pmAnswer: (id: string, answer: SandboxAnswer) => pmAnswer(id, answer),
+    pmSandbox: () => pmSandbox(),
     projectGet: async () => "/work/project",
     projectPick: async () => ({ status: "ok", data: "/work/project" }),
   },
@@ -81,6 +89,8 @@ beforeEach(() => {
   pmHistory.mockResolvedValue({ status: "ok", data: [] });
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
+  pmSandbox.mockReset();
+  pmSandbox.mockResolvedValue({ refusal: null });
   useChat.getState().reset();
 });
 
@@ -201,6 +211,34 @@ describe("the chat store", () => {
       state: "failed",
       error: "the harness is not installed",
     });
+  });
+
+  it("a failed turn asks what the sandbox found and keeps the view", async () => {
+    pmSandbox.mockResolvedValue({ refusal: "no_capabilities" });
+    await useChat.getState().send("go");
+    emit({ kind: "failed", message: "the sandbox cannot start" });
+
+    await vi.waitFor(() =>
+      expect(useChat.getState().sandbox).toEqual({
+        refusal: "no_capabilities",
+      }),
+    );
+    expect(pmSandbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("a turn that works clears the view a failed one kept", async () => {
+    pmSandbox.mockResolvedValue({ refusal: "no_namespaces" });
+    await useChat.getState().send("go");
+    emit({ kind: "failed", message: "the sandbox cannot start" });
+    await vi.waitFor(() =>
+      expect(useChat.getState().sandbox?.refusal).toBe("no_namespaces"),
+    );
+
+    await useChat.getState().send("again");
+    emit({ kind: "text", delta: "Hello" });
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+
+    expect(useChat.getState().sandbox).toBeNull();
   });
 
   it("a turn that goes on after a failed event is running again", async () => {

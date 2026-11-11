@@ -42,6 +42,11 @@ const pmAnswer =
     >
   >();
 
+const pmSandbox =
+  vi.fn<
+    () => Promise<{ refusal: "no_capabilities" | "no_namespaces" | null }>
+  >();
+
 vi.mock("@/bindings", () => ({
   commands: {
     pmSend: (text: string, on: Channel<SessionEvent>) => pmSend(text, on),
@@ -49,6 +54,7 @@ vi.mock("@/bindings", () => ({
     pmRetry: (on: Channel<SessionEvent>) => pmRetry(on),
     pmHistory: () => pmHistory(),
     pmAnswer: (id: string, answer: SandboxAnswer) => pmAnswer(id, answer),
+    pmSandbox: () => pmSandbox(),
     projectGet: () => projectGet(),
     projectPick: () => projectPick(),
   },
@@ -105,6 +111,8 @@ beforeEach(() => {
   projectPick.mockReset();
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
+  pmSandbox.mockReset();
+  pmSandbox.mockResolvedValue({ refusal: null });
   useChat.getState().reset();
 });
 
@@ -265,6 +273,17 @@ describe("the chat box", () => {
     emit({ kind: "failed", message: "claude is not installed" });
 
     expect(await screen.findByText("claude is not installed")).toBeTruthy();
+  });
+
+  it("a failed turn the sandbox refused says why in place of the raw error", async () => {
+    pmSandbox.mockResolvedValue({ refusal: "no_capabilities" });
+    await sendMessage("hello");
+    emit({ kind: "failed", message: "bwrap: loopback: Failed RTM_NEWADDR" });
+
+    expect(
+      await screen.findByText("Ubuntu restricts the sandbox"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/RTM_NEWADDR/)).toBeNull();
   });
 
   it("with no project the box offers a folder picker", async () => {
