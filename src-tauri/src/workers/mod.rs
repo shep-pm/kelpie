@@ -6,6 +6,12 @@
 //! running, and one [`GithubSource`] per project, which the board's poller shares
 //! so every GitHub call of a project goes through one [`Hold`].
 //!
+//! A turn that ends with its branch clean hands its draft over
+//! ([`hand_over`], `docs/design/tickets.md`, Use case): the sink `start` gives the
+//! engine forwards the worker's events to its feed and then opens the draft on a
+//! thread of its own, and [`Hands`] is what the board's read runs again for every
+//! worker that still owes one.
+//!
 //! A ticket is read before a slot is held, so a closed issue, a number naming
 //! nothing and a project whose origin is not on GitHub are each refused with a
 //! line saying which. A start does not refuse a ticket that is blocked or has
@@ -19,9 +25,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
-use kelpie_engine::github::gh::{Gh, GithubSource, hold::Hold};
+use kelpie_engine::github::gh::{Gh, GithubPulls, GithubSource, hold::Hold};
 use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
 use kelpie_engine::lease::Leases;
+use kelpie_engine::local_paths::LocalPaths;
 use kelpie_engine::login::Store;
 use kelpie_engine::session::{Session, log};
 use kelpie_engine::settings::{ConfigDir, Settings};
@@ -36,10 +43,12 @@ use tauri::State;
 use tauri::ipc::Channel;
 
 mod feed;
+pub mod hand_over;
 mod open;
 mod plan;
 
 pub use feed::Feed;
+pub use hand_over::{Forge, Hands};
 use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
 
@@ -71,29 +80,53 @@ type Opener<'a> = dyn Fn(&OpenOn<'_>, &Opening<'_>) -> Result<Session, String> +
 /// The feeds of every worker, by project and ticket
 type Feeds = Arc<Mutex<BTreeMap<(String, String), Arc<Feed>>>>;
 
+/// The sessions of the workers kelpie keeps, by project and ticket
+type SessionMap = Mutex<BTreeMap<(String, String), Arc<Session>>>;
+
+/// The same, held behind an `Arc`
+///
+/// So a finished turn's hand-over can reach its worker's session on a thread of its
+/// own ([`hand_over::Hands::retry`], [`hand_over::Sink`]).
+type Sessions = Arc<SessionMap>;
+
+/// A project's GitHub calls, made through one hold
+///
+/// The board's poller reads the tickets through `source`, and a hand-over opens its
+/// drafts through `pulls`, so a project's calls are paced as one set
+/// (`docs/design/tickets.md`, GitHub).
+#[derive(Debug)]
+struct Calls {
+    source: Arc<GithubSource>,
+    pulls: Arc<GithubPulls>,
+}
+
 /// What the app keeps for its workers, across starts
 pub struct Workers {
     data_dir: PathBuf,
     tree: Arc<ProcessTree>,
     config: ConfigDir,
     logins: Store,
-    tokens: AppTokens,
+    tokens: Arc<AppTokens>,
     /// The `gh` on the machine's `PATH`, `None` when there is none
     gh: Option<PathBuf>,
     /// Built on the first start, from the settings of the project it is for
-    leases: OnceLock<Leases>,
+    leases: OnceLock<Arc<Leases>>,
     records: Mutex<BTreeMap<String, Arc<Mutex<Records>>>>,
     /// The sessions of the workers that hold a slot, by project and ticket
     ///
     /// The engine holds a worker's session only weakly, so this map is what keeps
     /// one alive. [`Workers::session`] and every start give up the sessions of
     /// workers that no longer hold a slot.
-    sessions: Mutex<BTreeMap<(String, String), Arc<Session>>>,
+    sessions: Sessions,
     /// The channels watching each worker, by project and ticket
     ///
     /// A feed outlives its worker's turns, so a tab stays attached across a Resume.
     feeds: Feeds,
-    sources: Mutex<BTreeMap<String, Arc<GithubSource>>>,
+    sources: Mutex<BTreeMap<String, Arc<Calls>>>,
+    /// What each project's hand-overs ask of GitHub, by project
+    ///
+    /// Built from [`Workers::calls`], or stood in by [`Workers::stand_in_forge`].
+    forges: Mutex<BTreeMap<String, Arc<Forge>>>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -123,13 +156,14 @@ impl Workers {
             tree: Arc::clone(tree),
             config: config.clone(),
             logins: logins.clone(),
-            tokens: system_tokens(tree, data_dir),
+            tokens: Arc::new(system_tokens(tree, data_dir)),
             gh: worker::login::helper_on_path(),
             leases: OnceLock::new(),
             records: Mutex::default(),
-            sessions: Mutex::default(),
+            sessions: Arc::default(),
             feeds: Arc::default(),
             sources: Mutex::default(),
+            forges: Mutex::default(),
         }
     }
 
@@ -158,9 +192,22 @@ impl Workers {
     ///
     /// The checkout's origin is not a GitHub repo, or there is no `gh` to ask.
     pub fn source(&self, project_id: &str, folder: &Path) -> Result<Arc<GithubSource>, String> {
+        Ok(Arc::clone(&self.calls(project_id, folder)?.source))
+    }
+
+    /// The GitHub calls of the project `project_id`, made on the first ask
+    ///
+    /// One [`Hold`] per project, so its ticket reads and its drafts are paced as one
+    /// set. A project's drafts are refused before any call when a title or a body names
+    /// this machine, which is what `LocalPaths` holds its own folders for.
+    ///
+    /// # Errors
+    ///
+    /// As [`Workers::source`].
+    fn calls(&self, project_id: &str, folder: &Path) -> Result<Arc<Calls>, String> {
         let mut kept = lock(&self.sources);
-        if let Some(source) = kept.get(project_id) {
-            return Ok(Arc::clone(source));
+        if let Some(calls) = kept.get(project_id) {
+            return Ok(Arc::clone(calls));
         }
         let repo = origin_of(&self.tree, folder).ok_or_else(|| {
             format!(
@@ -173,9 +220,16 @@ impl Workers {
             .clone()
             .ok_or("the gh command is not on this machine's PATH, so kelpie cannot read GitHub")?;
         let hold = Hold::new(Gh::new(gh, &self.tree));
-        let source = Arc::new(GithubSource::new(hold, repo));
-        kept.insert(project_id.to_owned(), Arc::clone(&source));
-        Ok(source)
+        let calls = Arc::new(Calls {
+            source: Arc::new(GithubSource::new(hold.clone(), repo.clone())),
+            pulls: Arc::new(GithubPulls::new(
+                hold,
+                repo,
+                LocalPaths::new([folder, self.data_dir.as_path()]),
+            )),
+        });
+        kept.insert(project_id.to_owned(), Arc::clone(&calls));
+        Ok(calls)
     }
 
     /// The session of the worker on `ticket` while it holds a slot
@@ -275,12 +329,18 @@ impl Workers {
             tools,
             tokens: Some(&self.tokens),
             gh: self.gh.as_deref(),
-            leases: Some(leases),
+            leases: Some(leases.as_ref()),
             open: &opener,
         };
-        // The session logs its own turn, and the feed follows it live
-        let feed = self.feed(project_id, &ticket.id);
-        let started = worker::start(&project, ticket, move |event| feed.forward(event))
+        // The session logs its own turn, the feed follows it live, and a turn that ends
+        // with its branch clean hands its draft over, on a thread of its own
+        let hands = self.hands(project_id, folder, &plan)?;
+        let mut sink = hand_over::Sink {
+            feed: self.feed(project_id, &ticket.id),
+            ticket: ticket.id.clone(),
+            hands,
+        };
+        let started = worker::start(&project, ticket, move |event| sink.hear(event))
             .map_err(|error| error.to_string())?;
         let waiting = matches!(started, Started::Waiting { .. });
         if let Started::Running { session, .. } = started {
@@ -409,13 +469,13 @@ impl Workers {
         self.start(project_id, folder, tools, &ticket, open)
     }
 
-    fn leases(&self, project_id: &str) -> Result<&Leases, String> {
+    fn leases(&self, project_id: &str) -> Result<&Arc<Leases>, String> {
         if let Some(leases) = self.leases.get() {
             return Ok(leases);
         }
         let settings =
             Settings::load(&self.config, project_id).map_err(|error| error.to_string())?;
-        Ok(self.leases.get_or_init(|| Leases::new(&settings)))
+        Ok(self.leases.get_or_init(|| Arc::new(Leases::new(&settings))))
     }
 }
 
