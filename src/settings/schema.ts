@@ -23,6 +23,9 @@ const LABELS: Record<string, string> = {
   "run-without-sandbox": "Run without a sandbox",
   "harness-global-folder": "Read the harness's global folder",
   "network-allowlist": "Allowed domains",
+  "pick-up": "Pick up issues from",
+  "ready-label": "Ready label",
+  "done-window": "Done window (days)",
 };
 
 /** Fields the form leaves out: each bridge's update row is on the harness's login row, and a lease's capacity has no row of its own yet. */

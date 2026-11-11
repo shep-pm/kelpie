@@ -70,6 +70,21 @@ const schema = {
         { const: "goose", description: "goose", type: "string" },
       ],
     },
+    PickUp: {
+      description: "Who a project's tickets come from",
+      oneOf: [
+        {
+          const: "me",
+          description: "Me: the issues the signed-in login opened",
+          type: "string",
+        },
+        {
+          const: "everyone",
+          description: "Everyone: every open issue",
+          type: "string",
+        },
+      ],
+    },
     Theme: {
       description: "How kelpie's window looks",
       oneOf: [
@@ -83,10 +98,23 @@ const schema = {
   additionalProperties: false,
   properties: {
     $schema: { default: null, type: ["string", "null"] },
+    "done-window": {
+      default: null,
+      description:
+        "How many days a closed ticket stays in the board's Done column.",
+      maximum: 365,
+      minimum: 1,
+      type: ["integer", "null"],
+    },
     host: {
       default: null,
       description: "The host a provider runs on",
       type: ["string", "null"],
+    },
+    "pick-up": {
+      anyOf: [{ $ref: "#/$defs/PickUp" }, { type: "null" }],
+      default: null,
+      description: "Whose of a project's issues kelpie picks up as tickets.",
     },
     "pm-effort": {
       default: null,
@@ -107,6 +135,11 @@ const schema = {
       default: null,
       description: "Whether an agent may read anywhere by default",
       type: ["boolean", "null"],
+    },
+    "ready-label": {
+      default: null,
+      description: "The label a ticket carries to be Ready.",
+      type: ["string", "null"],
     },
     theme: {
       anyOf: [{ $ref: "#/$defs/Theme" }, { type: "null" }],
@@ -565,6 +598,114 @@ describe("the bridge row", () => {
         { kind: "global" },
         "bridge-updates",
         { "codex-acp": "kelpies-pin", "claude-acp": "registry-ask-first" },
+      ),
+    );
+  });
+});
+
+/** The Project tab's fields, each board field `over` written as its value and layer. */
+function boardFields(over: Record<string, [Value, string]> = {}): FieldView[] {
+  const base: FieldView[] = [
+    field("pm-harness", "claude-code", "kelpie"),
+    field("pm-model", "opus", "kelpie"),
+    field("pick-up", "me", "kelpie"),
+    field("ready-label", "ready-for-agent", "kelpie"),
+    field("done-window", 14, "kelpie"),
+  ];
+  return base.map((f) => {
+    const set = over[f.key];
+    return set === undefined ? f : field(f.key, set[0], set[1]);
+  });
+}
+
+describe("the board's fields", () => {
+  it("the Project tab shows whose issues it picks up, its ready label and its Done window", async () => {
+    settingsGet.mockResolvedValue(ok(resolved(boardFields())));
+    await openPage();
+    openProjectTab();
+
+    for (const name of [
+      "Pick up issues from",
+      "Ready label",
+      "Done window (days)",
+    ]) {
+      const shown = await screen.findByRole("group", { name });
+      expect(within(shown).getByText("from kelpie")).toBeTruthy();
+    }
+  });
+
+  it("whose issues the project picks up is written as it is chosen", async () => {
+    settingsGet.mockResolvedValue(ok(resolved(boardFields())));
+    await openPage();
+    openProjectTab();
+
+    const pick = await screen.findByRole("group", {
+      name: "Pick up issues from",
+    });
+    const select = within(pick).getByRole("combobox", {
+      name: "Pick up issues from",
+    });
+    settingsGet.mockResolvedValue(
+      ok(resolved(boardFields({ "pick-up": ["everyone", "project"] }))),
+    );
+
+    fireEvent.keyDown(select, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /Everyone/ }));
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(
+        { kind: "project", id: "p1" },
+        "pick-up",
+        "everyone",
+      ),
+    );
+    const after = await screen.findByRole("group", {
+      name: "Pick up issues from",
+    });
+    expect(within(after).getByText("set in this project")).toBeTruthy();
+  });
+
+  it("the ready label is written when the field is left", async () => {
+    settingsGet.mockResolvedValue(ok(resolved(boardFields())));
+    await openPage();
+    openProjectTab();
+
+    const label = await screen.findByRole("textbox", { name: "Ready label" });
+    settingsGet.mockResolvedValue(
+      ok(resolved(boardFields({ "ready-label": ["ship-it", "project"] }))),
+    );
+
+    fireEvent.change(label, { target: { value: "ship-it" } });
+    fireEvent.blur(label);
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(
+        { kind: "project", id: "p1" },
+        "ready-label",
+        "ship-it",
+      ),
+    );
+  });
+
+  it("the Done window is written as it changes", async () => {
+    settingsGet.mockResolvedValue(ok(resolved(boardFields())));
+    await openPage();
+    openProjectTab();
+
+    const days = await screen.findByRole("spinbutton", {
+      name: "Done window (days)",
+    });
+    settingsGet.mockResolvedValue(
+      ok(resolved(boardFields({ "done-window": [30, "project"] }))),
+    );
+
+    fireEvent.change(days, { target: { value: "30" } });
+
+    await waitFor(() =>
+      expect(settingsSet).toHaveBeenCalledWith(
+        { kind: "project", id: "p1" },
+        "done-window",
+        30,
       ),
     );
   });

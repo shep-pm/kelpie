@@ -11,6 +11,9 @@ use crate::run::RunId;
 // Writing one field to one layer, in its own file to stay under the 1000-line cap
 mod writes;
 
+// The board's three fields, in their own file beside the types they read
+mod tickets;
+
 /// A config folder of its own for one test, never written over by another
 struct Dir(PathBuf);
 
@@ -180,6 +183,18 @@ fn an_unset_field_comes_from_the_built_in_layer() {
             },
             lease_capacity: Layered {
                 value: BTreeMap::from([(CARGO_TEST.to_string(), CARGO_TEST_CAPACITY)]),
+                from: Layer::BuiltIn,
+            },
+            pick_up: Layered {
+                value: PickUp::Me,
+                from: Layer::BuiltIn,
+            },
+            ready_label: Layered {
+                value: "ready-for-agent".to_string(),
+                from: Layer::BuiltIn,
+            },
+            done_window: Layered {
+                value: BUILT_IN.done_window,
                 from: Layer::BuiltIn,
             },
         }

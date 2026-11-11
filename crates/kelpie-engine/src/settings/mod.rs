@@ -5,7 +5,9 @@
 //! `docs/settings.schema.json` all come from that. A layer file holds only the
 //! fields it sets, and every read and write checks it against the schema first.
 //! [`layers`] resolves a field to the nearest layer that sets it and names the
-//! layer the value came from.
+//! layer the value came from. A rule of kelpie's own that the schema cannot
+//! say, such as a ready label holding a comma, is `Field::own_rule` in
+//! `tickets`, checked beside the schema on a read and a write alike.
 //!
 //! The built-in layer is [`BUILT_IN`] in code, not a shipped file. A harness's
 //! login is not a setting here at all: it lives in the OS keychain.
@@ -41,6 +43,7 @@ mod error;
 pub mod layers;
 mod schema;
 pub mod theme;
+pub mod tickets;
 
 #[cfg(test)]
 mod tests;
@@ -48,6 +51,7 @@ mod tests;
 pub use error::SettingsError;
 pub use layers::{Layer, LayerFile, Layered};
 pub use theme::Theme;
+pub use tickets::{DoneWindow, PickUp};
 
 /// The schema every settings file points at with `$schema`
 pub const SCHEMA_REF: &str =
@@ -287,11 +291,20 @@ pub enum Field {
 
     /// How many commands may hold each lease at once
     LeaseCapacity,
+
+    /// Whose issues the project picks up as tickets
+    PickUp,
+
+    /// The label a ticket carries to be Ready
+    ReadyLabel,
+
+    /// How many days a closed ticket stays in Done
+    DoneWindow,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 18] = [
+    pub const ALL: [Field; 21] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -310,6 +323,9 @@ impl Field {
         Field::RunWithoutSandbox,
         Field::BridgeUpdates,
         Field::LeaseCapacity,
+        Field::PickUp,
+        Field::ReadyLabel,
+        Field::DoneWindow,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -334,6 +350,9 @@ impl Field {
             Self::RunWithoutSandbox => "run-without-sandbox",
             Self::BridgeUpdates => "bridge-updates",
             Self::LeaseCapacity => "lease-capacity",
+            Self::PickUp => "pick-up",
+            Self::ReadyLabel => "ready-label",
+            Self::DoneWindow => "done-window",
         }
     }
 }
@@ -551,6 +570,15 @@ pub struct Settings {
 
     /// How many commands hold each lease at once, keyed by the lease's name such as `cargo-test`. A lease the map does not name takes kelpie's own capacity for it, and no lease holds zero.
     pub lease_capacity: Option<BTreeMap<String, Capacity>>,
+
+    /// Whose of a project's issues kelpie picks up as tickets. An issue carrying the ready label is a ticket either way.
+    pub pick_up: Option<PickUp>,
+
+    /// The label a ticket carries to be Ready, named as the ticket source names it. It names one label, so it holds no comma.
+    pub ready_label: Option<String>,
+
+    /// How many days a closed ticket stays in the board's Done column. A closed ticket older than this is off the board.
+    pub done_window: Option<DoneWindow>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -609,6 +637,15 @@ pub struct Defaults {
 
     /// The capacity kelpie gives each lease it names, by name
     pub lease_capacity: &'static [(&'static str, Capacity)],
+
+    /// Whose issues kelpie picks up as tickets when no project says
+    pub pick_up: PickUp,
+
+    /// The label a ticket carries to be Ready when no project names its own
+    pub ready_label: &'static str,
+
+    /// How long a closed ticket stays in Done when no layer says
+    pub done_window: DoneWindow,
 }
 
 /// kelpie's built-in layer, in code rather than a shipped file
@@ -633,6 +670,9 @@ pub const BUILT_IN: Defaults = Defaults {
     harness_global_folder: false,
     run_without_sandbox: false,
     lease_capacity: &[(CARGO_TEST, CARGO_TEST_CAPACITY)],
+    pick_up: PickUp::Me,
+    ready_label: tickets::READY_FOR_AGENT,
+    done_window: tickets::FOURTEEN_DAYS,
 };
 
 /// Every setting's value, each with the layer kelpie took it from
@@ -691,6 +731,15 @@ pub struct Resolved {
 
     /// How many commands hold each lease at once, for the leases a file names
     pub lease_capacity: Layered<BTreeMap<String, Capacity>>,
+
+    /// Whose issues the project picks up as tickets
+    pub pick_up: Layered<PickUp>,
+
+    /// The label a ticket carries to be Ready
+    pub ready_label: Layered<String>,
+
+    /// How many days a closed ticket stays in Done
+    pub done_window: Layered<DoneWindow>,
 }
 
 impl Resolved {
@@ -848,6 +897,12 @@ fn write_field(
     } else {
         if let Some((_, reason)) = schema::check(&rule, value, field.key()) {
             return Err(SettingsError::ValueRefused { field, reason });
+        }
+        if let Some(reason) = field.own_rule(value) {
+            return Err(SettingsError::ValueRefused {
+                field,
+                reason: reason.to_string(),
+            });
         }
         doc.fields.insert(field.key().to_string(), value.clone());
     }
