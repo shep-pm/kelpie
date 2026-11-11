@@ -934,6 +934,7 @@ fn entries(paths: &[&str]) -> Config {
 }
 
 mod credential;
+mod hand_over;
 mod lease;
 
 mod tell;
