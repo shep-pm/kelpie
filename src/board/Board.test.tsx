@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BoardEvent,
@@ -200,6 +201,28 @@ describe("the Board panel", () => {
     expect((await screen.findByRole("status")).textContent).toBe(
       "The ticket is closed.",
     );
+  });
+
+  it("a Start error stays in the line when a move that snaps back answers after it", async () => {
+    let answer: (view: Ok<MoveView>) => void = () => {};
+    boardMove.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    workerStart.mockResolvedValueOnce(err("The ticket is closed."));
+    await open();
+
+    dragTo("Sketch the graph", "Ready");
+    await waitFor(() => expect(boardMove).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+    await waitFor(() =>
+      expect(status().textContent).toContain("The ticket is closed."),
+    );
+    await act(async () =>
+      answer(ok({ kind: "snap_back", line: "Not that way." })),
+    );
+
+    expect(status().textContent).toContain("The ticket is closed.");
+    expect(status().textContent).toContain("Not that way.");
   });
 
   it("a Start that waits for a slot says so", async () => {
@@ -502,5 +525,39 @@ describe("the Board panel", () => {
 
     expect(titlesIn("Ready")).toEqual([]);
     expect(titlesIn("Building")).toEqual(["Wire the poller"]);
+  });
+
+  it("a watch the panel closed before it was sent is never sent", async () => {
+    render(
+      <StrictMode>
+        <Board onOpenWorker={() => {}} />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(boardWatch).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(boardWatch).toHaveBeenCalledTimes(1);
+    await emitBoard();
+    expect(titlesIn("Ready")).toEqual(["Wire the poller"]);
+  });
+
+  it("a watch waits for the one before to answer, so the later poller stays", async () => {
+    const answers: (() => void)[] = [];
+    boardWatch.mockImplementationOnce(
+      (channel: Channel<BoardEvent>) =>
+        new Promise((resolve) => {
+          channels.push(channel);
+          answers.push(() => resolve(ok(null)));
+        }),
+    );
+    useBoard.getState().watch();
+    await waitFor(() => expect(answers).toHaveLength(1));
+    useBoard.getState().watch();
+    await settle();
+
+    expect(boardWatch).toHaveBeenCalledTimes(1);
+    answers[0]?.();
+    await waitFor(() => expect(boardWatch).toHaveBeenCalledTimes(2));
+    expect(channels).toHaveLength(2);
   });
 });

@@ -6,6 +6,7 @@
  * those and dnd-kit runs unmocked.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -277,6 +278,21 @@ describe("<KanbanBoard>", () => {
     expect(screen.getByRole("status").textContent).toBe("Opened.");
   });
 
+  it("a move's line that comes after a notice shows beside it", async () => {
+    let answer: (outcome: MoveOutcome) => void = () => {};
+    const onMove = vi.fn(
+      () => new Promise<MoveOutcome>((resolve) => (answer = resolve)),
+    );
+    const view = mount({ onMove });
+    await dragTo("Write it", "In progress");
+    await waitFor(() => expect(onMove).toHaveBeenCalledTimes(1));
+
+    view.rerender(board({ onMove, notice: "Start failed." }));
+    await act(async () => answer({ kind: "snap_back", line: "No." }));
+
+    expect(screen.getByRole("status").textContent).toBe("No. Start failed.");
+  });
+
   it("dropping a card on its own column asks nothing", async () => {
     const onMove = vi.fn(async () => moved);
     mount({ onMove });
@@ -460,6 +476,35 @@ describe("<KanbanBoard>", () => {
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
+  });
+
+  it("an answer to an earlier move of a card does not undo a later move of it", async () => {
+    const answers: ((outcome: MoveOutcome) => void)[] = [];
+    const onMove = vi.fn(
+      () => new Promise<MoveOutcome>((resolve) => answers.push(resolve)),
+    );
+    mount({ onMove });
+    const moveWith = async (name: string, to: string) => {
+      const trigger = within(card(name)).getByRole("button", {
+        name: `Move ${name}`,
+      });
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Enter" });
+      fireEvent.click(await screen.findByRole("menuitem", { name: to }));
+    };
+
+    await moveWith("Write it", "In progress");
+    await waitFor(() => expect(onMove).toHaveBeenCalledTimes(1));
+    await moveWith("Write it", "Done");
+    await waitFor(() => expect(onMove).toHaveBeenCalledTimes(2));
+    await act(async () =>
+      answers[0]?.({ kind: "snap_back", line: "Not that way." }),
+    );
+
+    expect(cardTitles("Done")).toEqual(["Write it"]);
+    expect(screen.getByRole("status").textContent).toBe("");
+    await act(async () => answers[1]?.(moved));
+    expect(cardTitles("Done")).toEqual(["Write it"]);
   });
 
   it("the Move to button does not select the card", async () => {

@@ -20,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
@@ -66,7 +67,7 @@ type Props<C extends string, T extends KanbanTicket<C>> = {
   onSelect?: (ticket: T) => void;
   /** Replaces the title inside a card. */
   renderCard?: (ticket: T) => ReactNode;
-  /** A line for the status area when no move has one. */
+  /** A line for the status area, shown beside a move's own line. */
   notice?: string | null;
   className?: string;
 };
@@ -149,6 +150,9 @@ export function KanbanBoard<C extends string, T extends KanbanTicket<C>>({
     new Map(),
   );
   const [line, setLine] = useState<string | null>(null);
+  // Each move takes a number, so an answer that comes after a newer move of the same ticket changes nothing.
+  const moves = useRef(0);
+  const latest = useRef(new Map<string, number>());
 
   // A new board answers every move that has settled. One still waiting stays.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `tickets` is the trigger, not a value read
@@ -178,6 +182,8 @@ export function KanbanBoard<C extends string, T extends KanbanTicket<C>>({
   const move = useCallback(
     async (ticket: T, to: C) => {
       setLine(null);
+      const mine = ++moves.current;
+      latest.current.set(ticket.id, mine);
       setPending((now) => new Map(now).set(ticket.id, { to, settled: false }));
       let outcome: MoveOutcome;
       try {
@@ -188,6 +194,7 @@ export function KanbanBoard<C extends string, T extends KanbanTicket<C>>({
           line: error instanceof Error ? error.message : String(error),
         };
       }
+      if (latest.current.get(ticket.id) !== mine) return;
       setPending((now) => {
         const next = new Map(now);
         if (outcome.kind === "moved")
@@ -217,7 +224,7 @@ export function KanbanBoard<C extends string, T extends KanbanTicket<C>>({
           role="status"
           className="min-h-5 shrink-0 px-1 text-sm text-muted-foreground"
         >
-          {line ?? notice}
+          {[line, notice].filter(Boolean).join(" ")}
         </p>
         <div
           data-slot="kanban-board"

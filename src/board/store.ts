@@ -24,6 +24,9 @@ type BoardState = {
 /** The channel the engine streams to, `null` once closed. */
 let open: Channel<BoardEvent> | null = null;
 
+/** The `boardWatch` call before, so the engine hears the watches in the order they were asked. */
+let before: Promise<unknown> = Promise.resolve();
+
 const empty = { view: null, unavailable: null } satisfies Partial<BoardState>;
 
 /**
@@ -33,7 +36,12 @@ const empty = { view: null, unavailable: null } satisfies Partial<BoardState>;
  * A channel has no close of its own, and the engine's poller ends when a send
  * to the window fails or a later watch replaces it. So `close` swaps the
  * channel's handler for one that drops events, and a `watch` that follows
- * replaces the poller.
+ * replaces the poller. Until then a closed board's poller keeps reading once a
+ * minute: the engine has no command to stop it.
+ *
+ * Each `boardWatch` waits for the one before to answer, since the engine
+ * finishes two calls in flight in either order, and the later poller must be the
+ * one that stays. A watch closed before its turn is never sent.
  */
 export const useBoard = create<BoardState>()((set) => ({
   ...empty,
@@ -49,13 +57,18 @@ export const useBoard = create<BoardState>()((set) => ({
         set({ view, unavailable: null });
       }
     };
-    commands
-      .boardWatch(channel)
-      .then((result) => (result.status === "error" ? result.error : null))
-      .catch((error: unknown) => String(error))
-      .then((problem) => {
-        if (problem !== null && open === channel) set({ unavailable: problem });
-      });
+    const send = async (): Promise<string | null> => {
+      if (open !== channel) return null;
+      try {
+        const result = await commands.boardWatch(channel);
+        return result.status === "error" ? result.error : null;
+      } catch (error) {
+        return String(error);
+      }
+    };
+    before = before.then(send).then((problem) => {
+      if (problem !== null && open === channel) set({ unavailable: problem });
+    });
   },
   close: () => {
     if (open) open.onmessage = () => {};
