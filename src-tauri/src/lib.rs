@@ -27,6 +27,7 @@ use tauri_specta::collect_commands;
 
 pub mod agents;
 pub mod bridges;
+pub mod github;
 pub mod pm;
 pub mod sandbox_setup;
 pub mod settings;
@@ -61,6 +62,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             settings::settings_schema,
             bridges::bridge_status,
             bridges::bridge_approve,
+            github::github_status,
             agents::agents_list,
             agents::agent_get,
             agents::agent_preview,

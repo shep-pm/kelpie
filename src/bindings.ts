@@ -198,6 +198,18 @@ export const commands = {
 	 */
 	bridgeApprove: (id: string) => typedError<string | null, string>(__TAURI_INVOKE("bridge_approve", { id })),
 	/**
+	 *  Whose `gh` login every read and draft pull request goes out as
+	 * 
+	 *  The one `gh` call is `gh api user`, through the app's process tree (ADR 0001).
+	 *  Nothing here signs anyone in or reads a token.
+	 * 
+	 *  # Errors
+	 * 
+	 *  `gh` answered something kelpie cannot read, or its answer said a rate limit
+	 *  is used up.
+	 */
+	githubStatus: () => typedError<GithubStatus, string>(__TAURI_INVOKE("github_status")),
+	/**
 	 *  The agents the config folder holds, and the global `pm`, which is always there to edit
 	 * 
 	 *  # Errors
@@ -343,6 +355,19 @@ export type Frontmatter = {
 	/**  `append` puts this file's body after its parent's, and none replaces it */
 	body: string | null,
 };
+
+/**  Whose `gh` login kelpie acts as */
+export type GithubStatus = 
+/**  `gh` holds a login, and `gh api user` names it */
+{ kind: "signed_in"; 
+/**  The login `gh api user` printed */
+login: string } | 
+/**  `gh` ran and said it has no login, carrying `gh`'s own line */
+{ kind: "not_signed_in"; 
+/**  What `gh` said, which is where the row's advice comes from */
+line: string } | 
+/**  There is no `gh` on this machine's `PATH` to ask */
+{ kind: "no_gh" };
 
 /**
  *  One line of a session's log: a message the maintainer sent, or an event the session streamed
