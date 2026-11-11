@@ -10,6 +10,9 @@
 //! Each harness has one keychain entry, under the service `kelpie` and the
 //! harness's id as the user name.
 //!
+//! A keychain that is locked or absent is named with what to do about it: the platform's own text
+//! for it says nothing a person can act on.
+//!
 //! # Quick start
 //!
 //! ```
@@ -29,6 +32,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// The keychain service every login is kept under
 const SERVICE: &str = "kelpie";
+
+/// What to do when the keychain cannot be reached at all: it is locked, or there is none
+const LOCKED_OR_MISSING_KEYRING: &str = "the system keyring is locked or missing. \
+    Unlock it, or start one such as GNOME Keyring or KWallet, then try again";
 
 /// Where the logins are kept
 ///
@@ -173,7 +180,8 @@ pub enum LoginError {
 
     /// The OS keychain refused or could not be reached: locked, denied, or absent
     Keychain {
-        /// What the keychain said, without any value
+        /// What the keychain said, or kelpie's own words where the platform's name no action a
+        /// person could take. Never a value.
         reason: String,
     },
 }
@@ -183,9 +191,12 @@ impl From<keyring::Error> for LoginError {
         // The data-carrying variants hold the stored bytes, so only the ones that describe the
         // platform's own failure pass their text on
         let reason = match error {
-            keyring::Error::PlatformFailure(_)
-            | keyring::Error::NoStorageAccess(_)
-            | keyring::Error::NoDefaultStore => error.to_string(),
+            keyring::Error::PlatformFailure(_) | keyring::Error::NoDefaultStore => {
+                error.to_string()
+            }
+            // The Secret Service store lands here for a locked, absent or unresponsive login
+            // collection, and its text names nothing a person could do about it
+            keyring::Error::NoStorageAccess(_) => LOCKED_OR_MISSING_KEYRING.to_owned(),
             keyring::Error::BadEncoding(_) | keyring::Error::BadDataFormat(..) => {
                 "the stored login could not be read".to_owned()
             }
