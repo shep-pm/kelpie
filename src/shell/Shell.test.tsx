@@ -29,6 +29,7 @@ vi.mock("@/bindings", () => ({
       channel.onmessage({
         kind: "board",
         held_until: null,
+        needs_you: 0,
         tickets: [
           {
             id: "12",
@@ -37,6 +38,7 @@ vi.mock("@/bindings", () => ({
             column: "ready",
             url: "https://github.com/o/r/issues/12",
             pull_url: null,
+            needs_you: [],
           },
         ],
       });

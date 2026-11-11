@@ -84,11 +84,13 @@ const ticket = (
   column,
   url: `https://github.com/o/r/issues/${id}`,
   pull_url: null,
+  needs_you: [],
   ...more,
 });
 
 const VIEW: BoardView = {
   held_until: null,
+  needs_you: 0,
   tickets: [
     ticket("11", "Sketch the graph", "draft"),
     ticket("12", "Wire the poller", "ready", { priority: 1 }),
@@ -420,6 +422,7 @@ describe("the Board panel", () => {
   it("a Review ticket with no pull request opens its issue", async () => {
     await open({
       held_until: null,
+      needs_you: 0,
       tickets: [ticket("14", "Read the board", "review")],
     });
 
@@ -520,6 +523,7 @@ describe("the Board panel", () => {
 
     await emitBoard({
       held_until: null,
+      needs_you: 0,
       tickets: [ticket("12", "Wire the poller", "building")],
     });
 
