@@ -1,4 +1,4 @@
-//! The draft pull request, its edit and a branch's head, through a scripted
+//! The draft pull request, its edit, state, ready mark and merge, and a branch's head, through a scripted
 //! [`Runner`], so no test needs `gh`, a login or the network
 //!
 //! [`Runner`]: super::Runner
@@ -11,7 +11,7 @@ use super::pulls::GithubPulls;
 use super::tests::{Script, answered, gh_over, refused};
 use crate::github::ForgeSlug;
 use crate::local_paths::LocalPaths;
-use crate::ticket::{ForgeError, Pulls};
+use crate::ticket::{ForgeError, PullState, Pulls};
 
 const FOLDER: &str = "/work/koji";
 
@@ -178,4 +178,107 @@ fn a_held_limit_stops_the_call() {
         assert!(matches!(answer, Err(ForgeError::Held(_))), "{answer:?}");
     }
     assert_eq!(script.asked().len(), 1, "a held call starts no child");
+}
+
+// A merge commit, and only of the head asked about. No `--delete-branch`, which
+// would also switch branches in gh's working folder. An empty `--body`, where
+// GitHub's default is the title, which a release tool lists twice.
+#[test]
+fn a_merge_is_pinned_to_its_head_with_a_merge_commit_and_an_empty_body() {
+    let script = Script::answering(answered(""));
+
+    pulls_over(&script).merge(number(30), "1a2b").unwrap();
+
+    let asked = script.asked();
+    assert_eq!(
+        asked,
+        [strings(&[
+            "pr",
+            "merge",
+            "30",
+            "--repo",
+            "shep-pm/koji",
+            "--merge",
+            "--match-head-commit",
+            "1a2b",
+            "--body",
+            "",
+        ])]
+    );
+    for never in ["--squash", "-s", "--rebase", "-r", "--auto", "--admin"] {
+        assert!(!asked[0].iter().any(|arg| arg == never), "{never}");
+    }
+}
+
+#[test]
+fn mark_ready_asks_gh_to_mark_that_pull_ready() {
+    let script = Script::answering(answered(""));
+
+    pulls_over(&script).mark_ready(number(12)).unwrap();
+
+    assert_eq!(
+        script.asked(),
+        [strings(&["pr", "ready", "12", "--repo", "shep-pm/koji"])]
+    );
+}
+
+#[test]
+fn disable_auto_merge_asks_gh_to_disable_it() {
+    let script = Script::answering(answered(""));
+
+    pulls_over(&script).disable_auto_merge(number(12)).unwrap();
+
+    assert_eq!(
+        script.asked(),
+        [strings(&[
+            "pr",
+            "merge",
+            "12",
+            "--repo",
+            "shep-pm/koji",
+            "--disable-auto",
+        ])]
+    );
+}
+
+#[test]
+fn a_merged_pull_reads_as_merged_and_a_closed_one_as_closed() {
+    let script = Script::answering(answered("{\"state\":\"MERGED\"}\n"));
+    script.then(answered("{\"state\":\"CLOSED\"}\n"));
+    script.then(answered("{\"state\":\"OPEN\"}\n"));
+    script.then(answered("{\"state\":\"DRAFT\"}\n"));
+    let pulls = pulls_over(&script);
+
+    let merged = pulls.state(number(12));
+    let closed = pulls.state(number(13));
+    let open = pulls.state(number(14));
+    let other = pulls.state(number(15));
+
+    assert_eq!(merged, Ok(PullState::Merged));
+    assert_eq!(closed, Ok(PullState::Closed));
+    assert_eq!(open, Ok(PullState::Open));
+    assert!(matches!(other, Err(ForgeError::Unreadable(_))), "{other:?}");
+    assert_eq!(
+        script.asked()[0],
+        strings(&[
+            "pr",
+            "view",
+            "12",
+            "--repo",
+            "shep-pm/koji",
+            "--json",
+            "state"
+        ])
+    );
+}
+
+#[test]
+fn a_merge_gh_refuses_is_an_error_with_its_words() {
+    let said =
+        "GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)";
+    let script = Script::answering(refused(said));
+
+    let merged = pulls_over(&script).merge(number(30), "1a2b");
+
+    assert_eq!(merged, Err(ForgeError::Failed(said.to_owned())));
 }

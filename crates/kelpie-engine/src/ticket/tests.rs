@@ -6,7 +6,7 @@ use serde_json::json;
 use std::num::NonZeroU64;
 
 use super::fake::{Asked, FakePulls, FakeTickets, PullCall};
-use super::{ForgeError, GithubTickets, Issue, Listed, Pulls, TicketId, Tickets};
+use super::{ForgeError, GithubTickets, Issue, Listed, PullState, Pulls, TicketId, Tickets};
 use crate::github::{Cooldown, Timestamp};
 
 fn id(text: &str) -> TicketId {
@@ -225,6 +225,49 @@ fn the_fake_records_each_comment_and_close() {
             Asked::Comment(seven, "merged without a closing line".to_owned()),
             Asked::Close(seven),
             Asked::Close(id("8")),
+        ]
+    );
+}
+
+#[test]
+fn the_fake_records_each_write_and_answers_a_merge_as_scripted() {
+    let fake = FakePulls::new();
+    let pulls: &dyn Pulls = &fake;
+    let seven = NonZeroU64::new(7).unwrap();
+    let refusal = ForgeError::Failed("Head branch was modified".to_owned());
+
+    assert_eq!(pulls.state(seven), Ok(PullState::Open));
+    assert_eq!(pulls.mark_ready(seven), Ok(()));
+    assert_eq!(
+        pulls.merge(seven, "abc"),
+        Ok(()),
+        "a merge succeeds unless scripted"
+    );
+    fake.script_state(seven, Ok(PullState::Merged));
+    fake.script_merge(Err(refusal.clone()));
+    fake.script_mark_ready(Err(ForgeError::LocalPath));
+
+    assert_eq!(pulls.state(seven), Ok(PullState::Merged));
+    assert_eq!(pulls.merge(seven, "def"), Err(refusal));
+    assert_eq!(pulls.mark_ready(seven), Err(ForgeError::LocalPath));
+    assert_eq!(pulls.disable_auto_merge(seven), Ok(()));
+
+    assert_eq!(
+        fake.calls(),
+        [
+            PullCall::State(seven),
+            PullCall::MarkReady(seven),
+            PullCall::Merge {
+                number: seven,
+                head: "abc".into()
+            },
+            PullCall::State(seven),
+            PullCall::Merge {
+                number: seven,
+                head: "def".into()
+            },
+            PullCall::MarkReady(seven),
+            PullCall::DisableAutoMerge(seven),
         ]
     );
 }

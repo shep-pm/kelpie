@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use super::{ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets};
+use super::{
+    ForgeError, GithubTickets, Issue, Listed, OpenPull, PullState, Pulls, TicketId, Tickets,
+};
 use crate::github::Timestamp;
 
 /// What the stand-in was asked, in order
@@ -179,6 +181,19 @@ pub enum PullCall {
         /// Its new body
         body: String,
     },
+    /// [`Pulls::state`], and the number
+    State(NonZeroU64),
+    /// [`Pulls::mark_ready`], and the number
+    MarkReady(NonZeroU64),
+    /// [`Pulls::merge`], with the number and the head it was pinned to
+    Merge {
+        /// The pull request
+        number: NonZeroU64,
+        /// The head the merge was pinned to
+        head: String,
+    },
+    /// [`Pulls::disable_auto_merge`], and the number
+    DisableAutoMerge(NonZeroU64),
 }
 
 #[derive(Debug, Default)]
@@ -186,13 +201,18 @@ struct PullScript {
     created: Option<Result<NonZeroU64, ForgeError>>,
     heads: BTreeMap<String, Result<Option<String>, ForgeError>>,
     edited: Option<Result<(), ForgeError>>,
+    states: BTreeMap<NonZeroU64, Result<PullState, ForgeError>>,
+    ready: Option<Result<(), ForgeError>>,
+    merged: Option<Result<(), ForgeError>>,
+    disarmed: Option<Result<(), ForgeError>>,
     asked: Vec<PullCall>,
 }
 
 /// A pull request source that answers from a script and records each call
 ///
 /// With no answer scripted, a call succeeds: a draft is pull request 1, a branch
-/// has no head, and an edit changes nothing.
+/// has no head, an edit, a ready mark, a merge and a disarm change nothing, and a
+/// pull request is open.
 #[derive(Debug, Default)]
 pub struct FakePulls {
     script: Mutex<PullScript>,
@@ -218,6 +238,26 @@ impl FakePulls {
     /// What [`Pulls::edit`] answers
     pub fn script_edit(&self, answer: Result<(), ForgeError>) {
         self.script().edited = Some(answer);
+    }
+
+    /// What [`Pulls::state`] answers for `number`
+    pub fn script_state(&self, number: NonZeroU64, answer: Result<PullState, ForgeError>) {
+        self.script().states.insert(number, answer);
+    }
+
+    /// What [`Pulls::mark_ready`] answers
+    pub fn script_mark_ready(&self, answer: Result<(), ForgeError>) {
+        self.script().ready = Some(answer);
+    }
+
+    /// What [`Pulls::merge`] answers, whatever head it is pinned to
+    pub fn script_merge(&self, answer: Result<(), ForgeError>) {
+        self.script().merged = Some(answer);
+    }
+
+    /// What [`Pulls::disable_auto_merge`] answers
+    pub fn script_disable_auto_merge(&self, answer: Result<(), ForgeError>) {
+        self.script().disarmed = Some(answer);
     }
 
     /// What it was asked, in order
@@ -265,5 +305,36 @@ impl Pulls for FakePulls {
             body: body.to_owned(),
         });
         script.edited.clone().unwrap_or(Ok(()))
+    }
+
+    fn state(&self, number: NonZeroU64) -> Result<PullState, ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::State(number));
+        script
+            .states
+            .get(&number)
+            .cloned()
+            .unwrap_or(Ok(PullState::Open))
+    }
+
+    fn mark_ready(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::MarkReady(number));
+        script.ready.clone().unwrap_or(Ok(()))
+    }
+
+    fn merge(&self, number: NonZeroU64, head: &str) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::Merge {
+            number,
+            head: head.to_owned(),
+        });
+        script.merged.clone().unwrap_or(Ok(()))
+    }
+
+    fn disable_auto_merge(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::DisableAutoMerge(number));
+        script.disarmed.clone().unwrap_or(Ok(()))
     }
 }
