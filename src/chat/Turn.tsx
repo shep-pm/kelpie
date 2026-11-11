@@ -4,10 +4,11 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { useChatStore } from "./context";
 import { Divider } from "./Divider";
 import { SandboxRequest } from "./SandboxRequest";
 import { SandboxSetup } from "./SandboxSetup";
-import { type Turn as TurnData, useChat } from "./store";
+import type { Turn as TurnData } from "./store";
 import { ToolSteps } from "./ToolSteps";
 import { UsageFooter } from "./UsageFooter";
 
@@ -16,6 +17,7 @@ export const SCREENFUL = 24;
 
 /** The turn with `id`, read one field at a time so a delta re-renders only its reader. */
 function useField<K extends keyof TurnData>(id: number, key: K) {
+  const useChat = useChatStore();
   return useChat((s) => s.turns.find((t) => t.id === id)?.[key]);
 }
 
@@ -51,6 +53,7 @@ function StepsOfTurn({ id }: { id: number }) {
  * turn never stacks prompts (`docs/design/system/`, SandboxRequest).
  */
 function RequestsOfTurn({ id }: { id: number }) {
+  const useChat = useChatStore();
   const requests = useField(id, "sandboxRequests") ?? [];
   const open = requests.filter((asked) => asked.answer === null);
   const first = open[0];
@@ -106,6 +109,7 @@ function Reply({ id }: { id: number }) {
 }
 
 function Failure({ id }: { id: number }) {
+  const useChat = useChatStore();
   const error = useField(id, "error");
   const state = useField(id, "state");
   const last = useChat((s) => s.turns.at(-1)?.id === id);
@@ -146,6 +150,7 @@ function Failure({ id }: { id: number }) {
  * the last turn, the only one that can be sent again.
  */
 function Interrupted({ id }: { id: number }) {
+  const useChat = useChatStore();
   const state = useField(id, "state");
   const last = useChat((s) => s.turns.at(-1)?.id === id);
   if (state !== "interrupted") return null;

@@ -27,6 +27,7 @@ use std::thread;
 use std::time::Duration;
 
 use kelpie_engine::bridge::{self, CheckOutcome, Pin, Versions};
+use kelpie_engine::github::gh::GithubSource;
 use kelpie_engine::harness::claude;
 use kelpie_engine::login::Store;
 use kelpie_engine::run::RunId;
@@ -41,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pm::{self, PmPlan};
 use crate::sandbox_setup::SandboxSetup;
+use crate::workers::Workers;
 
 /// The run file's name in the data folder
 const RUN_FILE: &str = "run.json";
@@ -344,6 +346,8 @@ pub struct AppState {
     installing: AtomicBool,
     /// Held so the bridge checks run; dropped on a quit, which wakes and ends them
     bridge_checks: Mutex<Option<Sender<()>>>,
+    /// What the app keeps for its workers across starts
+    workers: Workers,
 }
 
 impl std::fmt::Debug for AppState {
@@ -399,6 +403,7 @@ impl AppState {
         let tools = Tools::start(&data_dir)
             .map_err(|error| eprintln!("kelpie: the tools door did not open: {error}"))
             .ok();
+        let workers = Workers::new(&data_dir, &tree, &config, &logins);
         Ok(Self {
             data_dir,
             tree,
@@ -413,6 +418,7 @@ impl AppState {
             sandbox_setup: SandboxSetup::detected(),
             installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
+            workers,
         })
     }
 
@@ -758,7 +764,31 @@ impl AppState {
             .map(|(_, session)| Arc::clone(session))
     }
 
-    /// Stop every process of this run, and stop logging the PM
+    /// What the app keeps for its workers across starts
+    #[must_use]
+    pub fn workers(&self) -> &Workers {
+        &self.workers
+    }
+
+    /// kelpie's tools server, `None` when its door did not open
+    #[must_use]
+    pub fn tools(&self) -> Option<&Tools> {
+        self.tools.as_ref()
+    }
+
+    /// The tickets of the project `id`, one source for the project, shared with the poller
+    ///
+    /// # Errors
+    ///
+    /// No such project, its origin is not a GitHub repo, or there is no `gh`.
+    pub fn source(&self, id: &str) -> Result<Arc<GithubSource>, String> {
+        let folder = self
+            .project_path_of(id)
+            .ok_or_else(|| format!("kelpie has no project {id}"))?;
+        self.workers.source(id, &folder)
+    }
+
+    /// Stop every process of this run, and stop logging the PM and the workers
     ///
     /// # Errors
     ///
@@ -771,6 +801,7 @@ impl AppState {
         }
         // Before the tree stops, so no check starts a probe the stop would miss
         lock(&self.bridge_checks).take();
+        self.workers.close_logs();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }
 }

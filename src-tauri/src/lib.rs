@@ -33,6 +33,7 @@ pub mod sandbox_setup;
 pub mod settings;
 pub mod state;
 pub mod theme;
+pub mod workers;
 
 use state::AppState;
 
@@ -69,6 +70,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             agents::agent_preview,
             agents::agent_save,
             agents::agent_new,
+            workers::worker_start,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()

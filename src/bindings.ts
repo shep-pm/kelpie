@@ -272,6 +272,17 @@ export const commands = {
 	 *  The text of why not: the name is taken or is no name, or the parent is one the loader cannot find.
 	 */
 	agentNew: (name: string, parent: string | null) => typedError<null, string>(__TAURI_INVOKE("agent_new", { name, parent })),
+	/**
+	 *  Start a worker on the GitHub issue `ticket` of the project
+	 * 
+	 *  Answers `waiting: true` when no slot is free, and the ticket is in line.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket is closed, names no issue, or the project is not on GitHub; or the
+	 *  worker could not start. The text says why.
+	 */
+	workerStart: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_start", { ticket })),
 };
 
 /* Types */
@@ -625,6 +636,14 @@ export type Usage = {
 };
 
 export type Value = null | boolean | number | string | Value[] | { [key in string]: Value };
+
+/**  What a start answers */
+export type WorkerStarted = {
+	/**  The ticket, as it was given */
+	ticket: string,
+	/**  No slot was free: the ticket is in line for the next one, and nothing started */
+	waiting: boolean,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

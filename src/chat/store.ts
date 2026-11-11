@@ -1,15 +1,15 @@
 import { Channel } from "@tauri-apps/api/core";
-import { create } from "zustand";
-import {
-  commands,
-  type InstallOutcome,
-  type LogEntry,
-  type SandboxAnswer,
-  type SandboxView,
-  type SessionEvent,
-  type ToolStatus,
-  type Usage,
+import { create, type StoreApi, type UseBoundStore } from "zustand";
+import type {
+  InstallOutcome,
+  LogEntry,
+  SandboxAnswer,
+  SandboxView,
+  SessionEvent,
+  ToolStatus,
+  Usage,
 } from "@/bindings";
+import { pmTransport, type Transport } from "./transport";
 
 export type Step = { id: string; title: string; status: ToolStatus };
 
@@ -52,7 +52,7 @@ export type Turn = {
   error?: string;
 };
 
-type Chat = {
+export type Chat = {
   turns: Turn[];
   /** Why the history could not be read, `null` when it could. */
   historyError: string | null;
@@ -237,161 +237,186 @@ export function fold(entries: LogEntry[]): Turn[] {
   );
 }
 
-let loading: Promise<void> | null = null;
+/** One chat's store, over the session `transport` reaches. */
+export type ChatStore = UseBoundStore<StoreApi<Chat>>;
 
-/** The install in flight, so a second click shares it instead of asking for a second password. */
-let installing: Promise<InstallOutcome> | null = null;
+/**
+ * Make a chat over `transport`. Each store holds its own turns, its own load
+ * and its own install, so two chats never share a session.
+ */
+export function createChat(transport: Transport): ChatStore {
+  let loading: Promise<void> | null = null;
 
-/** Which look at the sandbox is the latest, so a slow answer never overwrites a newer one. */
-let lookedAt = 0;
+  /** The install in flight, so a second click shares it instead of asking for a second password. */
+  let installing: Promise<InstallOutcome> | null = null;
 
-export const useChat = create<Chat>()((set, get) => {
-  /** Ask what the PM's sandbox found, and keep it, unless a newer look came first. */
-  async function lookAtSandbox() {
-    const look = ++lookedAt;
-    try {
-      const sandbox = await commands.pmSandbox();
-      if (look === lookedAt) set({ sandbox });
-    } catch {
-      // The turn's own error is still on screen, which is all the chat showed before this
+  /** Which look at the sandbox is the latest, so a slow answer never overwrites a newer one. */
+  let lookedAt = 0;
+
+  return create<Chat>()((set, get) => {
+    /** Ask what the PM's sandbox found, and keep it, unless a newer look came first. */
+    async function lookAtSandbox() {
+      if (!transport.sandbox) return;
+      const look = ++lookedAt;
+      try {
+        const sandbox = await transport.sandbox();
+        if (look === lookedAt) set({ sandbox });
+      } catch {
+        // The turn's own error is still on screen, which is all the chat showed before this
+      }
     }
-  }
 
-  /** Show `turn` as the last turn, and stream what `call` sends into it. */
-  async function run(
-    turn: Turn,
-    call: (
-      channel: Channel<SessionEvent>,
-    ) => Promise<string | null | undefined>,
-  ) {
-    const { id } = turn;
-    set((s) => ({ turns: [...s.turns, turn] }));
+    /** Show `turn` as the last turn, and stream what `call` sends into it. */
+    async function run(
+      turn: Turn,
+      call: (
+        channel: Channel<SessionEvent>,
+      ) => Promise<string | null | undefined>,
+    ) {
+      const { id } = turn;
+      set((s) => ({ turns: [...s.turns, turn] }));
 
-    const channel = new Channel<SessionEvent>();
-    channel.onmessage = (event) => {
-      set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
-      if (event.kind === "failed") void lookAtSandbox();
-      // A send that ends has opened its session, so what the start found is current
-      if (event.kind === "turn_ended") void lookAtSandbox();
-    };
-    try {
-      // A send that switched the harness answers with the divider it logged
-      const divider = await call(channel);
-      if (divider) {
+      const channel = new Channel<SessionEvent>();
+      channel.onmessage = (event) => {
+        set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
+        if (event.kind === "failed") void lookAtSandbox();
+        // A send that ends has opened its session, so what the start found is current
+        if (event.kind === "turn_ended") void lookAtSandbox();
+      };
+      try {
+        // A send that switched the harness answers with the divider it logged
+        const divider = await call(channel);
+        if (divider) {
+          set((s) => ({
+            turns: patch(s.turns, id, (t) => ({
+              ...t,
+              dividers: [...t.dividers, divider],
+            })),
+          }));
+        }
+      } catch (error) {
         set((s) => ({
           turns: patch(s.turns, id, (t) => ({
             ...t,
-            dividers: [...t.dividers, divider],
+            state: "failed",
+            error: String(error),
           })),
         }));
+        void lookAtSandbox();
       }
-    } catch (error) {
-      set((s) => ({
-        turns: patch(s.turns, id, (t) => ({
-          ...t,
-          state: "failed",
-          error: String(error),
-        })),
-      }));
-      void lookAtSandbox();
     }
-  }
 
-  return {
-    turns: [],
-    historyError: null,
-    sandbox: null,
-    installing: false,
+    return {
+      turns: [],
+      historyError: null,
+      sandbox: null,
+      installing: false,
 
-    load() {
-      loading ??= (async () => {
-        try {
-          const history = await commands.pmHistory();
-          if (history.status === "error") {
-            set({ historyError: history.error });
-            return;
+      load() {
+        loading ??= (async () => {
+          try {
+            const history = await transport.history();
+            if (history.status === "error") {
+              set({ historyError: history.error });
+              return;
+            }
+            const past = fold(history.data);
+            set((s) => ({ turns: [...past, ...s.turns], historyError: null }));
+          } catch (error) {
+            set({ historyError: String(error) });
           }
-          const past = fold(history.data);
-          set((s) => ({ turns: [...past, ...s.turns], historyError: null }));
-        } catch (error) {
-          set({ historyError: String(error) });
+        })();
+        return loading;
+      },
+
+      async send(text) {
+        await get().load();
+        if (get().installing) return;
+        if (get().turns.some((turn) => turn.state === "running")) return;
+        await run(begin(text), (channel) => transport.send(text, channel));
+      },
+
+      async retry() {
+        await get().load();
+        const last = get().turns.at(-1);
+        if (last?.state !== "interrupted") return;
+        set((s) => ({ turns: s.turns.slice(0, -1) }));
+        await run(begin(last.user, last.dividers), (channel) =>
+          transport.retry(channel),
+        );
+      },
+
+      async resend() {
+        await get().load();
+        const last = get().turns.at(-1);
+        if (last?.state !== "failed") return;
+        set((s) => ({ turns: s.turns.slice(0, -1) }));
+        await run(begin(last.user, last.dividers), (channel) =>
+          transport.send(last.user, channel),
+        );
+      },
+
+      install() {
+        const load = transport.install;
+        if (!load) {
+          return Promise.resolve<InstallOutcome>({
+            kind: "failed",
+            message: "This session has no sandbox profile to install.",
+          });
         }
-      })();
-      return loading;
-    },
-
-    async send(text) {
-      await get().load();
-      if (get().installing) return;
-      if (get().turns.some((turn) => turn.state === "running")) return;
-      await run(begin(text), (channel) => commands.pmSend(text, channel));
-    },
-
-    async retry() {
-      await get().load();
-      const last = get().turns.at(-1);
-      if (last?.state !== "interrupted") return;
-      set((s) => ({ turns: s.turns.slice(0, -1) }));
-      await run(begin(last.user, last.dividers), (channel) =>
-        commands.pmRetry(channel),
-      );
-    },
-
-    async resend() {
-      await get().load();
-      const last = get().turns.at(-1);
-      if (last?.state !== "failed") return;
-      set((s) => ({ turns: s.turns.slice(0, -1) }));
-      await run(begin(last.user, last.dividers), (channel) =>
-        commands.pmSend(last.user, channel),
-      );
-    },
-
-    install() {
-      installing ??= (async (): Promise<InstallOutcome> => {
-        set({ installing: true });
-        try {
-          const outcome = await commands.sandboxInstall();
-          if (outcome.kind === "installed") {
-            // The session that found the refusal is gone, so its record is too
-            await lookAtSandbox();
-            await get().resend();
+        installing ??= (async (): Promise<InstallOutcome> => {
+          set({ installing: true });
+          try {
+            const outcome = await load();
+            if (outcome.kind === "installed") {
+              // The session that found the refusal is gone, so its record is too
+              await lookAtSandbox();
+              await get().resend();
+            }
+            return outcome;
+          } catch (error) {
+            return { kind: "failed", message: String(error) };
+          } finally {
+            installing = null;
+            set({ installing: false });
           }
-          return outcome;
-        } catch (error) {
-          return { kind: "failed", message: String(error) };
-        } finally {
-          installing = null;
-          set({ installing: false });
-        }
-      })();
-      return installing;
-    },
+        })();
+        return installing;
+      },
 
-    async cancel() {
-      await commands.pmCancel();
-    },
+      async cancel() {
+        await transport.cancel();
+      },
 
-    async answer(id, answer) {
-      set((s) => ({
-        turns: patchRequest(s.turns, id, (asked) => ({ ...asked, answer })),
-      }));
-      const done = await commands.pmAnswer(id, answer);
-      if (done.status === "error") {
+      async answer(id, answer) {
         set((s) => ({
-          turns: patchRequest(s.turns, id, (asked) => ({
-            ...asked,
-            error: done.error,
-          })),
+          turns: patchRequest(s.turns, id, (asked) => ({ ...asked, answer })),
         }));
-      }
-    },
+        const done = await transport.answer(id, answer);
+        if (done.status === "error") {
+          set((s) => ({
+            turns: patchRequest(s.turns, id, (asked) => ({
+              ...asked,
+              error: done.error,
+            })),
+          }));
+        }
+      },
 
-    reset() {
-      loading = null;
-      installing = null;
-      lookedAt++;
-      set({ turns: [], historyError: null, sandbox: null, installing: false });
-    },
-  };
-});
+      reset() {
+        loading = null;
+        installing = null;
+        lookedAt++;
+        set({
+          turns: [],
+          historyError: null,
+          sandbox: null,
+          installing: false,
+        });
+      },
+    };
+  });
+}
+
+/** The PM's chat. */
+export const useChat = createChat(pmTransport);

@@ -51,6 +51,11 @@ what = "the app runs the PM on the harness, from its settings"
 claude-code = "yes"
 goose = { gap = 9 }
 
+[harness.worker]
+what = "the app runs a worker on the harness, from its settings"
+claude-code = "yes"
+goose = { gap = 163 }
+
 [harness.kelpie-tools]
 what = "kelpie's own tools reach the agent as an MCP server in `mcpServers` on `session/new`, `session/load` and `session/resume`, over stdio"
 claude-code = "yes"
