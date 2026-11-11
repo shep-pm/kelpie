@@ -198,8 +198,20 @@ Bringing a pull request's branch up to the latest base branch, so the head CI pa
 _Avoid_: sync, update branch
 
 **Fix turn**:
-A worker's turn spent on what the gate sent back: a red CI run or a conflict from catch-up.
+A worker's turn spent on what the gate sent back: a red CI run, a conflict from catch-up, or a reviewer's findings.
 _Avoid_: retry, rework turn
+
+**Reviewer**:
+An agent that reads a worker's pull request once CI is green on it and reports findings, without changing the code.
+_Avoid_: judge, critic, review bot (a pull request bot such as CodeRabbit, which is not one yet)
+
+**Finding**:
+One problem a reviewer reports at a place in the diff, with how bad it is: a nit, medium or high.
+_Avoid_: comment, issue (a ticket's)
+
+**Dispute**:
+A worker's reasoned refusal to fix a finding. A finding disputed once and raised again by another reviewer goes to the maintainer.
+_Avoid_: rejection, pushback
 
 ## Building kelpie
 
