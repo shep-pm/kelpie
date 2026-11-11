@@ -110,6 +110,28 @@ fn holders(leases: &Leases, name: &str) -> usize {
         .map_or(0, |status| status.holders.len())
 }
 
+/// Wait until nobody queues for `name`
+///
+/// A closed waiter leaves the queue when kelpie's task for its connection hears
+/// the close, which is after the client's `drop` returns.
+fn wait_for_an_empty_queue(leases: &Leases, name: &str) {
+    let queued = || {
+        leases
+            .status()
+            .iter()
+            .find(|status| status.kind == name)
+            .map_or(0, |status| status.queue.len())
+    };
+    let deadline = std::time::Instant::now() + WAIT;
+    while queued() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the closed waiter never left the queue"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn a_second_holder_waits_while_the_first_holds_it() {
@@ -141,6 +163,7 @@ fn a_waiter_that_closes_loses_its_place_and_grants_nothing() {
     let mut waiter = knocked(session.door(), "cargo-test");
     assert_eq!(waiter.answer(), json!({"queued": 0}));
     drop(waiter);
+    wait_for_an_empty_queue(&leases, "cargo-test");
 
     // The withdrawn ask granted nothing, and the next ask queues behind the holder
     let mut third = knocked(session.door(), "cargo-test");

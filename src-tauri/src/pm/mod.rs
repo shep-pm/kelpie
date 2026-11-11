@@ -239,7 +239,7 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 /// the PM's sandbox once and runs a command in it, and records in
 /// `opening.sandbox_setup` whether bwrap refused, so the chat can say why. A
 /// refusal runs the session without a sandbox when the project allows it
-/// ([`confinement`]), and the home-folder refusal is never lifted.
+/// (`confinement`), and the home-folder refusal is never lifted.
 ///
 /// # Errors
 ///
