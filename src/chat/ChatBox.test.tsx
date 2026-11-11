@@ -292,7 +292,7 @@ describe("the chat box", () => {
     expect(screen.queryByText(/RTM_NEWADDR/)).toBeNull();
   });
 
-  it("a failed turn in an unsandboxed session shows its own error, not the setup", async () => {
+  it("a failed turn in an unsandboxed session shows its own error under the setup item", async () => {
     pmSandbox.mockResolvedValue({
       refusal: "no_capabilities",
       unsandboxed: true,
@@ -301,7 +301,25 @@ describe("the chat box", () => {
     emit({ kind: "failed", message: "the model is overloaded" });
 
     expect(await screen.findByText("the model is overloaded")).toBeTruthy();
+    expect(screen.getByText("Ubuntu restricts the sandbox")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Run without a sandbox" }),
+    ).toBeNull();
+  });
+
+  it("a send that fails for another reason shows its error and not the setup item", async () => {
+    pmSend.mockRejectedValue("the project is in the home folder");
+    const box = await openBox();
+    fireEvent.change(box, { target: { value: "hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(
+      await screen.findByText("the project is in the home folder"),
+    ).toBeTruthy();
     expect(screen.queryByText("Ubuntu restricts the sandbox")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Run without a sandbox" }),
+    ).toBeNull();
   });
 
   it("with no project the box offers a folder picker", async () => {

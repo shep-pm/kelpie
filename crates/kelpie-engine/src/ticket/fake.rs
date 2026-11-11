@@ -4,9 +4,10 @@
 //! what it was asked, so a reader of [`Tickets`] needs no source behind it.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use super::{ForgeError, GithubTickets, Issue, Listed, TicketId, Tickets};
+use super::{ForgeError, GithubTickets, Issue, Listed, Pulls, TicketId, Tickets};
 use crate::github::Timestamp;
 
 /// What the stand-in was asked, in order
@@ -111,5 +112,119 @@ impl GithubTickets for FakeTickets {
         let mut script = self.script();
         script.asked.push(Asked::Closed(since));
         script.closed.clone().unwrap_or_else(|| Ok(Vec::new()))
+    }
+}
+
+/// What [`FakePulls`] was asked, in order
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullCall {
+    /// [`Pulls::create_draft`], with its `head`, `base`, `title` and `body`
+    Create {
+        /// The branch to open from
+        head: String,
+        /// The branch to open into
+        base: String,
+        /// The pull request's title
+        title: String,
+        /// The pull request's body
+        body: String,
+    },
+    /// [`Pulls::branch_head`], and the branch
+    BranchHead(String),
+    /// [`Pulls::edit`], with the number, title and body
+    Edit {
+        /// The pull request
+        number: NonZeroU64,
+        /// Its new title
+        title: String,
+        /// Its new body
+        body: String,
+    },
+}
+
+#[derive(Debug, Default)]
+struct PullScript {
+    created: Option<Result<NonZeroU64, ForgeError>>,
+    heads: BTreeMap<String, Result<Option<String>, ForgeError>>,
+    edited: Option<Result<(), ForgeError>>,
+    asked: Vec<PullCall>,
+}
+
+/// A pull request source that answers from a script and records each call
+///
+/// With no answer scripted, a call succeeds: a draft is pull request 1, a branch
+/// has no head, and an edit changes nothing.
+#[derive(Debug, Default)]
+pub struct FakePulls {
+    script: Mutex<PullScript>,
+}
+
+impl FakePulls {
+    /// A source with nothing scripted
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// What [`Pulls::create_draft`] answers
+    pub fn script_create(&self, answer: Result<NonZeroU64, ForgeError>) {
+        self.script().created = Some(answer);
+    }
+
+    /// What [`Pulls::branch_head`] answers for `branch`
+    pub fn script_branch_head(&self, branch: &str, answer: Result<Option<String>, ForgeError>) {
+        self.script().heads.insert(branch.to_owned(), answer);
+    }
+
+    /// What [`Pulls::edit`] answers
+    pub fn script_edit(&self, answer: Result<(), ForgeError>) {
+        self.script().edited = Some(answer);
+    }
+
+    /// What it was asked, in order
+    #[must_use]
+    pub fn calls(&self) -> Vec<PullCall> {
+        self.script().asked.clone()
+    }
+
+    fn script(&self) -> std::sync::MutexGuard<'_, PullScript> {
+        self.script
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Pulls for FakePulls {
+    fn create_draft(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<NonZeroU64, ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::Create {
+            head: head.to_owned(),
+            base: base.to_owned(),
+            title: title.to_owned(),
+            body: body.to_owned(),
+        });
+        script.created.clone().unwrap_or(Ok(NonZeroU64::MIN))
+    }
+
+    fn branch_head(&self, branch: &str) -> Result<Option<String>, ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::BranchHead(branch.to_owned()));
+        script.heads.get(branch).cloned().unwrap_or(Ok(None))
+    }
+
+    fn edit(&self, number: NonZeroU64, title: &str, body: &str) -> Result<(), ForgeError> {
+        let mut script = self.script();
+        script.asked.push(PullCall::Edit {
+            number,
+            title: title.to_owned(),
+            body: body.to_owned(),
+        });
+        script.edited.clone().unwrap_or(Ok(()))
     }
 }

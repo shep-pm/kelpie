@@ -26,6 +26,11 @@ pub enum ForgeError {
         /// When the answer says to ask again
         cooldown: Cooldown,
     },
+    /// A title or body names this machine, so nothing was posted
+    ///
+    /// It carries no part of what matched, so the error can be logged and shown
+    /// without the leak.
+    LocalPath,
     /// The ticket is not one this source holds, such as a local ticket asked
     /// of a project whose tickets are GitHub issues
     NoIssue {
@@ -45,7 +50,7 @@ impl ForgeError {
         match self {
             Self::Failed(said) => printed_status(said).is_some_and(|status| status >= 500),
             Self::Limited { .. } | Self::Held(_) => true,
-            Self::Spawn(_) | Self::Unreadable(_) | Self::NoIssue { .. } => false,
+            Self::Spawn(_) | Self::Unreadable(_) | Self::LocalPath | Self::NoIssue { .. } => false,
         }
     }
 
@@ -91,6 +96,9 @@ impl fmt::Display for ForgeError {
                 until.secs()
             ),
             Self::Limited { said, .. } => f.write_str(said),
+            Self::LocalPath => f.write_str(
+                "not posted: the text names a path or address on this machine, which names its user",
+            ),
             Self::NoIssue { ticket } => write!(f, "ticket {ticket} is not held by this source"),
         }
     }
