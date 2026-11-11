@@ -2,6 +2,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import {
   commands,
+  type InstallOutcome,
   type LogEntry,
   type SandboxAnswer,
   type SandboxView,
@@ -62,11 +63,16 @@ type Chat = {
    */
   sandbox: SandboxView | null;
   /**
+   * An install waits on its password prompt. A loaded profile ends the PM's
+   * session, so no message is sent meanwhile: it would be cut off.
+   */
+  installing: boolean;
+  /**
    * Read the PM's history from kelpie's log, once. Every call returns the same
    * load, and `send` waits for it, so history always comes before a new turn.
    */
   load: () => Promise<void>;
-  /** Send `text` to the PM. Does nothing while a turn runs. */
+  /** Send `text` to the PM. Does nothing while a turn runs or an install waits. */
   send: (text: string) => Promise<void>;
   /** Send the interrupted last message again, in place of the interrupted turn. */
   retry: () => Promise<void>;
@@ -77,6 +83,14 @@ type Chat = {
    * sends nothing.
    */
   resend: () => Promise<void>;
+  /**
+   * Load kelpie's AppArmor profile, which ends the PM's session once it is
+   * loaded. A finished install clears what the sandbox found and sends the
+   * failed last message again, so the PM starts sandboxed without the message
+   * typed twice. A second call while one runs shares its answer and sends
+   * nothing more.
+   */
+  install: () => Promise<InstallOutcome>;
   /** Stop the turn in flight. */
   cancel: () => Promise<void>;
   /**
@@ -225,6 +239,9 @@ export function fold(entries: LogEntry[]): Turn[] {
 
 let loading: Promise<void> | null = null;
 
+/** The install in flight, so a second click shares it instead of asking for a second password. */
+let installing: Promise<InstallOutcome> | null = null;
+
 /** Which look at the sandbox is the latest, so a slow answer never overwrites a newer one. */
 let lookedAt = 0;
 
@@ -284,6 +301,7 @@ export const useChat = create<Chat>()((set, get) => {
     turns: [],
     historyError: null,
     sandbox: null,
+    installing: false,
 
     load() {
       loading ??= (async () => {
@@ -304,6 +322,7 @@ export const useChat = create<Chat>()((set, get) => {
 
     async send(text) {
       await get().load();
+      if (get().installing) return;
       if (get().turns.some((turn) => turn.state === "running")) return;
       await run(begin(text), (channel) => commands.pmSend(text, channel));
     },
@@ -328,6 +347,27 @@ export const useChat = create<Chat>()((set, get) => {
       );
     },
 
+    install() {
+      installing ??= (async (): Promise<InstallOutcome> => {
+        set({ installing: true });
+        try {
+          const outcome = await commands.sandboxInstall();
+          if (outcome.kind === "installed") {
+            // The session that found the refusal is gone, so its record is too
+            await lookAtSandbox();
+            await get().resend();
+          }
+          return outcome;
+        } catch (error) {
+          return { kind: "failed", message: String(error) };
+        } finally {
+          installing = null;
+          set({ installing: false });
+        }
+      })();
+      return installing;
+    },
+
     async cancel() {
       await commands.pmCancel();
     },
@@ -349,8 +389,9 @@ export const useChat = create<Chat>()((set, get) => {
 
     reset() {
       loading = null;
+      installing = null;
       lookedAt++;
-      set({ turns: [], historyError: null, sandbox: null });
+      set({ turns: [], historyError: null, sandbox: null, installing: false });
     },
   };
 });

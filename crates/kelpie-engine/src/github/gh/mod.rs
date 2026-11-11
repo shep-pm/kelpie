@@ -6,7 +6,8 @@
 //! environment. [`Gh`] runs each call through the process tree (ADR 0001) with
 //! `GH_DEBUG=api`, so a failure's stderr carries the response headers
 //! a rate limit's [`Cooldown`] is read from. [`Runner`] is the child, which a
-//! test scripts.
+//! test scripts. [`GithubSource`] reads a repo's issues through a [`hold::Hold`]
+//! over it.
 //!
 //! [`Cooldown`]: super::Cooldown
 
@@ -24,10 +25,13 @@ pub mod account;
 pub mod conditional;
 mod failed;
 pub mod hold;
+mod listing;
 pub mod pulls;
+mod source;
 
 pub use account::{RateBucket, RateLimits};
 pub use pulls::GithubPulls;
+pub use source::GithubSource;
 
 #[cfg(test)]
 mod conditional_tests;
@@ -35,6 +39,8 @@ mod conditional_tests;
 mod hold_tests;
 #[cfg(test)]
 mod pulls_tests;
+#[cfg(test)]
+mod source_tests;
 #[cfg(test)]
 mod tests;
 

@@ -3203,6 +3203,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "gix",
+ "jiff",
  "kelpie-protocol",
  "keyring",
  "rmcp",
