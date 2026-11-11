@@ -4,6 +4,7 @@ import {
   commands,
   type LogEntry,
   type SandboxAnswer,
+  type SandboxView,
   type SessionEvent,
   type ToolStatus,
   type Usage,
@@ -54,6 +55,11 @@ type Chat = {
   turns: Turn[];
   /** Why the history could not be read, `null` when it could. */
   historyError: string | null;
+  /**
+   * What the PM's sandbox last found, asked for when a turn ends failed.
+   * `null` until one does, and again once a turn works.
+   */
+  sandbox: SandboxView | null;
   /**
    * Read the PM's history from kelpie's log, once. Every call returns the same
    * load, and `send` waits for it, so history always comes before a new turn.
@@ -211,7 +217,21 @@ export function fold(entries: LogEntry[]): Turn[] {
 
 let loading: Promise<void> | null = null;
 
+/** Which look at the sandbox is the latest, so a slow answer never overwrites a newer one. */
+let lookedAt = 0;
+
 export const useChat = create<Chat>()((set, get) => {
+  /** Ask what the PM's sandbox found, and keep it, unless a newer look or a working turn came first. */
+  async function lookAtSandbox() {
+    const look = ++lookedAt;
+    try {
+      const sandbox = await commands.pmSandbox();
+      if (look === lookedAt) set({ sandbox });
+    } catch {
+      // The turn's own error is still on screen, which is all the chat showed before this
+    }
+  }
+
   /** Show `turn` as the last turn, and stream what `call` sends into it. */
   async function run(
     turn: Turn,
@@ -223,8 +243,14 @@ export const useChat = create<Chat>()((set, get) => {
     set((s) => ({ turns: [...s.turns, turn] }));
 
     const channel = new Channel<SessionEvent>();
-    channel.onmessage = (event) =>
+    channel.onmessage = (event) => {
       set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
+      if (event.kind === "failed") void lookAtSandbox();
+      if (event.kind === "turn_ended") {
+        lookedAt++;
+        set({ sandbox: null });
+      }
+    };
     try {
       // A send that switched the harness answers with the divider it logged
       const divider = await call(channel);
@@ -244,12 +270,14 @@ export const useChat = create<Chat>()((set, get) => {
           error: String(error),
         })),
       }));
+      void lookAtSandbox();
     }
   }
 
   return {
     turns: [],
     historyError: null,
+    sandbox: null,
 
     load() {
       loading ??= (async () => {
@@ -305,7 +333,8 @@ export const useChat = create<Chat>()((set, get) => {
 
     reset() {
       loading = null;
-      set({ turns: [], historyError: null });
+      lookedAt++;
+      set({ turns: [], historyError: null, sandbox: null });
     },
   };
 });

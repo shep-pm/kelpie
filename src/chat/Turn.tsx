@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Divider } from "./Divider";
 import { SandboxRequest } from "./SandboxRequest";
+import { SandboxSetup } from "./SandboxSetup";
 import { type Turn as TurnData, useChat } from "./store";
 import { ToolSteps } from "./ToolSteps";
 import { UsageFooter } from "./UsageFooter";
@@ -106,7 +107,13 @@ function Reply({ id }: { id: number }) {
 
 function Failure({ id }: { id: number }) {
   const error = useField(id, "error");
+  const state = useField(id, "state");
+  const last = useChat((s) => s.turns.at(-1)?.id === id);
+  const refusal = useChat((s) => s.sandbox?.refusal ?? null);
   if (!error) return null;
+  // Only the turn that found the refusal says it: an older failed turn kept its own error
+  if (refusal && last && state === "failed")
+    return <SandboxSetup refusal={refusal} />;
   return (
     <p
       role="alert"

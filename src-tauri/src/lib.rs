@@ -28,6 +28,7 @@ use tauri_specta::collect_commands;
 pub mod agents;
 pub mod bridges;
 pub mod pm;
+pub mod sandbox_setup;
 pub mod settings;
 pub mod state;
 pub mod theme;
@@ -48,6 +49,7 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             pm::pm_history,
             pm::pm_retry,
             pm::pm_answer,
+            sandbox_setup::pm_sandbox,
             settings::login_set,
             settings::login_status,
             settings::login_clear,
