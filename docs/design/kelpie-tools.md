@@ -56,6 +56,8 @@ The second tool is `start_worker(ticket)`, and **the PM alone is given it**. It 
 
 Kelpie serves one server per session and knows which session a token belongs to, so it gates the tools by that. `Tools::session` is a worker's role and the least a session is ever given: `request_network` alone. `Tools::pm_session(starter)` is the PM's, which has `start_worker` as well. A worker's session does not list the tool, and calling it gets `kelpie has no tool named start_worker`, the answer an unknown name gets. The role rides the session's token, so a session cannot be handed another session's privileges.
 
+A role that reaches back into the app holds it weakly. The strong ring here is `Tools` → the live token → the PM's role → the starter, so a starter holding `Tools` strongly is a cycle: the server would only drop once its own session and every connection of it were gone, which leaves the door's socket in the data folder and its thread unjoined. The app's starter holds the server weakly and upgrades it on each start, so the app is the only strong holder and dropping it closes the door. A worker started after the server is gone gets no kelpie tools, as a run whose door never opened does.
+
 Every later kelpie tool takes this shape: the tool is on the server, and the role says who is given it.
 
 ### To check while building

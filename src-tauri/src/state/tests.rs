@@ -603,3 +603,41 @@ fn one_projects_records_file_it_cannot_read_leaves_the_rest_paused() {
         "the other project's worker is paused all the same"
     );
 }
+
+#[test]
+fn the_pms_starter_holds_the_tools_no_stronger_than_the_app_does() {
+    let dir = Dir::new();
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        Box::new(|_| Err("never built".to_owned())),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap();
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+    let (project, folder) = (
+        state.project_id(None).unwrap(),
+        state.project_path().expect("a project is picked"),
+    );
+
+    // The PM's starter and its session, as `pm_session` hands them to the opener
+    let tools = state.tools.as_ref().expect("the door opened");
+    let held = Arc::downgrade(tools);
+    let starter = starter_for(&state.workers, &project, &folder, Some(tools));
+    let session = tools.pm_session(Arc::clone(&starter));
+
+    // `Tools` holds the live token, the token holds the starter, and a starter
+    // that held `Tools` back would close the loop: the door's socket would be
+    // left in the data folder, its thread never joined, and a `Tools` that went
+    // last inside a connection would join its own thread and panic.
+    assert_eq!(Arc::strong_count(tools), 1, "the starter holds the tools");
+
+    drop(state);
+    assert!(
+        held.upgrade().is_none(),
+        "the PM's session kept the tools alive, so dropping the app never closed the door"
+    );
+    drop(session);
+}
