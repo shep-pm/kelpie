@@ -284,6 +284,34 @@ export const commands = {
 	 */
 	workerStart: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_start", { ticket })),
 	/**
+	 *  Read the past of the worker on the ticket, and follow it live on `on_event`
+	 * 
+	 *  Answers the worker's log, oldest first. Every event the worker sends after
+	 *  that goes to `on_event`, until the window closes it.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The project has no worker on `ticket`, or its log cannot be read.
+	 */
+	workerWatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<LogEntry[], string>(__TAURI_INVOKE("worker_watch", { ticket, onEvent })),
+	/**
+	 *  Stop sending the worker on the ticket's events to `on_event`
+	 * 
+	 *  A tab calls it when it closes: a channel's send succeeds while the window
+	 *  lives, so nothing else tells the feed the tab is gone.
+	 */
+	workerUnwatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<null, string>(__TAURI_INVOKE("worker_unwatch", { ticket, onEvent })),
+	/**
+	 *  Start the next turn of the Paused worker on the ticket
+	 * 
+	 *  A worker that is not Paused is refused, with a line saying what it is doing.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The ticket has no worker, it is not Paused, or the worker could not start.
+	 */
+	workerResume: (ticket: string) => typedError<WorkerStarted, string>(__TAURI_INVOKE("worker_resume", { ticket })),
+	/**
 	 *  Stream the project's board to the window, and keep it current
 	 * 
 	 *  The first event is the board, or why there is none. It starts one poller for
