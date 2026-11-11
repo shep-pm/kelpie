@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use super::conditional::{Etags, PER_PAGE};
 use super::hold::Hold;
+use super::issues;
 use super::listing::{self, Entry};
 use super::pulls_read;
 use super::unreadable;
@@ -149,6 +150,16 @@ impl Tickets for GithubSource {
             LIST_FIELDS,
         ])?;
         listing::gh_list(&stdout)
+    }
+
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError> {
+        let number = id.github().ok_or(ForgeError::NoIssue { ticket: *id })?;
+        issues::comment(&self.hold, &self.repo, number, body)
+    }
+
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError> {
+        let number = id.github().ok_or(ForgeError::NoIssue { ticket: *id })?;
+        issues::close(&self.hold, &self.repo, number)
     }
 }
 

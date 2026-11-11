@@ -76,6 +76,14 @@ impl Tickets for Source {
         self.called();
         self.tickets.ready_issues(label)
     }
+
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError> {
+        self.tickets.comment(id, body)
+    }
+
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError> {
+        self.tickets.close(id)
+    }
 }
 
 impl GithubTickets for Source {

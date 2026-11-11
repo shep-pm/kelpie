@@ -155,6 +155,25 @@ impl Tickets for Github {
             .map(|stored| stored.listed.clone())
             .collect())
     }
+
+    // Nothing reads a comment back yet, so the stand-in checks the issue is there
+    fn comment(&self, id: &TicketId, _body: &str) -> Result<(), ForgeError> {
+        self.state()
+            .issues
+            .contains_key(id)
+            .then_some(())
+            .ok_or(ForgeError::NoIssue { ticket: *id })
+    }
+
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError> {
+        let mut state = self.state();
+        let stored = state
+            .issues
+            .get_mut(id)
+            .ok_or(ForgeError::NoIssue { ticket: *id })?;
+        stored.open = false;
+        Ok(())
+    }
 }
 
 impl GithubTickets for Github {

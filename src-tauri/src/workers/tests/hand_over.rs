@@ -279,6 +279,14 @@ impl Tickets for Board {
     fn ready_issues(&self, label: &str) -> Result<Vec<Listed>, ForgeError> {
         self.tickets.ready_issues(label)
     }
+
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError> {
+        self.tickets.comment(id, body)
+    }
+
+    fn close(&self, id: &TicketId) -> Result<(), ForgeError> {
+        self.tickets.close(id)
+    }
 }
 
 impl GithubTickets for Board {
