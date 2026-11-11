@@ -41,11 +41,9 @@ env:
 jobs:
   shots:
     name: shots
-    # Pull requests from a fork get a read-only token that cannot post, and
-    # their code would run on the maintainer's runner.
+    # Pull requests from a fork get a read-only token that cannot post.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    # The same box the `app` job in test.yml builds on, for the same reason.
-    runs-on: [self-hosted, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     # A failure here fails no check. `post` reports it in the body instead.
     continue-on-error: true
@@ -111,7 +109,7 @@ jobs:
     # A run that was cancelled by a newer push posts nothing, and a fork's run
     # has no `shots` to post and no token that could.
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # The only job that writes: it pushes `pr-shots` and edits the body.
     permissions:

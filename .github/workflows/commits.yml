@@ -1,22 +1,28 @@
 name: commits
 # Rejects a pull request carrying a commit subject that is not a conventional
 # commit. .githooks/commit-msg checks the same thing locally, but
-# core.hooksPath is per clone, so this job is the gate.
+# core.hooksPath is per clone, so this job is the gate. In a merge queue group
+# it passes without checking, since each pull request in the group was checked
+# on its own, and the check is required.
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
 permissions:
   contents: read
 jobs:
   conventional:
     name: conventional subjects
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Full history: a subject is only checkable if it is fetched.
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 0
       - name: Check every commit subject on this branch
+        if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}

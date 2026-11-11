@@ -1,17 +1,22 @@
 name: web
-# The frontend slice 3's Tauri window loads. The runner image has no node, so
-# the job installs pnpm and node itself before running the five pnpm scripts.
+# The frontend slice 3's Tauri window loads: pnpm and node, then the five pnpm
+# scripts.
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   web:
     name: web
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
