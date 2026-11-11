@@ -50,7 +50,7 @@ mod turn_events;
 pub use hand_over::{HandOver, Outcome, after_turn, owes_a_draft};
 pub use record::{Record, Records};
 pub use slots::{Seat, seat};
-pub use start::{Opening, Paths, Project, StartError, Started, Ticket, start};
+pub use start::{Opening, Paths, Project, Refused, StartError, Started, Ticket, start};
 pub use tell::{Noted, note, stop, stop_and_tell};
 pub use turn_end::{Ending, Held};
 

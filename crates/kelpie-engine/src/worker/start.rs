@@ -40,7 +40,7 @@ use crate::agents::Binding;
 use crate::github::{AppTokens, TokenError};
 use crate::lease::{Leases, SessionLease};
 use crate::permission::Judge;
-use crate::sandbox::{self, Reads, Sandbox};
+use crate::sandbox::{self, Reads, Refusal, Sandbox, SandboxError};
 use crate::session::log::Log;
 use crate::session::{Choice, Harness, Session, SessionEvent, SessionId};
 use crate::tools::{SessionTools, Tools};
@@ -307,7 +307,39 @@ pub struct Opening<'a> {
     /// Start the worker's sandbox for `harness`, as its policy has it
     ///
     /// A bridge starts one per version it runs a session on, as the PM's does.
-    pub sandbox: &'a dyn Fn(&Harness) -> Result<Sandbox, String>,
+    /// Its error is typed, so an opener that probes the sandbox can tell a
+    /// [`Refusal`] from the rest and name it through [`Opening::refuse`].
+    pub sandbox: &'a dyn Fn(&Harness) -> Result<Sandbox, SandboxError>,
+
+    /// The refusal [`Opening::refuse`] kept, which `begin` reads once `open` fails
+    ///
+    /// Build it with [`Refused::default`]: only [`Opening::refuse`] writes it, and
+    /// only the start reads it.
+    pub refused: Refused,
+}
+
+/// Where an [`Opening`] keeps the [`Refusal`] its opener named
+#[derive(Debug, Default)]
+pub struct Refused(Mutex<Option<Refusal>>);
+
+impl Opening<'_> {
+    /// Name `refusal` as why the worker's sandbox cannot start, and give the
+    /// words for the opener to return as its `Err`
+    ///
+    /// A start whose opener fails after this one parks the worker Paused with
+    /// these words and holds no slot for it (`docs/design/workers.md`, Ending,
+    /// quitting and resuming). An opener that fails for any other reason returns
+    /// its own text, and the start fails and gives the slot back.
+    #[must_use]
+    pub fn refuse(&self, refusal: Refusal) -> String {
+        *lock(&self.refused.0) = Some(refusal);
+        why_it_cannot_start(refusal)
+    }
+}
+
+/// The words a refused worker's record keeps and its opener returns
+fn why_it_cannot_start(refusal: Refusal) -> String {
+    format!("its sandbox cannot start because {refusal}")
 }
 
 // The sandbox is a closure, which no derive can print
@@ -385,6 +417,11 @@ pub enum StartError {
 
     /// The worker's session could not be built, with the reason for the maintainer
     Session(String),
+
+    /// bwrap refuses the worker's sandbox, for the reason the [`Refusal`] names.
+    /// The ticket waits Paused and holds no slot: Resume starts it once the
+    /// sandbox can start.
+    Sandbox(Refusal),
 }
 
 impl std::fmt::Display for StartError {
@@ -411,6 +448,10 @@ impl std::fmt::Display for StartError {
             Self::Session(message) => {
                 write!(f, "the worker's session could not be built: {message}")
             }
+            Self::Sandbox(refusal) => write!(
+                f,
+                "the worker's sandbox cannot start because {refusal}. The ticket waits Paused, and Resume starts it once the sandbox can."
+            ),
         }
     }
 }
@@ -419,6 +460,7 @@ impl core::error::Error for StartError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Name { .. } | Self::Running { .. } | Self::Session(_) => None,
+            Self::Sandbox(refusal) => Some(refusal),
             Self::Worktree(error) => Some(error),
             Self::Token(error) => Some(error),
             Self::Login(error) => Some(error),
@@ -475,6 +517,17 @@ pub fn start(
     }
     match begin(project, ticket, held.record, ceiling, events) {
         Ok(started) => Ok(started),
+        Err(StartError::Sandbox(refusal)) => {
+            // A refused sandbox waits Paused and holds no slot, so the next
+            // ticket in line takes it. The record keeps its session and notes.
+            if let Err(lost) = park(project, &ticket.id, refusal) {
+                eprintln!(
+                    "kelpie: the refusal of ticket {}'s sandbox was not kept: {lost}",
+                    ticket.id
+                );
+            }
+            Err(StartError::Sandbox(refusal))
+        }
         Err(error) => {
             // The slot was held for a worker that never began
             if let Err(lost) = give_slot_back(project, &ticket.id, held.before.as_ref()) {
@@ -550,10 +603,8 @@ fn begin(
         reads: project.reads,
         sessions_root: &sessions_root,
     };
-    let sandbox = |harness: &Harness| {
-        Sandbox::start_worker(harness, &reach, &folders).map_err(|error| error.to_string())
-    };
-    let session = (project.open)(&Opening {
+    let sandbox = |harness: &Harness| Sandbox::start_worker(harness, &reach, &folders);
+    let opening = Opening {
         tree: project.tree,
         binding: project.binding,
         choice: choice(project.binding),
@@ -564,8 +615,13 @@ fn begin(
         env: credential.env,
         lease: lease.clone(),
         sandbox: &sandbox,
-    })
-    .map_err(StartError::Session)?;
+        refused: Refused::default(),
+    };
+    let session =
+        (project.open)(&opening).map_err(|message| match lock(&opening.refused.0).take() {
+            Some(refusal) => StartError::Sandbox(refusal),
+            None => StartError::Session(message),
+        })?;
 
     let session = match tools {
         Some(tools) => session.with_tools(tools),
@@ -682,6 +738,24 @@ fn give_slot_back(project: &Project<'_>, ticket: &str, before: Option<&Record>) 
             records.remove(ticket)?;
         }
     }
+    records.seat(project.slots)?;
+    Ok(())
+}
+
+/// Park the worker of a start whose sandbox was refused: Paused, with the
+/// refusal's words, and no slot
+///
+/// The slot count runs again, so the next ticket in line takes the slot the
+/// worker held. The record keeps its session id and notes, so Resume carries on
+/// the same conversation.
+///
+/// # Errors
+///
+/// The records file could not be written.
+fn park(project: &Project<'_>, ticket: &str, refusal: Refusal) -> io::Result<()> {
+    let mut records = lock(project.records);
+    records.set_status(ticket, Status::Paused)?;
+    records.set_reason(ticket, Some(why_it_cannot_start(refusal)))?;
     records.seat(project.slots)?;
     Ok(())
 }

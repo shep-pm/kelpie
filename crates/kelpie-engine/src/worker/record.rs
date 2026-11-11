@@ -58,7 +58,9 @@ pub struct Record {
     /// Why it waits on the maintainer, a line the board's ticket carries
     ///
     /// Set with [`Status::WaitingOnMaintainer`] and cleared with any other
-    /// state. A record from before reasons had none.
+    /// state. It is also why a [`Status::Paused`] worker cannot run, when its
+    /// sandbox cannot start ([`super::StartError::Sandbox`]): the next start
+    /// clears it. A record from before reasons had none.
     #[serde(default)]
     pub reason: Option<String>,
 
