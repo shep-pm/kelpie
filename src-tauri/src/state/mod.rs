@@ -40,6 +40,7 @@ use kelpie_engine::worker::{Paths, Records};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::board::BoardHost;
 use crate::pm::{self, PmPlan};
 use crate::sandbox_setup::SandboxSetup;
 use crate::workers::Workers;
@@ -348,6 +349,8 @@ pub struct AppState {
     bridge_checks: Mutex<Option<Sender<()>>>,
     /// What the app keeps for its workers across starts
     workers: Workers,
+    /// The poller that streams the board to the window
+    board: BoardHost,
 }
 
 impl std::fmt::Debug for AppState {
@@ -419,6 +422,7 @@ impl AppState {
             installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
             workers,
+            board: BoardHost::default(),
         })
     }
 
@@ -770,6 +774,12 @@ impl AppState {
         &self.workers
     }
 
+    /// The poller that streams the board to the window
+    #[must_use]
+    pub fn board(&self) -> &BoardHost {
+        &self.board
+    }
+
     /// kelpie's tools server, `None` when its door did not open
     #[must_use]
     pub fn tools(&self) -> Option<&Tools> {
@@ -801,6 +811,7 @@ impl AppState {
         }
         // Before the tree stops, so no check starts a probe the stop would miss
         lock(&self.bridge_checks).take();
+        self.board.stop();
         self.workers.close_logs();
         self.tree.stop_all(STOP_GRACE).map(|_| ())
     }

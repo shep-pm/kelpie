@@ -26,6 +26,7 @@ use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::collect_commands;
 
 pub mod agents;
+pub mod board;
 pub mod bridges;
 pub mod github;
 pub mod pm;
@@ -74,6 +75,10 @@ fn commands<R: Runtime>() -> tauri_specta::Builder<R> {
             workers::worker_watch,
             workers::worker_unwatch,
             workers::worker_resume,
+            board::board_watch,
+            board::board_refresh,
+            board::board_move,
+            board::link::open_link,
         ])
         // Token counts are far below 2^53, which a JS number holds exactly
         .dangerously_cast_bigints_to_number()

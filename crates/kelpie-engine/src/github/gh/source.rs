@@ -30,6 +30,29 @@ impl GithubSource {
     }
 }
 
+impl GithubSource {
+    /// The repo whose issues this reads
+    #[must_use]
+    pub fn repo(&self) -> &ForgeSlug {
+        &self.repo
+    }
+
+    /// The login `gh` holds, asked through the same hold as every read
+    ///
+    /// # Errors
+    ///
+    /// As [`Hold::viewer`].
+    pub fn viewer(&self) -> Result<String, ForgeError> {
+        self.hold.viewer()
+    }
+
+    /// When the hold on this source's calls lifts, while a limit is used up
+    #[must_use]
+    pub fn lifts_at(&self) -> Option<Timestamp> {
+        self.hold.lifts_at()
+    }
+}
+
 // The fields `gh issue view` is asked for. `url` tells an issue from a pull
 // request, which `gh issue view` answers for a pull request's number too.
 const VIEW_FIELDS: &str = "title,body,labels,state,url";
