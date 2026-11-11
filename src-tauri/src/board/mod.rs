@@ -14,16 +14,17 @@
 //! ones, so the engine gains no specta dependency. Kelpie polls while it runs
 //! and nothing polls once it quits: [`BoardHost::stop`] ends the poller.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use kelpie_engine::board::{self as engine, Board, Move, plan_move};
+use kelpie_engine::gate::Line;
 use kelpie_engine::github::gh::GithubSource;
 use kelpie_engine::github::{Clock, ForgeSlug, SystemClock, Timestamp};
 use kelpie_engine::settings::Settings;
-use kelpie_engine::ticket::ForgeError;
+use kelpie_engine::ticket::{ForgeError, OpenPull};
 use kelpie_engine::worker::{Record, Status};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -125,11 +126,13 @@ const HELD: &str = "Waiting on you";
 /// so, with its reason after the pause when it has one: a worker whose sandbox
 /// cannot start is Paused with why. The line keeps `Paused` first, which the
 /// worker tab's Resume button reads. Each sandbox request still waiting on the worker's feed gives the host it
-/// wants. `requests` holds those hosts by ticket.
+/// wants. `requests` holds those hosts by ticket. A ticket the gate found ready to merge
+/// (`ready`) says so: it waits on the maintainer's yes.
 fn needs_you(
     ticket: &str,
     records: &[Record],
     requests: &BTreeMap<String, Vec<String>>,
+    ready: &BTreeSet<String>,
 ) -> Vec<String> {
     let record = records.iter().find(|record| record.ticket == ticket);
     let own = record.and_then(|record| match record.status {
@@ -143,7 +146,9 @@ fn needs_you(
         _ => None,
     });
     let asked = requests.get(ticket).into_iter().flatten();
+    let merge = ready.contains(ticket).then(|| Line::ReadyToMerge.text());
     own.into_iter()
+        .chain(merge)
         .chain(asked.map(|host| format!("Wants to reach {host}")))
         .collect()
 }
@@ -152,7 +157,8 @@ impl BoardView {
     /// The view of `board`, whose tickets live in `repo`
     ///
     /// `records` and `requests` (the hosts each ticket's worker waits to reach, by
-    /// ticket) say which tickets wait on the maintainer.
+    /// ticket) say which tickets wait on the maintainer, and so does `ready`, the
+    /// tickets the gate found ready to merge.
     #[must_use]
     pub fn of(
         board: &Board,
@@ -160,6 +166,7 @@ impl BoardView {
         held_until: Option<Timestamp>,
         records: &[Record],
         requests: &BTreeMap<String, Vec<String>>,
+        ready: &BTreeSet<String>,
     ) -> Self {
         let page = |kind: &str, number: &dyn std::fmt::Display| {
             format!("https://github.com/{repo}/{kind}/{number}")
@@ -174,7 +181,7 @@ impl BoardView {
                 column: placed.column.into(),
                 url: page("issues", &placed.id),
                 pull_url: placed.pull.map(|number| page("pull", &number)),
-                needs_you: needs_you(&placed.id.to_string(), records, requests),
+                needs_you: needs_you(&placed.id.to_string(), records, requests, ready),
             })
             .collect::<Vec<_>>();
         let waits = tickets
@@ -355,7 +362,20 @@ fn poller_of(
     let plan = workers::plan(state.config(), project)?;
     // Each read hands over again for the workers that still owe the forge a draft
     let hands = state.workers().hands(project, &folder, &plan)?;
-    let retry = Box::new(move |records: &[Record]| hands.retry(records));
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    // Each read then runs the gate on the Review tickets, off this thread
+    let gate = state.workers_arc().gate(
+        project,
+        &folder,
+        state.tools_arc(),
+        Arc::clone(&clock),
+        workers::app_open(),
+    )?;
+    let ready = Arc::clone(&gate);
+    let retry = Box::new(move |records: &[Record], pulls: &[OpenPull]| {
+        hands.retry(records);
+        gate.after_read(records, pulls);
+    });
     let config = state.config().clone();
     let project = project.to_owned();
     let choose = Box::new(move || {
@@ -366,8 +386,8 @@ fn poller_of(
             done_days: settings.done_window.value.days(),
         })
     });
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    Ok(Poller::new(source, choose, records, waiting, retry, clock))
+    Ok(Poller::new(source, choose, records, waiting, retry, clock)
+        .with_ready(Box::new(move || ready.ready())))
 }
 
 /// Stream the project's board to the window, and keep it current

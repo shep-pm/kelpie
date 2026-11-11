@@ -842,6 +842,12 @@ impl AppState {
         &self.workers
     }
 
+    /// The same, as the `Arc` a project's gate holds weakly
+    #[must_use]
+    pub fn workers_arc(&self) -> &Arc<Workers> {
+        &self.workers
+    }
+
     /// The poller that streams the board to the window
     #[must_use]
     pub fn board(&self) -> &BoardHost {
@@ -852,6 +858,12 @@ impl AppState {
     #[must_use]
     pub fn tools(&self) -> Option<&Tools> {
         self.tools.as_deref()
+    }
+
+    /// kelpie's tools server as the `Arc` a project's gate holds, `None` when its door did not open
+    #[must_use]
+    pub fn tools_arc(&self) -> Option<Arc<Tools>> {
+        self.tools.clone()
     }
 
     /// The tickets of the project `id`, one source for the project, shared with the poller

@@ -28,6 +28,7 @@ use tauri_specta::collect_commands;
 pub mod agents;
 pub mod board;
 pub mod bridges;
+pub mod gate;
 pub mod github;
 pub mod pm;
 pub mod sandbox_setup;

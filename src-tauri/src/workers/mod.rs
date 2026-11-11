@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
-use kelpie_engine::github::gh::{Gh, GithubPulls, GithubSource, hold::Hold};
+use kelpie_engine::github::gh::{Gh, GithubActions, GithubPulls, GithubSource, hold::Hold};
 use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
 use kelpie_engine::lease::Leases;
 use kelpie_engine::local_paths::LocalPaths;
@@ -55,25 +55,28 @@ use tauri::ipc::Channel;
 
 mod feed;
 mod fix_turn;
+mod gates;
 pub mod hand_over;
 mod open;
 mod plan;
 mod tell;
 
 pub use feed::Feed;
+pub use gates::{Open, app_open};
 pub use hand_over::{Forge, Hands};
-use open::OpenOn;
+pub(crate) use open::OpenOn;
 pub use plan::{WorkerPlan, plan};
 pub use tell::{NoteOutcome, answer_on, cancel_on, note_on, note_through, stop_and_tell_on};
 
 use crate::board::poll::Requests;
+use crate::gate::Gate;
 use crate::state::AppState;
 
 #[cfg(test)]
 mod tests;
 
 /// The branch every GitHub project's worktrees are cut from
-const BASE: &str = "main";
+pub(crate) const BASE: &str = "main";
 
 /// What Resume sends as the turn's message: a message the maintainer writes is a Note
 const CARRY_ON: &str = "Carry on from where you stopped.";
@@ -105,13 +108,15 @@ type Sessions = Arc<SessionMap>;
 
 /// A project's GitHub calls, made through one hold
 ///
-/// The board's poller reads the tickets through `source`, and a hand-over opens its
-/// drafts through `pulls`, so a project's calls are paced as one set
+/// The board's poller reads the tickets through `source`, a hand-over opens its
+/// drafts through `pulls`, and the gate reruns a stuck run through `ci`, so a project's
+/// calls are paced as one set
 /// (`docs/design/tickets.md`, GitHub).
 #[derive(Debug)]
 struct Calls {
     source: Arc<GithubSource>,
     pulls: Arc<GithubPulls>,
+    ci: Arc<GithubActions>,
 }
 
 /// What one project's workers run on, read for one command
@@ -164,6 +169,8 @@ pub struct Workers {
     /// a start made and the one a board read made, shares one set
     /// ([`hand_over::Busy`]).
     handovers: Mutex<BTreeMap<String, hand_over::Busy>>,
+    /// Each project's gate, by project, built on the first ask ([`Workers::gate`])
+    gates: Mutex<BTreeMap<String, Arc<Gate>>>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -203,6 +210,7 @@ impl Workers {
             sources: Mutex::default(),
             forges: Mutex::default(),
             handovers: Mutex::default(),
+            gates: Mutex::default(),
         }
     }
 
@@ -262,10 +270,11 @@ impl Workers {
         let calls = Arc::new(Calls {
             source: Arc::new(GithubSource::new(hold.clone(), repo.clone())),
             pulls: Arc::new(GithubPulls::new(
-                hold,
-                repo,
+                hold.clone(),
+                repo.clone(),
                 LocalPaths::new([folder, self.data_dir.as_path()]),
             )),
+            ci: Arc::new(GithubActions::new(hold, repo)),
         });
         kept.insert(project_id.to_owned(), Arc::clone(&calls));
         Ok(calls)

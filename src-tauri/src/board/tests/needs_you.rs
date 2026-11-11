@@ -1,5 +1,7 @@
 //! The needs-you lines a ticket carries while its worker waits on the maintainer
 
+use std::collections::BTreeSet;
+
 use kelpie_engine::worker::Status;
 use kelpie_protocol::{SessionEvent, StopReason};
 
@@ -159,4 +161,24 @@ fn the_boards_count_is_the_sum_of_every_tickets_lines() {
     assert_eq!(ticket(&board, "12").needs_you.len(), 1);
     assert_eq!(ticket(&board, "13").needs_you.len(), 2);
     assert_eq!(board.needs_you, 3);
+}
+
+#[test]
+fn a_ticket_the_gate_found_ready_to_merge_says_so_beside_its_other_lines() {
+    let mut rig = two_tickets();
+    rig.poller = std::mem::replace(
+        &mut rig.poller,
+        Rig::poller(&rig.source, &rig.records, &rig.feeds),
+    )
+    .with_ready(Box::new(|| BTreeSet::from(["12".to_owned()])));
+    rig.feed("12").forward(request("r1", "crates.io"));
+
+    let board = view(rig.poller.place());
+
+    assert_eq!(
+        ticket(&board, "12").needs_you,
+        ["Ready to merge", "Wants to reach crates.io"]
+    );
+    assert!(ticket(&board, "13").needs_you.is_empty());
+    assert_eq!(board.needs_you, 2);
 }

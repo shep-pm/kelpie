@@ -4,7 +4,7 @@
 //! forge ([`Retry`]), which is the retry a worker parked on a failed open is told to
 //! expect (`docs/design/tickets.md`, Use case).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use kelpie_engine::board::{Board, Read, Rules, place};
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::settings::PickUp;
-use kelpie_engine::ticket::{ForgeError, GithubTickets};
+use kelpie_engine::ticket::{ForgeError, GithubTickets, OpenPull};
 use kelpie_engine::worker::{Record, Records};
 
 use super::{BoardEvent, BoardView};
@@ -59,7 +59,13 @@ pub type Requests = Box<dyn Fn() -> BTreeMap<String, Vec<String>> + Send>;
 /// ([`crate::workers::hand_over`]). A worker whose draft could not be opened, or whose
 /// file has since been rewritten, is handed over on the next read, which is what its
 /// reason promises: "kelpie tries again each minute".
-pub type Retry = Box<dyn Fn(&[Record]) + Send>;
+///
+/// It is given the pull requests the read listed too, which is what the gate's pass reads
+/// ([`crate::gate::Gate::after_read`]).
+pub type Retry = Box<dyn Fn(&[Record], &[OpenPull]) + Send>;
+
+/// Where a placing finds the tickets the gate found ready to merge
+pub type Ready = Box<dyn Fn() -> BTreeSet<String> + Send>;
 
 const DAY: u64 = 24 * 60 * 60;
 
@@ -104,6 +110,7 @@ pub struct Poller<F> {
     records: Arc<Mutex<Records>>,
     requests: Requests,
     retry: Retry,
+    ready: Ready,
     clock: Arc<dyn Clock>,
     last: Option<Last>,
     held: Option<Timestamp>,
@@ -133,11 +140,19 @@ impl<F: Feed> Poller<F> {
             records,
             requests,
             retry,
+            ready: Box::new(BTreeSet::new),
             clock,
             last: None,
             held: None,
             shown: None,
         }
+    }
+
+    /// Say which tickets are ready to merge, from `ready`, on each placing
+    #[must_use]
+    pub fn with_ready(mut self, ready: Ready) -> Self {
+        self.ready = ready;
+        self
     }
 
     /// Read GitHub, hand over for each worker that owes a draft, then place what it said
@@ -168,7 +183,11 @@ impl<F: Feed> Poller<F> {
             let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
             records.list().to_vec()
         };
-        (self.retry)(&records);
+        let pulls = self
+            .last
+            .as_ref()
+            .map_or(&[][..], |last| &last.read.pulls[..]);
+        (self.retry)(&records, pulls);
     }
 
     fn fetch(&mut self) -> Result<Last, ForgeError> {
@@ -223,6 +242,7 @@ impl<F: Feed> Poller<F> {
         let held = self.held.filter(|until| *until > now);
         // Asked before the records lock is held: the feeds' locks are never taken under it
         let requests = (self.requests)();
+        let ready = (self.ready)();
         let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
         let board = match &self.last {
             Some(last) => place(&last.read, records.list(), &last.rules),
@@ -230,7 +250,14 @@ impl<F: Feed> Poller<F> {
             None if held.is_some() => Board::default(),
             None => return None,
         };
-        let view = BoardView::of(&board, self.feed.repo(), held, records.list(), &requests);
+        let view = BoardView::of(
+            &board,
+            self.feed.repo(),
+            held,
+            records.list(),
+            &requests,
+            &ready,
+        );
         drop(records);
         self.show(BoardEvent::Board(view))
     }

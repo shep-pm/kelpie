@@ -114,6 +114,21 @@ pub struct Kept {
     /// The merge queue removals already sent back
     #[serde(default)]
     pub queue_removals: u32,
+    /// The pull request's number, as the last listing had it, so a pull request that
+    /// left the listing is read once with its number
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull: Option<u64>,
+    /// The head the gate last ruled at, which a worker waiting on that ruling gets no
+    /// pass for until its head moves
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruled: Option<String>,
+    /// The reason the gate put on the worker's record when it ruled, which tells the
+    /// gate's wait from one of the worker's own
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruled_for: Option<String>,
+    /// The head the gate found ready to merge, which the ticket's needs-you line says
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<String>,
 }
 
 impl Kept {
@@ -186,6 +201,39 @@ impl Kept {
         });
     }
 
+    /// Records that the gate ruled at `head` with `reason`, which is no longer ready
+    pub fn ruled_at(&mut self, head: &str, reason: &str) {
+        self.ruled = Some(head.to_owned());
+        self.ruled_for = Some(reason.to_owned());
+        self.ready = None;
+    }
+
+    /// Gives up the ruling, so the gate passes over the ticket again
+    pub fn unruled(&mut self) {
+        self.ruled = None;
+        self.ruled_for = None;
+    }
+
+    /// Whether a worker waiting with `reason` is waiting on the gate's ruling
+    ///
+    /// A worker that waits for another reason, such as a question or a hand-over's
+    /// ruling, is not, whatever the gate ruled before.
+    #[must_use]
+    pub fn rules_with(&self, reason: Option<&str>) -> bool {
+        self.ruled.is_some() && self.ruled_for.is_some() && self.ruled_for.as_deref() == reason
+    }
+
+    /// Whether the gate ruled at `head` and nothing has moved it since
+    #[must_use]
+    pub fn rules_at(&self, head: &str) -> bool {
+        self.ruled.as_deref() == Some(head)
+    }
+
+    /// Records that `head` is ready to merge on the maintainer's yes
+    pub fn ready_at(&mut self, head: &str) {
+        self.ready = Some(head.to_owned());
+    }
+
     /// Records the maintainer's yes, which holds only for `head`
     pub fn said_yes(&mut self, head: &str) {
         self.yes = Some(head.to_owned());
@@ -251,6 +299,11 @@ impl Book {
     #[must_use]
     pub fn get(&self, ticket: TicketId) -> Option<&Kept> {
         self.tickets.get(&ticket)
+    }
+
+    /// Every ticket with something kept, in ticket order
+    pub fn iter(&self) -> impl Iterator<Item = (TicketId, &Kept)> {
+        self.tickets.iter().map(|(ticket, kept)| (*ticket, kept))
     }
 
     /// What is kept about `ticket`, to read and change, started empty when none is
