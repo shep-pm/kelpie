@@ -189,16 +189,17 @@ impl Turns {
         if let Some(ending) = settled
             && next.is_none()
         {
+            // The reason goes with the status under this lock hold, so a reader never
+            // finds one without the other
             lost(
                 ticket,
-                records.set_status(ticket, ending.status()),
+                records
+                    .set_status(ticket, ending.status())
+                    .and_then(|()| records.set_reason(ticket, ending.reason())),
                 "its end",
             );
         }
         drop(records);
-        if let Some(ending) = settled {
-            waits(ticket, ending);
-        }
         self.events.hear(event);
         if let Some((session, notes, watch)) = next {
             self.dispatch(
@@ -260,19 +261,6 @@ impl Turns {
         let watch = Watch::new();
         records.keep_watch(ticket, watch.clone());
         Some((session, notes.join("\n\n"), watch))
-    }
-}
-
-/// Name what a held branch holds its ticket for
-///
-/// The names reach kelpie's log until the app shows a held ticket on its card and
-/// in the attention count (`docs/design/ux.md`, Attention).
-fn waits(ticket: &str, ending: &Ending) {
-    if let Ending::Held(held) = ending {
-        eprintln!(
-            "kelpie: ticket {ticket} waits on the maintainer: {}",
-            held.line()
-        );
     }
 }
 

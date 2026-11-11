@@ -632,6 +632,7 @@ fn hold_slot(project: &Project<'_>, ticket: &str, branch: &str) -> Result<Held, 
         .clone()
         .unwrap_or_else(|| Record::new(ticket, branch));
     record.status = Status::Running;
+    record.reason = None;
     records.keep(record.clone()).map_err(StartError::Record)?;
     records.seat(project.slots).map_err(StartError::Record)?;
     if let Some(seated) = records.get(ticket) {
