@@ -44,9 +44,8 @@ function Limit({ until }: { until: number }) {
  *
  * Ready tickets carry Start, and a drop from Ready on Building does the same.
  * Clicking a Building ticket calls `onOpenWorker`, as does a Start that took a
- * slot, and so does clicking a Review ticket whose worker waits on the
- * maintainer, since the wait is answered with a Note in that tab. Clicking any
- * other opens its pull request in Review, else its issue.
+ * slot, and clicking any other opens its pull request in Review, else its
+ * issue.
  */
 export function Board({
   onOpenWorker,
@@ -88,13 +87,7 @@ export function Board({
   }
 
   async function open(ticket: TicketView) {
-    // A card whose worker waits on the maintainer opens the worker, since a Note is
-    // the answer and the tab is where it is sent. A Review card with a ruling is such
-    // a ticket: its pull request is open, and the tab is the only route to the worker.
-    if (
-      ticket.column === "building" ||
-      (ticket.column === "review" && ticket.needs_you.length > 0)
-    )
+    if (ticket.column === "building")
       return onOpenWorker?.({ id: ticket.id, title: ticket.title });
     const url =
       ticket.column === "review" && ticket.pull_url

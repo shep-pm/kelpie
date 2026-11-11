@@ -505,26 +505,6 @@ describe("the Board panel", () => {
     expect(onOpenWorker).not.toHaveBeenCalled();
   });
 
-  it("clicking a Review ticket whose worker waits opens the worker, not the pull request", async () => {
-    const ruled = (t: TicketView) =>
-      t.id === "14"
-        ? { ...t, needs_you: ["the pull request's body names this machine"] }
-        : t;
-    const { onOpenWorker } = await open({
-      ...VIEW,
-      needs_you: 1,
-      tickets: VIEW.tickets.map(ruled),
-    });
-
-    fireEvent.click(card("Read the board"));
-
-    expect(onOpenWorker).toHaveBeenCalledWith({
-      id: "14",
-      title: "Read the board",
-    });
-    expect(openLink).not.toHaveBeenCalled();
-  });
-
   it("clicking any other ticket opens its issue", async () => {
     await open();
 
