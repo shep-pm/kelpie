@@ -51,7 +51,7 @@ use crate::worktree::{self, Remote, clone};
 use super::ceiling::{Ceiling, Watch};
 use super::credential::credential;
 use super::instructions::instructions;
-use super::turn_events::kept;
+use super::turn_events::Turns;
 use super::{Record, Records, Seat, Status};
 
 /// The folder under the data folder that holds each project's state
@@ -423,7 +423,8 @@ impl core::error::Error for StartError {
 /// it running tries again for. A ticket whose worker already holds a slot is
 /// refused, so no two sessions write one worktree.
 ///
-/// `events` hears every [`SessionEvent`] of the turn, after `start` has read it
+/// `events` hears every [`SessionEvent`] of the turn, and of each turn after it that
+/// a [`super::note`] or a [`super::stop_and_tell`] starts, after `start` has read it
 /// for the record: the session id is kept as soon as the harness gives it, and
 /// once the turn ends its branch passes the fence ([`super::turn_end`]), which settles
 /// the record and holds no slot.
@@ -571,25 +572,36 @@ fn begin(
             .with_instructions(instructions(project, &ticket.id, credential.why))
             .with_log(log),
     );
+    let turns = Turns::begin(project, &ticket.id, &session, events);
     let watch = Watch::new();
     lock(project.records).keep_watch(&ticket.id, watch.clone());
-    session.send(
-        ticket.text.clone(),
-        kept(project, &ticket.id, watch.clone(), events),
-    );
-    watch.hold_to(
-        ceiling,
-        Arc::clone(&session),
-        Arc::clone(project.records),
-        ticket.id.clone(),
-        project.slots,
-    );
+    turns.dispatch(&session, prompt(project, ticket, &record), watch, ceiling);
     Ok(Started::Running {
         record,
         session,
         worktree,
         state_dir,
     })
+}
+
+/// The turn's prompt: the ticket's text, then each note the maintainer left for
+/// the worker since its last turn, one to a paragraph
+///
+/// The notes are cleared from the record once the turn has them.
+fn prompt(project: &Project<'_>, ticket: &Ticket, record: &Record) -> String {
+    if record.notes.is_empty() {
+        return ticket.text.clone();
+    }
+    match lock(project.records).take_notes(&ticket.id) {
+        Ok(notes) => format!("{}\n\n{}", ticket.text, notes.join("\n\n")),
+        Err(error) => {
+            eprintln!(
+                "kelpie: the record of ticket {} did not keep which notes it sent: {error}",
+                ticket.id
+            );
+            ticket.text.clone()
+        }
+    }
 }
 
 /// Put `ticket`'s worker in the project's slots, and keep its record
