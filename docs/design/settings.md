@@ -67,6 +67,7 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | CI holds the merge | Project | On by default. Off reads no checks and asks for the merge once the branch has the latest base (`gate-and-merge.md`, Settings) |
 | Fix attempts | Project | A count from 0, and absent for no cap, which is the default. How many fix turns red CI gets for one ticket before a ruling. 0 rules on the first red run. SK spelled no cap as -1, which a file here refuses |
 | CI wait | Project | Minutes from 1 to 1440, 60 by default. How long a check may sit queued before a rerun, and how long a head with no check waits before a ruling |
+| Catch up | Project | Always, or Only on conflict, and Always by default. Whether a pull request behind the base is rebased whenever it lacks the latest base, or only when merging it into the base conflicts. Only on conflict lets a clean branch go on unrebased, and the merge queue or the base's CI tests the combination, which spares a repo whose merge queue does that a rebase and a CI rerun on every base move. SK's `[git]` `catch_up` (`gate-and-merge.md`, The order, catch-up) |
 
 ### Agent files
 

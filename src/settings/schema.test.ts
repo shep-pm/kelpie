@@ -10,6 +10,13 @@ import { formSchema, ordered } from "./schema";
  */
 const raw: Value = {
   $defs: {
+    CatchUp: {
+      description: "When a pull request behind the base is caught up with it",
+      oneOf: [
+        { const: "always", description: "Always", type: "string" },
+        { const: "conflicts", description: "Only on conflict", type: "string" },
+      ],
+    },
     PickUp: {
       description: "Who a project's tickets come from",
       oneOf: [
@@ -87,6 +94,11 @@ const raw: Value = {
       maximum: 1440,
       minimum: 1,
       type: ["integer", "null"],
+    },
+    "catch-up": {
+      anyOf: [{ $ref: "#/$defs/CatchUp" }, { type: "null" }],
+      default: null,
+      description: "When a pull request behind the base is caught up.",
     },
     "worker-slots": {
       default: null,
@@ -209,6 +221,26 @@ describe("the settings form's fields", () => {
     expect(wait.type).toBe("integer");
     expect(wait.minimum).toBe(1);
     expect(wait.maximum).toBe(1440);
+  });
+
+  it("draws catch-up as a choice of Always and Only on conflict", () => {
+    const gate = formSchema(raw, ["catch-up"]);
+
+    const catchUp = field("catch-up", gate) ?? {};
+    expect(catchUp.title).toBe("Catch up");
+    expect(catchUp.type).toBe("string");
+    expect(catchUp.oneOf).toEqual([
+      { const: "always", title: "Always" },
+      { const: "conflicts", title: "Only on conflict" },
+    ]);
+  });
+
+  it("shows catch-up after the gate's other rows", () => {
+    expect(ordered(["catch-up", "ci-wait", "fix-attempts"])).toEqual([
+      "fix-attempts",
+      "ci-wait",
+      "catch-up",
+    ]);
   });
 
   it("shows the gate's rows after the board's", () => {
