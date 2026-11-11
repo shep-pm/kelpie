@@ -87,6 +87,8 @@ impl Field {
     /// picks up, and what it calls Ready, are its own for the same reason: the
     /// ticket source is the project's. How far back Done reaches is the
     /// machine's, or one project's, since how far back to look is a person's.
+    /// Whether CI holds the merge, how many fix attempts red CI gets and how long
+    /// it is waited on are the project's, since the repo's CI is.
     #[must_use]
     pub fn layers(self) -> &'static [Layer] {
         const PROJECT: &[Layer] = &[Layer::Project];
@@ -108,7 +110,10 @@ impl Field {
             | Self::HarnessGlobalFolder
             | Self::RunWithoutSandbox
             | Self::PickUp
-            | Self::ReadyLabel => PROJECT,
+            | Self::ReadyLabel
+            | Self::CiHoldsMerge
+            | Self::FixAttempts
+            | Self::CiWait => PROJECT,
             // A lease is the machine's, so its capacity is one value for every
             // project, and so is the appearance of the window they share
             Self::BridgeUpdates | Self::LeaseCapacity | Self::Theme => GLOBAL,
@@ -203,6 +208,9 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
             BUILT_IN.ready_label.to_string(),
         )?,
         done_window: Field::DoneWindow.resolve(global, project, BUILT_IN.done_window)?,
+        ci_holds_merge: Field::CiHoldsMerge.resolve(global, project, BUILT_IN.ci_holds_merge)?,
+        fix_attempts: Field::FixAttempts.resolve(global, project, BUILT_IN.fix_attempts)?,
+        ci_wait: Field::CiWait.resolve(global, project, BUILT_IN.ci_wait)?,
     })
 }
 

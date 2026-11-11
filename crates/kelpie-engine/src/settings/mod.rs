@@ -36,6 +36,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub mod ci;
 mod counts;
 mod error;
 pub mod layers;
@@ -46,6 +47,7 @@ pub mod tickets;
 #[cfg(test)]
 mod tests;
 
+pub use ci::{CiWait, FixAttempts};
 pub use counts::{CARGO_TEST_CAPACITY, Capacity, Slots, TurnTimeout};
 pub use error::SettingsError;
 pub use layers::{Layer, LayerFile, Layered};
@@ -304,11 +306,20 @@ pub enum Field {
 
     /// How many days a closed ticket stays in Done
     DoneWindow,
+
+    /// Whether CI holds the merge
+    CiHoldsMerge,
+
+    /// How many fix attempts red CI gets
+    FixAttempts,
+
+    /// How long CI is waited on
+    CiWait,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 21] = [
+    pub const ALL: [Field; 24] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -330,6 +341,9 @@ impl Field {
         Field::PickUp,
         Field::ReadyLabel,
         Field::DoneWindow,
+        Field::CiHoldsMerge,
+        Field::FixAttempts,
+        Field::CiWait,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -357,6 +371,9 @@ impl Field {
             Self::PickUp => "pick-up",
             Self::ReadyLabel => "ready-label",
             Self::DoneWindow => "done-window",
+            Self::CiHoldsMerge => "ci-holds-merge",
+            Self::FixAttempts => "fix-attempts",
+            Self::CiWait => "ci-wait",
         }
     }
 }
@@ -438,6 +455,15 @@ pub struct Settings {
 
     /// How many days a closed ticket stays in the board's Done column. A closed ticket older than this is off the board.
     pub done_window: Option<DoneWindow>,
+
+    /// Whether CI holds a merge. Off, kelpie reads no checks and asks for the merge once the branch has the latest base.
+    pub ci_holds_merge: Option<bool>,
+
+    /// How many fix turns the worker gets on red runs for one ticket before kelpie rules instead. 0 rules on the first red run, and a project that sets none has no cap.
+    pub fix_attempts: Option<FixAttempts>,
+
+    /// How many minutes a check may sit queued before a rerun, and how long a head with no check waits before a ruling
+    pub ci_wait: Option<CiWait>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -505,6 +531,15 @@ pub struct Defaults {
 
     /// How long a closed ticket stays in Done when no layer says
     pub done_window: DoneWindow,
+
+    /// Whether CI holds the merge when no project says
+    pub ci_holds_merge: bool,
+
+    /// How many fix attempts red CI gets when no project names a cap: none
+    pub fix_attempts: Option<FixAttempts>,
+
+    /// How long CI is waited on when no project says
+    pub ci_wait: CiWait,
 }
 
 /// kelpie's built-in layer, in code rather than a shipped file
@@ -532,6 +567,9 @@ pub const BUILT_IN: Defaults = Defaults {
     pick_up: PickUp::Me,
     ready_label: tickets::READY_FOR_AGENT,
     done_window: tickets::FOURTEEN_DAYS,
+    ci_holds_merge: true,
+    fix_attempts: None,
+    ci_wait: ci::AN_HOUR,
 };
 
 /// Every setting's value, each with the layer kelpie took it from
@@ -599,6 +637,15 @@ pub struct Resolved {
 
     /// How many days a closed ticket stays in Done
     pub done_window: Layered<DoneWindow>,
+
+    /// Whether CI holds the merge
+    pub ci_holds_merge: Layered<bool>,
+
+    /// How many fix attempts red CI gets, `None` for no cap
+    pub fix_attempts: Layered<Option<FixAttempts>>,
+
+    /// How long CI is waited on
+    pub ci_wait: Layered<CiWait>,
 }
 
 impl Resolved {

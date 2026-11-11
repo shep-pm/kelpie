@@ -64,6 +64,9 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 | Pick up issues from | Project | *Me* by default, which takes the issues the signed-in login opened, or *Everyone* for every open issue. An issue carrying the ready label is a ticket either way (`tickets.md`, Where tickets come from) |
 | Ready label | Project | The name the ticket source gives the label a Ready ticket carries, `ready-for-agent` by default (`tickets.md`, The board). It names one label, so kelpie refuses an empty one and one holding a comma, since `gh issue list --label` splits its argument on commas |
 | Done window | Global, project | How many days a closed ticket stays in the board's Done column, 14 by default, 1 to 365. A closed ticket older than this is off the board. A project's value wins over the global one, as how far back to look is one person's (`tickets.md`, The board) |
+| CI holds the merge | Project | On by default. Off reads no checks and asks for the merge once the branch has the latest base (`gate-and-merge.md`, Settings) |
+| Fix attempts | Project | A count from 0, and absent for no cap, which is the default. How many fix turns red CI gets for one ticket before a ruling. 0 rules on the first red run. SK spelled no cap as -1, which a file here refuses |
+| CI wait | Project | Minutes from 1 to 1440, 60 by default. How long a check may sit queued before a rerun, and how long a head with no check waits before a ruling |
 
 ### Agent files
 

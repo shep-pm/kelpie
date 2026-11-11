@@ -26,6 +26,9 @@ const LABELS: Record<string, string> = {
   "pick-up": "Pick up issues from",
   "ready-label": "Ready label",
   "done-window": "Done window (days)",
+  "ci-holds-merge": "CI holds the merge",
+  "fix-attempts": "Fix attempts",
+  "ci-wait": "CI wait",
 };
 
 /** Fields the form leaves out: each bridge's update row is on the harness's login row, and a lease's capacity has no row of its own yet. */

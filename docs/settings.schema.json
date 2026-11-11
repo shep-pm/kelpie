@@ -109,11 +109,39 @@
         "null"
       ]
     },
+    "ci-holds-merge": {
+      "default": null,
+      "description": "Whether CI holds a merge. Off, kelpie reads no checks and asks for the merge once the branch has the latest base.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "ci-wait": {
+      "default": null,
+      "description": "How many minutes a check may sit queued before a rerun, and how long a head with no check waits before a ruling",
+      "maximum": 1440,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "done-window": {
       "default": null,
       "description": "How many days a closed ticket stays in the board's Done column. A closed ticket older than this is off the board.",
       "maximum": 365,
       "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "fix-attempts": {
+      "default": null,
+      "description": "How many fix turns the worker gets on red runs for one ticket before kelpie rules instead. 0 rules on the first red run, and a project that sets none has no cap.",
+      "maximum": 4294967295,
+      "minimum": 0,
       "type": [
         "integer",
         "null"

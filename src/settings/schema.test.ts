@@ -69,6 +69,25 @@ const raw: Value = {
       minimum: 1,
       type: ["integer", "null"],
     },
+    "ci-holds-merge": {
+      default: null,
+      description: "Whether CI holds a merge.",
+      type: ["boolean", "null"],
+    },
+    "fix-attempts": {
+      default: null,
+      description: "How many fix turns red CI gets for one ticket.",
+      maximum: 4294967295,
+      minimum: 0,
+      type: ["integer", "null"],
+    },
+    "ci-wait": {
+      default: null,
+      description: "How many minutes CI is waited on.",
+      maximum: 1440,
+      minimum: 1,
+      type: ["integer", "null"],
+    },
     "worker-slots": {
       default: null,
       description: "How many of this project's workers run at once.",
@@ -170,6 +189,32 @@ describe("the settings form's fields", () => {
     expect(days.type).toBe("integer");
     expect(days.minimum).toBe(1);
     expect(days.maximum).toBe(365);
+  });
+
+  it("draws the gate's three rows with their labels and bounds", () => {
+    const gate = formSchema(raw, ["ci-holds-merge", "fix-attempts", "ci-wait"]);
+
+    const holds = field("ci-holds-merge", gate) ?? {};
+    expect(holds.title).toBe("CI holds the merge");
+    expect(holds.type).toBe("boolean");
+    expect(holds.oneOf).toBeUndefined();
+
+    const attempts = field("fix-attempts", gate) ?? {};
+    expect(attempts.title).toBe("Fix attempts");
+    expect(attempts.type).toBe("integer");
+    expect(attempts.minimum).toBe(0);
+
+    const wait = field("ci-wait", gate) ?? {};
+    expect(wait.title).toBe("CI wait");
+    expect(wait.type).toBe("integer");
+    expect(wait.minimum).toBe(1);
+    expect(wait.maximum).toBe(1440);
+  });
+
+  it("shows the gate's rows after the board's", () => {
+    expect(
+      ordered(["ci-wait", "fix-attempts", "ci-holds-merge", "done-window"]),
+    ).toEqual(["done-window", "ci-holds-merge", "fix-attempts", "ci-wait"]);
   });
 
   it("shows the board's fields after the sandbox ones", () => {

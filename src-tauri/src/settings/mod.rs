@@ -330,6 +330,17 @@ fn fields(
                 &resolved.done_window.value,
                 resolved.done_window.from,
             ),
+            Field::CiHoldsMerge => layered(
+                field,
+                &resolved.ci_holds_merge.value,
+                resolved.ci_holds_merge.from,
+            ),
+            Field::FixAttempts => layered(
+                field,
+                &resolved.fix_attempts.value,
+                resolved.fix_attempts.from,
+            ),
+            Field::CiWait => layered(field, &resolved.ci_wait.value, resolved.ci_wait.from),
             // `Field` grows with each slice's settings, and a form shows only those it has
             _ => FieldView {
                 key: field.key().to_owned(),
