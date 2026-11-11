@@ -238,6 +238,32 @@ fn ending_the_pm_session_makes_the_next_send_open_a_new_one() {
     state.end_pm_session();
 }
 
+#[test]
+fn an_install_holds_the_app_until_it_ends_and_only_one_runs() {
+    let dir = Dir::new();
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        Box::new(|_| Err("never built".to_owned())),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap();
+    assert!(!state.installing());
+
+    let hold = state.hold_for_install().expect("the first install holds");
+    assert!(state.installing());
+    assert!(
+        state.hold_for_install().is_none(),
+        "a second install would ask for a second password"
+    );
+
+    drop(hold);
+    assert!(!state.installing());
+    assert!(state.hold_for_install().is_some());
+}
+
 /// Run the checks on a thread, counting what each one is asked, until `quit` drops
 fn run_checks(
     dir: &Dir,

@@ -190,13 +190,19 @@ pub fn pm_sandbox(state: State<'_, AppState>) -> SandboxView {
 ///
 /// Waits on the password prompt, so it runs off the main thread. A loaded
 /// profile ends the held session, even an unsandboxed one, and the next send
-/// opens one that probes the sandbox again and starts it sandboxed. The
-/// command is fixed: nothing from the webview reaches it
+/// opens one that probes the sandbox again and starts it sandboxed. A send
+/// made while the prompt is open is refused (`pm_send`'s `Failed`), so the end
+/// of the session never cuts a turn off. The command is fixed: nothing from the webview reaches it
 /// (`docs/design/sandbox-setup.md`, Install).
 #[tauri::command(async)]
 #[specta::specta]
 #[must_use]
 pub fn sandbox_install(state: State<'_, AppState>) -> install::InstallOutcome {
+    let Some(_hold) = state.hold_for_install() else {
+        return install::InstallOutcome::Failed {
+            message: "An install is already waiting on its password prompt".to_owned(),
+        };
+    };
     let outcome = install::install(&state.tree());
     if outcome == install::InstallOutcome::Installed {
         state.end_pm_session();

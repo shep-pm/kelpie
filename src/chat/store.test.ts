@@ -337,6 +337,27 @@ describe("the chat store", () => {
     expect(useChat.getState().sandbox).toEqual(none);
   });
 
+  it("no message goes while an install waits on its prompt, since the session it ends would cut the turn off", async () => {
+    let done: (outcome: InstallOutcome) => void = () => {};
+    sandboxInstall.mockReturnValue(
+      new Promise<InstallOutcome>((resolve) => {
+        done = resolve;
+      }),
+    );
+
+    const waiting = useChat.getState().install();
+    expect(useChat.getState().installing).toBe(true);
+    await useChat.getState().send("hello");
+    expect(pmSend).not.toHaveBeenCalled();
+    expect(useChat.getState().turns).toHaveLength(0);
+
+    done({ kind: "dismissed" });
+    await waiting;
+    expect(useChat.getState().installing).toBe(false);
+    await useChat.getState().send("hello");
+    expect(pmSend).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { kind: "dismissed" },
     { kind: "no_agent", commands: ["sudo a", "sudo b"] },

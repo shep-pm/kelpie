@@ -96,8 +96,9 @@ export const commands = {
 	 * 
 	 *  Waits on the password prompt, so it runs off the main thread. A loaded
 	 *  profile ends the held session, even an unsandboxed one, and the next send
-	 *  opens one that probes the sandbox again and starts it sandboxed. The
-	 *  command is fixed: nothing from the webview reaches it
+	 *  opens one that probes the sandbox again and starts it sandboxed. A send
+	 *  made while the prompt is open is refused (`pm_send`'s `Failed`), so the end
+	 *  of the session never cuts a turn off. The command is fixed: nothing from the webview reaches it
 	 *  (`docs/design/sandbox-setup.md`, Install).
 	 */
 	sandboxInstall: () => __TAURI_INVOKE<InstallOutcome>("sandbox_install"),

@@ -63,11 +63,16 @@ type Chat = {
    */
   sandbox: SandboxView | null;
   /**
+   * An install waits on its password prompt. A loaded profile ends the PM's
+   * session, so no message is sent meanwhile: it would be cut off.
+   */
+  installing: boolean;
+  /**
    * Read the PM's history from kelpie's log, once. Every call returns the same
    * load, and `send` waits for it, so history always comes before a new turn.
    */
   load: () => Promise<void>;
-  /** Send `text` to the PM. Does nothing while a turn runs. */
+  /** Send `text` to the PM. Does nothing while a turn runs or an install waits. */
   send: (text: string) => Promise<void>;
   /** Send the interrupted last message again, in place of the interrupted turn. */
   retry: () => Promise<void>;
@@ -296,6 +301,7 @@ export const useChat = create<Chat>()((set, get) => {
     turns: [],
     historyError: null,
     sandbox: null,
+    installing: false,
 
     load() {
       loading ??= (async () => {
@@ -316,6 +322,7 @@ export const useChat = create<Chat>()((set, get) => {
 
     async send(text) {
       await get().load();
+      if (get().installing) return;
       if (get().turns.some((turn) => turn.state === "running")) return;
       await run(begin(text), (channel) => commands.pmSend(text, channel));
     },
@@ -342,6 +349,7 @@ export const useChat = create<Chat>()((set, get) => {
 
     install() {
       installing ??= (async (): Promise<InstallOutcome> => {
+        set({ installing: true });
         try {
           const outcome = await commands.sandboxInstall();
           if (outcome.kind === "installed") {
@@ -354,6 +362,7 @@ export const useChat = create<Chat>()((set, get) => {
           return { kind: "failed", message: String(error) };
         } finally {
           installing = null;
+          set({ installing: false });
         }
       })();
       return installing;
@@ -382,7 +391,7 @@ export const useChat = create<Chat>()((set, get) => {
       loading = null;
       installing = null;
       lookedAt++;
-      set({ turns: [], historyError: null, sandbox: null });
+      set({ turns: [], historyError: null, sandbox: null, installing: false });
     },
   };
 });

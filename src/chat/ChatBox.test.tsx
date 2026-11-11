@@ -144,6 +144,21 @@ describe("the chat box", () => {
     expect((box as HTMLTextAreaElement).value).toBe("");
   });
 
+  it("a message typed while an install waits on its prompt stays in the box and sends nothing", async () => {
+    const box = await openBox();
+    fireEvent.change(box, { target: { value: "plan the slice" } });
+    act(() => useChat.setState({ installing: true }));
+
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(pmSend).not.toHaveBeenCalled();
+    expect((box as HTMLTextAreaElement).value).toBe("plan the slice");
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
   it("Enter on an empty box sends nothing", async () => {
     const box = await openBox();
     fireEvent.keyDown(box, { key: "Enter" });
