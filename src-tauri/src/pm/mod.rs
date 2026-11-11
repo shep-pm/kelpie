@@ -266,7 +266,7 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
                 bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
             let confinement = confined(opening, tools.as_ref(), pinned)?;
             Session::on_bridge(
-                claude_bridge(opening, tools.clone(), confinement),
+                pm_bridge(opening, tools.clone(), confinement),
                 project.path.clone(),
                 project.pm_session.clone(),
                 pm.choice.clone(),
@@ -288,14 +288,10 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
 /// The `claude-acp` bridge a PM session runs on, which it can move to a newer
 /// version of between turns
 ///
-/// Every look at which version to run reads `versions.json` and the settings, so
-/// a newer version a bridge check installed and probed takes over at the
-/// session's next idle point, and a version that fails a session is marked bad
-/// there and the one before it is used again (`docs/design/bridge-updates.md`,
-/// Swapping). Each version's harness starts inside a sandbox of its own, as the
-/// first one's does (ADR 0005), so no version runs outside crabpot, unless the
+/// Each version's harness starts inside a sandbox of its own, as the first
+/// one's does (ADR 0005), so no version runs outside crabpot, unless the
 /// session was opened [`Unsandboxed`](Confinement::Unsandboxed).
-fn claude_bridge(
+fn pm_bridge(
     opening: &Opening<'_>,
     tools: Option<SessionTools>,
     confinement: Confinement,
@@ -307,10 +303,50 @@ fn claude_bridge(
         config,
         ..
     } = *opening;
-    let pin = claude::pin();
-    let (config, project_id) = (config.clone(), project.id.clone());
     let (pm_sandbox, folder) = (PmSandbox::of(opening), project.path.clone());
     let tree = Arc::clone(tree);
+    claude_bridge(data_dir, config, &project.id, move |cmd| {
+        let tree = Arc::clone(&tree);
+        let started = match confinement {
+            Confinement::Sandboxed => {
+                let (harness, sandbox) = pm_sandbox
+                    .start(cmd, tools.as_ref().map(SessionTools::door))
+                    .map_err(|error| error.to_string())?;
+                Started {
+                    launch: sandboxed_launcher(tree, harness.clone(), sandbox, folder.clone()),
+                    harness,
+                }
+            }
+            Confinement::Unsandboxed => {
+                let harness = pm_sandbox.harness(cmd).map_err(|error| error.to_string())?;
+                Started {
+                    launch: launcher(tree, harness.clone(), folder.clone()),
+                    harness,
+                }
+            }
+        };
+        Ok(started)
+    })
+}
+
+/// The `claude-acp` bridge a session runs on, which it can move to a newer
+/// version of between turns, started by `start` on the installed binary of
+/// each version
+///
+/// The PM and a worker share it, and differ only in how `start` builds the
+/// harness and its sandbox. Every look at which version to run reads
+/// `versions.json` and the settings of the project `project_id`, so a newer
+/// version a bridge check installed and probed takes over at the session's next
+/// idle point, and a version that fails a session is marked bad there and the
+/// one before it is used again (`docs/design/bridge-updates.md`, Swapping).
+pub(crate) fn claude_bridge(
+    data_dir: &Path,
+    config: &ConfigDir,
+    project_id: &str,
+    start: impl Fn(PathBuf) -> Result<Started, String> + Send + Sync + 'static,
+) -> Bridge {
+    let pin = claude::pin();
+    let (config, project_id) = (config.clone(), project_id.to_owned());
     // Each closure holds its own copy of the folder, since a closure owns what it captures
     let (current_dir, start_dir, failed_dir) = (
         data_dir.to_path_buf(),
@@ -336,26 +372,7 @@ fn claude_bridge(
         start: Box::new(move |version| {
             let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
-            let tree = Arc::clone(&tree);
-            let started = match confinement {
-                Confinement::Sandboxed => {
-                    let (harness, sandbox) = pm_sandbox
-                        .start(cmd, tools.as_ref().map(SessionTools::door))
-                        .map_err(|error| error.to_string())?;
-                    Started {
-                        launch: sandboxed_launcher(tree, harness.clone(), sandbox, folder.clone()),
-                        harness,
-                    }
-                }
-                Confinement::Unsandboxed => {
-                    let harness = pm_sandbox.harness(cmd).map_err(|error| error.to_string())?;
-                    Started {
-                        launch: launcher(tree, harness.clone(), folder.clone()),
-                        harness,
-                    }
-                }
-            };
-            Ok(started)
+            start(cmd)
         }),
         failed: Box::new(move |version, reason| {
             let mut versions = versions(&failed_dir, pin);
