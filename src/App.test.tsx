@@ -1,8 +1,19 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+// The real Channel needs Tauri's IPC bridge, which jsdom has not got.
+vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class {
+    onmessage: (event: unknown) => void = () => {};
+  },
+}));
+
 vi.mock("@/bindings", () => ({
   commands: {
+    boardWatch: async (channel: { onmessage: (event: unknown) => void }) => {
+      channel.onmessage({ kind: "unavailable", message: "Offline." });
+      return { status: "ok", data: null };
+    },
     projectGet: async () => "/work/project",
     settingsSchema: async () => ({ type: "object", properties: {} }),
     settingsGet: async () => ({

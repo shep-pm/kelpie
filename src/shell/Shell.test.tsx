@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeAll,
@@ -9,8 +15,36 @@ import {
   vi,
 } from "vitest";
 
+// The real Channel needs Tauri's IPC bridge, which jsdom has not got.
+vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class {
+    onmessage: (event: unknown) => void = () => {};
+  },
+}));
+
 vi.mock("@/bindings", () => ({
-  commands: { projectGet: async () => "/work/project" },
+  commands: {
+    projectGet: async () => "/work/project",
+    boardWatch: async (channel: { onmessage: (event: unknown) => void }) => {
+      channel.onmessage({
+        kind: "board",
+        held_until: null,
+        needs_you: 0,
+        tickets: [
+          {
+            id: "12",
+            title: "Wire the poller",
+            priority: null,
+            column: "ready",
+            url: "https://github.com/o/r/issues/12",
+            pull_url: null,
+            needs_you: [],
+          },
+        ],
+      });
+      return { status: "ok", data: null };
+    },
+  },
 }));
 
 import { Shell } from "./Shell";
@@ -37,6 +71,18 @@ describe("the shell", () => {
     expect(pm()).toBeTruthy();
     expect(board()).toBeTruthy();
     expect(await screen.findByPlaceholderText("Message the PM")).toBeTruthy();
+  });
+
+  it("the Board panel shows the board", async () => {
+    render(<Shell onSettings={() => {}} />);
+
+    const ready = await screen.findByRole("group", { name: "Ready" });
+    expect(within(ready).getByText("Wire the poller")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Board" })).getByRole("group", {
+        name: "Draft",
+      }),
+    ).toBeTruthy();
   });
 
   it("collapsing a panel hides its body and shows an icon button that reopens it", async () => {
