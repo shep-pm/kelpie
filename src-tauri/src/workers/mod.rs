@@ -68,6 +68,9 @@ pub struct WorkerStarted {
 /// Build the worker's session for an [`Opening`], from what the app adds to it
 type Opener<'a> = dyn Fn(&OpenOn<'_>, &Opening<'_>) -> Result<Session, String> + 'a;
 
+/// The feeds of every worker, by project and ticket
+type Feeds = Arc<Mutex<BTreeMap<(String, String), Arc<Feed>>>>;
+
 /// What the app keeps for its workers, across starts
 pub struct Workers {
     data_dir: PathBuf,
@@ -89,7 +92,7 @@ pub struct Workers {
     /// The channels watching each worker, by project and ticket
     ///
     /// A feed outlives its worker's turns, so a tab stays attached across a Resume.
-    feeds: Arc<Mutex<BTreeMap<(String, String), Arc<Feed>>>>,
+    feeds: Feeds,
     sources: Mutex<BTreeMap<String, Arc<GithubSource>>>,
 }
 
@@ -309,7 +312,6 @@ impl Workers {
     /// The host of each sandbox request still waiting on the maintainer, oldest
     /// first. A worker with none is left out. The reader holds the feeds and not
     /// the app's state, so the board's poller keeps it on its own thread.
-    #[must_use]
     pub fn requests_of(&self, project_id: &str) -> Requests {
         let feeds = Arc::clone(&self.feeds);
         let project = project_id.to_owned();
