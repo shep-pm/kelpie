@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::ceiling::Watch;
+use super::turn_events::Events;
 use super::{Seat, Status, Worker, slots};
 use crate::session::SessionId;
 
@@ -45,6 +46,14 @@ pub struct Record {
 
     /// Its standing in the project's slots
     pub seat: Seat,
+
+    /// What the maintainer told it that its next prompt carries, oldest first
+    ///
+    /// A Note waits here while a turn runs, and the turn's end sends it
+    /// (`docs/design/workers.md`, Talking to a worker). A record from before
+    /// notes had none.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl Record {
@@ -58,6 +67,7 @@ impl Record {
             session: None,
             status: Status::Running,
             seat: Seat::Without,
+            notes: Vec::new(),
         }
     }
 
@@ -79,6 +89,12 @@ pub struct Records {
     /// The clock of each ticket's latest turn, which is never written: a launch
     /// has no turn running
     watches: HashMap<String, Watch>,
+    /// Where each ticket's turns send their events, which is never written
+    events: HashMap<String, Events>,
+    /// What Stop and tell said to a ticket whose cancelled turn has not ended yet,
+    /// which the turn's end sends as the next prompt. Never written: a launch has no
+    /// turn cancelling.
+    redirects: HashMap<String, String>,
 }
 
 impl Records {
@@ -102,6 +118,8 @@ impl Records {
             file,
             list,
             watches: HashMap::new(),
+            events: HashMap::new(),
+            redirects: HashMap::new(),
         })
     }
 
@@ -130,7 +148,7 @@ impl Records {
     /// otherwise run on and pause the worker a new start began.
     pub(super) fn retire_watch(&mut self, ticket: &str) {
         if let Some(watch) = self.watches.remove(ticket) {
-            watch.turn_ended();
+            watch.retire();
         }
     }
 
@@ -138,6 +156,80 @@ impl Records {
     pub(super) fn keep_watch(&mut self, ticket: &str, watch: Watch) {
         self.retire_watch(ticket);
         self.watches.insert(ticket.to_owned(), watch);
+    }
+
+    /// `ticket`'s latest turn clock, `None` before its first turn this launch
+    pub(super) fn watch_of(&self, ticket: &str) -> Option<Watch> {
+        self.watches.get(ticket).cloned()
+    }
+
+    /// Keep `events` as where `ticket`'s turns send what they say, so a turn
+    /// that starts later reaches the caller that started the worker
+    pub(super) fn keep_events(&mut self, ticket: &str, events: Events) {
+        self.events.insert(ticket.to_owned(), events);
+    }
+
+    /// Where `ticket`'s turns send their events, `None` before its first turn this launch
+    pub(super) fn events_of(&self, ticket: &str) -> Option<Events> {
+        self.events.get(ticket).cloned()
+    }
+
+    /// Keep `text` as what `ticket`'s cancelled turn's end sends next, after
+    /// whatever was kept before it, one to a paragraph
+    pub(super) fn redirect(&mut self, ticket: &str, text: &str) {
+        self.redirects
+            .entry(ticket.to_owned())
+            .and_modify(|kept| {
+                kept.push_str("\n\n");
+                kept.push_str(text);
+            })
+            .or_insert_with(|| text.to_owned());
+    }
+
+    /// Take what `ticket`'s cancelled turn's end sends next
+    pub(super) fn take_redirect(&mut self, ticket: &str) -> Option<String> {
+        self.redirects.remove(ticket)
+    }
+
+    /// Add `text` to `ticket`'s notes and write the file, `false` when it has no record
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written. The note is not kept then.
+    pub fn add_note(&mut self, ticket: &str, text: &str) -> io::Result<bool> {
+        let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) else {
+            return Ok(false);
+        };
+        record.notes.push(text.to_owned());
+        if let Err(error) = write(&self.file, &self.list) {
+            if let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) {
+                record.notes.pop();
+            }
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Take `ticket`'s notes, oldest first, and write the file
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written. The notes stay in the record then.
+    pub fn take_notes(&mut self, ticket: &str) -> io::Result<Vec<String>> {
+        let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) else {
+            return Ok(Vec::new());
+        };
+        if record.notes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let notes = std::mem::take(&mut record.notes);
+        if let Err(error) = write(&self.file, &self.list) {
+            if let Some(record) = self.list.iter_mut().find(|record| record.ticket == ticket) {
+                record.notes = notes;
+            }
+            return Err(error);
+        }
+        Ok(notes)
     }
 
     /// Keep `record`, in its place when its ticket is already listed and at the
