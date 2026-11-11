@@ -32,13 +32,17 @@
       "deb": {
         "depends": ["bubblewrap"],
         "files": {
-          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor"
+          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor",
+          "/usr/share/polkit-1/actions/pm.shep.kelpie.policy": "linux/pm.shep.kelpie.policy",
+          "/usr/libexec/kelpie-app/install-profile": "linux/install-profile"
         }
       },
       "rpm": {
         "depends": ["bubblewrap"],
         "files": {
-          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor"
+          "/usr/share/kelpie-app/kelpie.apparmor": "linux/kelpie.apparmor",
+          "/usr/share/polkit-1/actions/pm.shep.kelpie.policy": "linux/pm.shep.kelpie.policy",
+          "/usr/libexec/kelpie-app/install-profile": "linux/install-profile"
         }
       }
     },

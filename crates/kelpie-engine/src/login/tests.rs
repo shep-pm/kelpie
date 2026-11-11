@@ -114,6 +114,42 @@ fn a_keychain_error_never_carries_a_stored_value() {
     }
 }
 
+#[test]
+fn a_locked_or_missing_keyring_says_so_and_what_to_do() {
+    // What the Secret Service store hands `NoStorageAccess` for a locked or absent login collection
+    let said = LoginError::from(keyring::Error::NoStorageAccess(
+        "SS error: result not returned from SS API".into(),
+    ))
+    .to_string();
+
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            said,
+            "the OS keychain failed: the system keyring is locked or missing. \
+             Unlock it, or start one such as GNOME Keyring or KWallet, then try again"
+        );
+        assert!(!said.contains("SS error"), "{said}");
+        assert!(!said.contains("platform storage"), "{said}");
+    } else {
+        // Off Linux the same variant means a read-only keychain or no logon session, which only
+        // the platform's own text names
+        assert!(
+            said.contains("Couldn't access platform storage: SS error"),
+            "{said}"
+        );
+    }
+}
+
+#[test]
+fn another_platform_failure_keeps_the_platforms_own_text() {
+    let said =
+        LoginError::from(keyring::Error::PlatformFailure("the bus is gone".into())).to_string();
+    assert!(said.contains("the bus is gone"), "{said}");
+
+    let said = LoginError::from(keyring::Error::NoDefaultStore).to_string();
+    assert!(said.contains("No default store"), "{said}");
+}
+
 /// Round-trips one login through the real OS keychain.
 ///
 /// CI has no keychain, so this runs by hand on macOS and Linux. It uses a

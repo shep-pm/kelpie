@@ -3,7 +3,9 @@
 //! Install (`docs/design/sandbox-setup.md`, Install) copies a profile only from a
 //! path the package already holds root-owned, so the file and the bundle config
 //! are read together here: the rules in the file, the binary path they name, and
-//! where each package puts it. Nothing here loads the profile.
+//! where each package puts it. The helper script `pkexec` runs and the polkit
+//! action that gives its prompt a sentence ship beside it, and are read here too.
+//! Nothing here loads the profile.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +17,18 @@ const PROFILE_SOURCE: &str = "linux/kelpie.apparmor";
 
 /// Where both packages install it: root-owned, and no folder a person writes
 const PROFILE_INSTALLED: &str = "/usr/share/kelpie-app/kelpie.apparmor";
+
+/// The helper script Install runs through `pkexec`, relative to `src-tauri`
+const HELPER_SOURCE: &str = "linux/install-profile";
+
+/// Where both packages install the helper, which `sandbox_setup::install::HELPER` runs
+const HELPER_INSTALLED: &str = "/usr/libexec/kelpie-app/install-profile";
+
+/// The polkit action file, relative to `src-tauri`
+const POLICY_SOURCE: &str = "linux/pm.shep.kelpie.policy";
+
+/// Where both packages install it, in the folder polkit reads actions from
+const POLICY_INSTALLED: &str = "/usr/share/polkit-1/actions/pm.shep.kelpie.policy";
 
 /// The system bwrap the profile starts, from the `bubblewrap` package
 const BWRAP: &str = "/usr/bin/bwrap";
@@ -113,8 +127,9 @@ fn installed_binary() -> String {
     format!("/usr/bin/{name}")
 }
 
-/// `package` installs the profile at `PROFILE_INSTALLED`, depends on `bubblewrap`,
-/// and runs no script of its own when it is installed
+/// `package` installs the profile at `PROFILE_INSTALLED`, the helper at
+/// `HELPER_INSTALLED` and the polkit action at `POLICY_INSTALLED`, depends on
+/// `bubblewrap`, and runs no script of its own when it is installed
 ///
 /// Tauri's bundler reads each `files` entry as `<path in the package>: <path on
 /// disk>`, the disk path relative to `src-tauri`, which it makes the current
@@ -134,6 +149,16 @@ fn ships(
     assert!(
         src_tauri().join(PROFILE_SOURCE).is_file(),
         "the {package} names {PROFILE_SOURCE} as the file it ships"
+    );
+    assert_eq!(
+        files.get(Path::new(HELPER_INSTALLED)),
+        Some(&PathBuf::from(HELPER_SOURCE)),
+        "the {package} must install the helper at {HELPER_INSTALLED}, the path the polkit action names"
+    );
+    assert_eq!(
+        files.get(Path::new(POLICY_INSTALLED)),
+        Some(&PathBuf::from(POLICY_SOURCE)),
+        "the {package} must install the polkit action at {POLICY_INSTALLED}, where polkit reads actions"
     );
     assert!(
         depends.iter().flatten().any(|dep| dep == "bubblewrap"),
@@ -202,8 +227,78 @@ fn both_packages_ship_the_profile_and_depend_on_bubblewrap() {
     );
     assert!(
         linux.appimage.files.is_empty(),
-        "an AppImage runs from a new mount path each launch, so no profile can name it and it ships none"
+        "an AppImage runs from a new mount path each launch, so no profile can name it and it ships none, nor the helper and polkit action that install it"
     );
+}
+
+#[test]
+fn the_install_helper_runs_the_two_fixed_commands_and_is_executable() {
+    let path = src_tauri().join(HELPER_SOURCE);
+    let text =
+        std::fs::read_to_string(&path).expect("the helper the packages ship should be readable");
+
+    assert!(
+        text.starts_with("#!/bin/sh\n"),
+        "the helper is a /bin/sh script"
+    );
+    assert!(
+        text.lines().any(|line| line == "set -eu"),
+        "the helper stops at the first failure and at an unset variable"
+    );
+    assert!(
+        text.lines().any(|line| line
+            == format!(
+                "/usr/bin/install -m 0644 {PROFILE_INSTALLED} /etc/apparmor.d/kelpie && /usr/sbin/apparmor_parser -r /etc/apparmor.d/kelpie"
+            )),
+        "the helper copies the packaged profile and loads it, by absolute paths"
+    );
+    assert!(
+        !text.contains('$'),
+        "nothing from the environment or the arguments reaches a command the helper runs as root"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_ne!(
+            mode & 0o111,
+            0,
+            "the helper must be executable, and the bundler keeps the source file's mode"
+        );
+    }
+}
+
+#[test]
+fn the_polkit_action_names_the_helper_and_asks_for_a_password() {
+    let text = std::fs::read_to_string(src_tauri().join(POLICY_SOURCE))
+        .expect("the polkit action the packages ship should be readable");
+
+    assert!(
+        text.contains("<action id=\"pm.shep.kelpie.install-profile\">"),
+        "one action, named for what it does"
+    );
+    assert_eq!(
+        text.matches("<action ").count(),
+        1,
+        "the file holds the one action"
+    );
+    assert!(
+        text.contains("<message>") && text.contains("</message>"),
+        "the action carries the sentence the password prompt shows"
+    );
+    assert!(
+        text.contains(&format!(
+            "<annotate key=\"org.freedesktop.policykit.exec.path\">{HELPER_INSTALLED}</annotate>"
+        )),
+        "polkit matches the action to pkexec by the helper's path alone"
+    );
+    for default in ["allow_any", "allow_inactive", "allow_active"] {
+        assert!(
+            text.contains(&format!("<{default}>auth_admin</{default}>")),
+            "{default} asks for an administrator's password"
+        );
+    }
 }
 
 #[test]
