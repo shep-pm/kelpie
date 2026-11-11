@@ -440,6 +440,11 @@ export type SandboxView = {
 	 *  found no refusal
 	 */
 	refusal: RefusalView | null,
+	/**
+	 *  Whether the PM's session runs without a sandbox, because the project
+	 *  allows it and the sandbox could not start. `refusal` stays set then.
+	 */
+	unsandboxed: boolean,
 };
 
 /**  One thing a session did, in the order it happened */

@@ -149,6 +149,35 @@ fn the_projects_sandbox_settings_reach_the_plan() {
 }
 
 #[test]
+fn the_run_without_a_sandbox_setting_reaches_the_plan() {
+    let chat = Chat::on(&FakeAgent::new());
+    let project = chat.state().project_id(None).unwrap();
+    assert!(
+        !plan(chat.state().config(), &project)
+            .unwrap()
+            .run_without_sandbox,
+        "off with nothing set"
+    );
+
+    settings_set(
+        chat.handle(),
+        chat.state(),
+        Target::Project {
+            id: project.clone(),
+        },
+        "run-without-sandbox".to_owned(),
+        serde_json::json!(true),
+    )
+    .unwrap();
+
+    assert!(
+        plan(chat.state().config(), &project)
+            .unwrap()
+            .run_without_sandbox
+    );
+}
+
+#[test]
 fn the_reply_style_is_part_of_the_instructions_unless_the_harness_default_is_chosen() {
     let chat = Chat::on(&FakeAgent::new());
     let project = chat.state().project_id(None).unwrap();

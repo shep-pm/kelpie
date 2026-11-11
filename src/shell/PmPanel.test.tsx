@@ -12,6 +12,7 @@ vi.mock("@/bindings", () => ({
   commands: { projectGet: async () => "/work/project" },
 }));
 
+import { useChat } from "@/chat/store";
 import { PmPanel } from "./PmPanel";
 import { registerTabBody, useTabs } from "./tabs";
 
@@ -39,6 +40,21 @@ describe("the PM panel", () => {
     expect(await screen.findByPlaceholderText("Message the PM")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "PM" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Close PM" })).toBeNull();
+  });
+
+  it("marks the header No sandbox while the PM's session runs unsandboxed", async () => {
+    render(<PmPanel {...controls} onSettings={() => {}} />);
+    await screen.findByPlaceholderText("Message the PM");
+    expect(screen.queryByText("No sandbox")).toBeNull();
+
+    act(() =>
+      useChat.setState({
+        sandbox: { refusal: "no_capabilities", unsandboxed: true },
+      }),
+    );
+
+    expect(screen.getByText("No sandbox")).toBeTruthy();
+    useChat.getState().reset();
   });
 
   it("opens the settings from the gear in its header", () => {

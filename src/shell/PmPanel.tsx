@@ -1,5 +1,6 @@
 import { Settings, X } from "lucide-react";
 import { ChatBox } from "@/chat/ChatBox";
+import { NoSandboxBadge } from "@/chat/NoSandboxBadge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Panel, type PanelControls } from "./Panel";
@@ -19,6 +20,7 @@ export function PmPanel({
   return (
     <Panel
       title="PM"
+      badge={<NoSandboxBadge />}
       {...controls}
       actions={
         <Button
