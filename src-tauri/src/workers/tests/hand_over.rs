@@ -28,7 +28,7 @@ use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::settings::PickUp;
 use kelpie_engine::ticket::fake::{FakePulls, FakeTickets, PullCall};
 use kelpie_engine::ticket::{
-    ForgeError, GithubTickets, Issue, Listed, OpenPull, Pulls, TicketId, Tickets,
+    ForgeError, GithubTickets, Issue, Listed, OpenPull, PullState, Pulls, TicketId, Tickets,
 };
 use kelpie_engine::worker::{Opening, Paths, Record, Seat, Status, Ticket, owes_a_draft};
 use kelpie_protocol::SessionEvent;
@@ -159,6 +159,22 @@ impl Pulls for OnThreads {
     fn edit(&self, number: NonZeroU64, title: &str, body: &str) -> Result<(), ForgeError> {
         self.heard(Asked::Edit);
         self.pulls.edit(number, title, body)
+    }
+
+    fn state(&self, number: NonZeroU64) -> Result<PullState, ForgeError> {
+        self.pulls.state(number)
+    }
+
+    fn mark_ready(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        self.pulls.mark_ready(number)
+    }
+
+    fn merge(&self, number: NonZeroU64, head: &str) -> Result<(), ForgeError> {
+        self.pulls.merge(number, head)
+    }
+
+    fn disable_auto_merge(&self, number: NonZeroU64) -> Result<(), ForgeError> {
+        self.pulls.disable_auto_merge(number)
     }
 }
 
