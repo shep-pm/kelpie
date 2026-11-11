@@ -162,6 +162,45 @@ describe("a transport's watch", () => {
     expect(pmHistory).not.toHaveBeenCalled();
   });
 
+  it("starts a new running turn for an event that follows an ended turn", async () => {
+    const watched: Channel<SessionEvent>[] = [];
+    const mine = {
+      ...workerTransport(),
+      watch: (channel: Channel<SessionEvent>) => {
+        watched.push(channel);
+      },
+    };
+    mine.history.mockResolvedValueOnce({
+      status: "ok",
+      data: [
+        { entry: "user", text: "build it" },
+        { entry: "event", kind: "text", delta: "Done" },
+        {
+          entry: "event",
+          kind: "turn_ended",
+          stop_reason: "end_turn",
+          usage: null,
+        },
+      ],
+    });
+    const chat = createChat(mine);
+    await chat.getState().load();
+
+    watched[0]?.onmessage({ kind: "text", delta: "Again" });
+    watched[0]?.onmessage({
+      kind: "turn_ended",
+      stop_reason: "end_turn",
+      usage: null,
+    });
+    watched[0]?.onmessage({ kind: "text", delta: "Once more" });
+
+    expect(chat.getState().turns.map((t) => [t.reply, t.state])).toEqual([
+      ["Done", "done"],
+      ["Again", "done"],
+      ["Once more", "running"],
+    ]);
+  });
+
   it("holds an event that arrives before the history, and folds it after", async () => {
     const mine = {
       ...workerTransport(),

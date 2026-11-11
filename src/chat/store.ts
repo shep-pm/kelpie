@@ -188,14 +188,27 @@ function apply(turn: Turn, event: SessionEvent): Turn {
   }
 }
 
+/** Events that carry a turn's own content, and so open one when none is running. */
+const OPENS_TURN: ReadonlySet<SessionEvent["kind"]> = new Set([
+  "started",
+  "text",
+  "tool_step",
+  "sandbox_request",
+]);
+
 /**
- * Add what a watched session sent to its last turn. A turn the log never ended
- * was shown as `interrupted`, and the session going on shows it was only
- * running.
+ * Add what a watched session sent to the turn it belongs to. A turn the log
+ * never ended was shown as `interrupted`, and the session going on shows it was
+ * only running. The feed carries no user entry, so content that follows a turn
+ * that ended opens a new turn, with no message of its own.
  */
 function follow(turns: Turn[], event: SessionEvent): Turn[] {
   const last = turns.at(-1);
   if (!last) return turns;
+  const ended = last.state === "done" || last.state === "cancelled";
+  if (ended && OPENS_TURN.has(event.kind)) {
+    return [...turns, apply(begin(""), event)];
+  }
   const turn: Turn =
     last.state === "interrupted" ? { ...last, state: "running" } : last;
   return [...turns.slice(0, -1), apply(turn, event)];

@@ -19,6 +19,8 @@ export function workerTransport(ticket: string): Transport {
       read ??= commands.workerWatch(ticket, channel);
     },
     unwatch: async (channel) => {
+      // The feed hears an unwatch that beats its watch before it has the watcher to drop
+      await read?.catch(() => {});
       await commands.workerUnwatch(ticket, channel);
     },
     history: async () => {

@@ -29,6 +29,11 @@ function Header({ ticket }: { ticket: WorkerTicket }) {
   const [resumed, setResumed] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
+  // A worker that is Paused again needs its button back
+  useEffect(() => {
+    if (!paused) setResumed(false);
+  }, [paused]);
+
   async function resume() {
     setProblem(null);
     const result = await commands.workerResume(ticket.id);

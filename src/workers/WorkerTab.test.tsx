@@ -161,6 +161,20 @@ describe("a worker's tab", () => {
     expect(screen.getByText("Opening it now and pushing")).toBeTruthy();
   });
 
+  it("shows the turn a Resume starts as a turn of its own, running", async () => {
+    await open(past.slice(0, 3));
+    await screen.findByText("I read the issue.");
+
+    await act(async () =>
+      channels[0]?.onmessage({ kind: "text", delta: "Back at it" }),
+    );
+
+    expect(screen.getByText("I read the issue.")).toBeTruthy();
+    expect(screen.getByText("Back at it")).toBeTruthy();
+    expect(screen.queryByText("I read the issueBack at it")).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
+
   it("shows a worker that ended with its last turn as it is", async () => {
     await open(past.slice(0, 3));
 
@@ -200,6 +214,20 @@ describe("a worker's tab", () => {
     );
   });
 
+  it("shows Resume again when the worker is Paused again after a Resume", async () => {
+    onBoard(["Paused, resumes when you say so"]);
+    await open();
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull(),
+    );
+
+    await act(async () => onBoard([]));
+    await act(async () => onBoard(["Paused, resumes when you say so"]));
+
+    expect(await screen.findByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
   it("shows why a Resume was refused, and keeps the button", async () => {
     workerResume.mockResolvedValueOnce({
       status: "error",
@@ -230,6 +258,28 @@ describe("a worker's tab", () => {
 
     cleanup();
 
+    await waitFor(() =>
+      expect(workerUnwatch).toHaveBeenCalledWith("13", channels[0]),
+    );
+  });
+
+  it("waits for a watch still in flight before it unwatches", async () => {
+    let answer: (entries: Ok<LogEntry[]>) => void = () => {};
+    workerWatch.mockImplementationOnce(
+      (_ticket, channel) =>
+        new Promise((resolve) => {
+          channels.push(channel);
+          answer = resolve;
+        }),
+    );
+    render(<WorkerTab ticket={TICKET} />);
+    await waitFor(() => expect(channels).toHaveLength(1));
+
+    cleanup();
+    await act(async () => {});
+    expect(workerUnwatch).not.toHaveBeenCalled();
+
+    await act(async () => answer(ok([])));
     await waitFor(() =>
       expect(workerUnwatch).toHaveBeenCalledWith("13", channels[0]),
     );
