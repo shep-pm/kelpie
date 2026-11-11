@@ -29,6 +29,9 @@ use std::time::SystemTime;
 use crate::tree::ProcessTree;
 
 mod cache;
+mod catch_up;
+#[cfg(test)]
+mod catch_up_tests;
 pub mod clone;
 mod common;
 mod in_process;
@@ -46,6 +49,7 @@ pub(crate) mod tests;
 // `is_ancestor` and `local_config` are public here, where SK keeps them to its
 // crate: their callers are outside this one.
 pub use cache::{Pruned, TurnMark, prune};
+pub use catch_up::{Rebase, rebase};
 pub use in_process::{TreeFile, blobs, is_ancestor, local_config, tree_files};
 pub use loose::{commit_of, loose_commit, loose_commit_in, loose_head};
 pub use remote::Remote;
@@ -609,6 +613,15 @@ pub fn head(tree: &ProcessTree, repo: &Path, worktree: &Path) -> Result<String, 
         Some(commit) => Ok(commit),
         None => output(tree, trusted_git(worktree, &dirs), ["rev-parse", "HEAD"]),
     }
+}
+
+/// Gives up the merge in progress in `worktree`, which leaves it at its head
+///
+/// # Errors
+///
+/// [`WorktreeError`] naming the git command that failed.
+pub fn abort_merge(tree: &ProcessTree, repo: &Path, worktree: &Path) -> Result<(), WorktreeError> {
+    trusted(tree, repo, worktree)?(&["merge", "--abort"]).map(drop)
 }
 
 /// The files `worktree` holds that its last commit does not: changed, staged
