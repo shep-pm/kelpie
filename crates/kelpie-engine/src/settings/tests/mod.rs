@@ -14,6 +14,9 @@ mod writes;
 // The board's three fields, in their own file beside the types they read
 mod tickets;
 
+// The gate's three fields, in their own file beside the types they read
+mod ci;
+
 /// A config folder of its own for one test, never written over by another
 struct Dir(PathBuf);
 
@@ -195,6 +198,18 @@ fn an_unset_field_comes_from_the_built_in_layer() {
             },
             done_window: Layered {
                 value: BUILT_IN.done_window,
+                from: Layer::BuiltIn,
+            },
+            ci_holds_merge: Layered {
+                value: true,
+                from: Layer::BuiltIn,
+            },
+            fix_attempts: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            ci_wait: Layered {
+                value: BUILT_IN.ci_wait,
                 from: Layer::BuiltIn,
             },
         }
