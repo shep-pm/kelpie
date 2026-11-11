@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 
 use super::*;
 use crate::ci::{FailedLog, HeadStatus, Queued};
-use crate::settings::{CiWait, FixAttempts};
+use crate::settings::{CatchUp, CiWait, FixAttempts};
 use crate::ticket::TicketId;
 
 const HEAD: &str = "aaaaaaa1111111111111111111111111111111aa";
@@ -19,6 +19,7 @@ fn limits() -> Limits {
         ci_holds_merge: true,
         fix_attempts: None,
         ci_wait: serde_json::from_value::<CiWait>(10.into()).unwrap(),
+        catch_up: CatchUp::Always,
     }
 }
 
@@ -41,6 +42,7 @@ fn look(checks: HeadStatus) -> Look {
         base: Base::Current,
         head: HEAD.to_owned(),
         agents_files: vec![],
+        merges_clean: false,
         base_runs_pull_workflow: true,
     }
 }
@@ -265,6 +267,29 @@ fn a_branch_behind_its_base_is_caught_up() {
 }
 
 #[test]
+fn a_clean_branch_behind_its_base_goes_on_unrebased_when_the_project_catches_up_on_conflicts() {
+    let conflicts = Limits {
+        catch_up: CatchUp::Conflicts,
+        ..limits()
+    };
+    let mut look = look(HeadStatus::Passed);
+    look.base = Base::Behind;
+
+    look.merges_clean = true;
+    assert_eq!(pass(&look, &mut waiting(0), &conflicts, at(500)), Step::Yes);
+    // Always rebases it anyway, and so does a merge that does not come out clean.
+    assert_eq!(
+        pass(&look, &mut waiting(0), &limits(), at(500)),
+        Step::CatchUp
+    );
+    look.merges_clean = false;
+    assert_eq!(
+        pass(&look, &mut waiting(0), &conflicts, at(500)),
+        Step::CatchUp
+    );
+}
+
+#[test]
 fn a_conflict_is_a_fix_turn_up_to_three_then_the_conflict_ruling() {
     let files = vec!["work.txt".to_owned()];
     let mut kept = Kept::default();
@@ -414,6 +439,31 @@ fn a_run_that_is_running_after_its_rerun_is_waited_on_to_the_jobs_own_timeout() 
         pass(&look, &mut kept, &limits(), at(JOB_TIMEOUT)),
         Step::Rule(Ruling::CheckQueued { .. })
     ));
+}
+
+#[test]
+fn a_running_job_is_waited_on_while_the_stuck_check_beside_it_is_the_one_ruled_on() {
+    let mut running = queued("test", Some(9));
+    running.running = true;
+    let look = look(HeadStatus::Pending(vec![
+        running,
+        queued("app/deploy", None),
+    ]));
+    let mut kept = waiting(0);
+    kept.reran_queued(HEAD, 9, at(0));
+    assert_eq!(
+        pass(&look, &mut kept, &limits(), at(JOB_TIMEOUT - 1)),
+        Step::Wait(Line::WaitingForCi)
+    );
+    assert_eq!(
+        pass(&look, &mut kept, &limits(), at(JOB_TIMEOUT)),
+        Step::Rule(Ruling::CheckQueued {
+            head: HEAD.to_owned(),
+            checks: vec!["app/deploy".to_owned()],
+            held: false,
+            run: None,
+        })
+    );
 }
 
 #[test]
@@ -770,4 +820,5 @@ fn the_limits_come_from_the_settings() {
     assert!(limits.ci_holds_merge);
     assert_eq!(limits.fix_attempts, None);
     assert_eq!(limits.ci_wait.duration().as_secs(), 3600);
+    assert_eq!(limits.catch_up, CatchUp::Always);
 }

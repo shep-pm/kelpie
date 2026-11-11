@@ -26,7 +26,7 @@
 
 use crate::ci::{FailedCheck, HeadStatus, Queued};
 use crate::github::Timestamp;
-use crate::settings::{CiWait, FixAttempts, Resolved};
+use crate::settings::{CatchUp, CiWait, FixAttempts, Resolved};
 use crate::ticket::OpenPull;
 use crate::worktree::Base;
 
@@ -83,6 +83,10 @@ pub struct Look {
     pub head: String,
     /// The harnesses' own files the diff holds
     pub agents_files: Vec<String>,
+    /// Whether merging the head into the base branch is clean. Only read when the
+    /// branch is behind and the project catches up on a conflict alone, so a caller
+    /// with no answer says `false` and the branch is caught up, which finds the conflict
+    pub merges_clean: bool,
     /// Whether the base branch holds a workflow that runs on a pull request
     pub base_runs_pull_workflow: bool,
 }
@@ -96,6 +100,8 @@ pub struct Limits {
     pub fix_attempts: Option<FixAttempts>,
     /// How long a check may sit queued before a rerun, and a head with no check waits before a ruling
     pub ci_wait: CiWait,
+    /// When a branch behind its base is caught up: always, or only on a conflict
+    pub catch_up: CatchUp,
 }
 
 impl From<&Resolved> for Limits {
@@ -104,6 +110,7 @@ impl From<&Resolved> for Limits {
             ci_holds_merge: resolved.ci_holds_merge.value,
             fix_attempts: resolved.fix_attempts.value,
             ci_wait: resolved.ci_wait.value,
+            catch_up: resolved.catch_up.value,
         }
     }
 }
@@ -258,7 +265,9 @@ pub fn pass(look: &Look, kept: &mut Kept, limits: &Limits, now: Timestamp) -> St
             files: look.agents_files.clone(),
         });
     }
-    if look.base == Base::Behind {
+    // Under `conflicts`, a branch behind its base that merges cleanly goes on
+    // unrebased, to the checks below.
+    if look.base == Base::Behind && (limits.catch_up == CatchUp::Always || !look.merges_clean) {
         return Step::CatchUp;
     }
     if !limits.ci_holds_merge {
@@ -431,7 +440,6 @@ fn pending(
     if waited < cap || active.is_empty() {
         return Step::Wait(Line::WaitingForCi);
     }
-    let first = active.iter().find_map(|check| check.run);
     let rerun = |run: u64| {
         kept.queued
             .as_ref()
@@ -446,20 +454,31 @@ fn pending(
     if !runs.is_empty() {
         return Step::Rerun(runs);
     }
-    // A rerun run's job that is running ends at its own timeout. A check with no
-    // run cannot be rerun, so it is waited on to the same limit.
-    let running = active.iter().all(|check| check.running);
+    // A job that is running ends at its own timeout, so one running check is
+    // waited on to that limit, and a check with no run, which cannot be rerun,
+    // is waited on to the same limit.
+    let stuck: Vec<&Queued> = active
+        .iter()
+        .copied()
+        .filter(|check| !check.running)
+        .collect();
+    let first = stuck.iter().find_map(|check| check.run);
+    let running = stuck.len() < active.len();
     if (running || first.is_none()) && waited < JOB_TIMEOUT {
         return Step::Wait(Line::WaitingForCi);
     }
+    // The ruling names the checks that are stuck, not the ones running fine. Past
+    // the timeout a running job is stuck too.
+    let named = if stuck.is_empty() { &active } else { &stuck };
+    let run = named.iter().find_map(|check| check.run);
     Step::Rule(Ruling::CheckQueued {
         head: head.to_owned(),
-        checks: active
+        checks: named
             .iter()
-            .filter(|check| check.run == first)
+            .filter(|check| check.run == run)
             .map(|check| check.name.clone())
             .collect(),
         held: false,
-        run: first,
+        run,
     })
 }
