@@ -1,7 +1,15 @@
 import type { ComponentType } from "react";
 import { create } from "zustand";
 
-export type Tab = { id: string; title: string };
+export type Tab = {
+  id: string;
+  title: string;
+  /**
+   * The ticket this tab works on, when it is a worker's tab. The panel reads
+   * that ticket's waits off the board and shows them as the tab's count.
+   */
+  ticket?: string;
+};
 
 /** The PM's own tab: always first, and the only one that cannot close. */
 export const PM_TAB: Tab = { id: "pm", title: "PM" };

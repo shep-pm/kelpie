@@ -1,13 +1,14 @@
 import { KanbanSquare, MessageSquare } from "lucide-react";
 import { useState } from "react";
-import { Board } from "@/board/Board";
+import { BoardPanel } from "@/board/Board";
+import { useBoard } from "@/board/store";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { WorkerTab, type WorkerTicket } from "@/workers/WorkerTab";
-import { Panel, PanelStrip, PanelStripButton } from "./Panel";
+import { PanelStrip, PanelStripButton } from "./Panel";
 import { PmPanel } from "./PmPanel";
 import { registerTabBody, useTabs } from "./tabs";
 
@@ -20,7 +21,7 @@ const PANEL_MIN = "320px";
 function openWorker(ticket: WorkerTicket) {
   const id = `worker:${ticket.id}`;
   registerTabBody(id, () => <WorkerTab ticket={ticket} />);
-  useTabs.getState().open({ id, title: `#${ticket.id}` });
+  useTabs.getState().open({ id, title: `#${ticket.id}`, ticket: ticket.id });
 }
 
 /**
@@ -32,6 +33,9 @@ function openWorker(ticket: WorkerTicket) {
 export function Shell({ onSettings }: { onSettings: () => void }) {
   const [folded, setFolded] = useState<ReadonlySet<PanelId>>(new Set());
   const [maximised, setMaximised] = useState<PanelId | null>(null);
+  // A folded panel keeps the board it last read, so its strip button can still
+  // count what waits inside it.
+  const boardWaits = useBoard((s) => s.view?.needs_you ?? 0);
 
   const shown = (id: PanelId) =>
     maximised === null ? !folded.has(id) : maximised === id;
@@ -65,9 +69,7 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
         {both && <ResizableHandle />}
         {shown("board") && (
           <ResizablePanel id="board" minSize={PANEL_MIN} defaultSize="50%">
-            <Panel title="Board" {...controls("board")}>
-              <Board onOpenWorker={openWorker} />
-            </Panel>
+            <BoardPanel {...controls("board")} onOpenWorker={openWorker} />
           </ResizablePanel>
         )}
       </ResizablePanelGroup>
@@ -84,6 +86,7 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
             <PanelStripButton
               title="Board"
               icon={<KanbanSquare />}
+              count={boardWaits}
               onOpen={() => reopen("board")}
             />
           )}

@@ -37,7 +37,7 @@ vi.mock("@/bindings", () => ({
       channel.onmessage({
         kind: "board",
         held_until: null,
-        needs_you: 0,
+        needs_you: 2,
         tickets: [
           {
             id: "12",
@@ -56,6 +56,18 @@ vi.mock("@/bindings", () => ({
             url: "https://github.com/o/r/issues/13",
             pull_url: null,
             needs_you: [],
+          },
+          {
+            id: "17",
+            title: "Answer the refusal",
+            priority: null,
+            column: "building",
+            url: "https://github.com/o/r/issues/17",
+            pull_url: null,
+            needs_you: [
+              "GitHub refused the push",
+              "Paused, resumes when you say so",
+            ],
           },
         ],
       });
@@ -121,8 +133,19 @@ describe("the shell", () => {
     render(<Shell onSettings={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Collapse Board" }));
     expect(board()).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Open Board" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Open Board/ }));
     expect(board()).toBeTruthy();
+  });
+
+  it("a collapsed Board panel's icon button carries the board's count", async () => {
+    render(<Shell onSettings={() => {}} />);
+    await screen.findByRole("group", { name: "Ready" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Board" }));
+
+    const open = screen.getByRole("button", { name: /^Open Board/ });
+    expect(open.textContent).toContain("2");
+    expect(open.getAttribute("aria-label")).toBe("Open Board, 2 need you");
   });
 
   it("maximising a panel hides the other, and a second press restores it", () => {
@@ -157,6 +180,18 @@ describe("the shell", () => {
     fireEvent.click(within(building).getByText("Open the draft"));
     expect(await screen.findByRole("tab", { name: "#13" })).toBeTruthy();
     expect(await screen.findByText("I read the issue.")).toBeTruthy();
+  });
+
+  it("a worker's tab counts its own waits, and no other worker's", async () => {
+    render(<Shell onSettings={() => {}} />);
+    const building = await screen.findByRole("group", { name: "Building" });
+
+    fireEvent.click(within(building).getByText("Open the draft"));
+    fireEvent.click(within(building).getByText("Answer the refusal"));
+
+    const waiting = await screen.findByRole("tab", { name: "#17, 2 need you" });
+    expect(within(waiting).getByText("2")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "#13" }).textContent).toBe("#13");
   });
 
   it("opens the settings from the gear in the PM's header", () => {

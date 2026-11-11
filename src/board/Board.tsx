@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { type Column, commands, type TicketView } from "@/bindings";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Panel, type PanelControls } from "@/shell/Panel";
 import {
   KanbanBoard,
   type KanbanColumn,
@@ -140,6 +142,16 @@ export function Board({
             <span data-slot="ticket-title" className="text-lg font-semibold">
               {ticket.title}
             </span>
+            {ticket.needs_you.length > 0 && (
+              // The first line is what you read. The rest wait in its title.
+              <StatusBadge
+                status="needs"
+                title={ticket.needs_you.join("\n")}
+                className="max-w-full shrink"
+              >
+                {ticket.needs_you[0]}
+              </StatusBadge>
+            )}
             {ticket.column === "ready" && (
               // A press here is the button's own: the card's click would open the ticket.
               // biome-ignore lint/a11y/noStaticElementInteractions: only stops the click reaching the card
@@ -162,5 +174,26 @@ export function Board({
         )}
       />
     </div>
+  );
+}
+
+/**
+ * The Board panel: `Panel` titled Board, its header counting every wait the
+ * board holds, and the board as its body. The count is the board's own
+ * `needs_you`, so it is the same number the tickets' markers add up to
+ * (`docs/design/ux.md`, Attention).
+ */
+export function BoardPanel({
+  onOpenWorker,
+  ...controls
+}: PanelControls & {
+  onOpenWorker?: (ticket: { id: string; title: string }) => void;
+}) {
+  const waits = useBoard((s) => s.view?.needs_you ?? 0);
+
+  return (
+    <Panel title="Board" count={waits} {...controls}>
+      <Board onOpenWorker={onOpenWorker} />
+    </Panel>
   );
 }

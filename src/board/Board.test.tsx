@@ -69,7 +69,7 @@ vi.mock("@/bindings", () => ({
   },
 }));
 
-import { Board } from "./Board";
+import { Board, BoardPanel } from "./Board";
 import { useBoard } from "./store";
 
 const ticket = (
@@ -116,6 +116,32 @@ async function open(view: BoardView = VIEW, onOpenWorker = vi.fn()) {
   await emitBoard(view);
   return { onOpenWorker };
 }
+
+/** What a panel asks of the shell, answered by nothing. */
+const controls = {
+  maximised: false,
+  onCollapse: () => {},
+  onMaximise: () => {},
+};
+
+/** The whole Board panel: its header above the board. */
+async function openPanel(view: BoardView = VIEW) {
+  render(<BoardPanel {...controls} />);
+  await waitFor(() => expect(channels).toHaveLength(1));
+  await emitBoard(view);
+}
+
+/** The panel header's count, `undefined` when it shows none. */
+const headerCount = () => {
+  const header = screen
+    .getByRole("region", { name: "Board" })
+    .querySelector("header");
+  return header?.querySelector("[data-slot=needs-you-count]")?.textContent;
+};
+
+/** A ticket's Needs you badge, `undefined` when it carries none. */
+const badgeIn = (title: string) =>
+  card(title).querySelector("[data-slot=status-badge]");
 
 /**
  * Wait for the board's status line to say `text`. The line is always on the
@@ -168,6 +194,58 @@ describe("the Board panel", () => {
     expect(ready.getByText("P1")).toBeTruthy();
     expect(within(card("Open the draft")).getByText("P0")).toBeTruthy();
     expect(within(card("Sketch the graph")).queryByText(/^P\d/)).toBeNull();
+  });
+
+  it("a ticket with waits carries a Needs you badge: its first line shows, its title holds them all", async () => {
+    await open({
+      ...VIEW,
+      needs_you: 2,
+      tickets: [
+        ticket("13", "Open the draft", "building", {
+          needs_you: [
+            "GitHub refused the push",
+            "Paused, resumes when you say so",
+          ],
+        }),
+      ],
+    });
+
+    const badge = badgeIn("Open the draft");
+    expect(badge?.getAttribute("data-status")).toBe("needs");
+    expect(badge?.textContent).toContain("GitHub refused the push");
+    expect(badge?.getAttribute("title")).toBe(
+      "GitHub refused the push\nPaused, resumes when you say so",
+    );
+  });
+
+  it("a ticket with no waits carries no badge", async () => {
+    await open();
+
+    expect(badgeIn("Open the draft")).toBeNull();
+    expect(badgeIn("Wire the poller")).toBeNull();
+  });
+
+  it("the panel header counts the waits the board holds", async () => {
+    await openPanel({
+      ...VIEW,
+      needs_you: 3,
+      tickets: [
+        ticket("13", "Open the draft", "building", {
+          needs_you: ["Paused, resumes when you say so"],
+        }),
+        ticket("12", "Wire the poller", "ready", {
+          needs_you: ["GitHub refused the push", "Answer the sandbox request"],
+        }),
+      ],
+    });
+
+    expect(headerCount()).toBe("3");
+  });
+
+  it("the panel header counts nothing while the board holds no waits", async () => {
+    await openPanel();
+
+    expect(headerCount()).toBeUndefined();
   });
 
   it("watches the board once, and the watch ends when the panel unmounts", async () => {
