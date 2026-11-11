@@ -109,7 +109,10 @@ function Failure({ id }: { id: number }) {
   const error = useField(id, "error");
   const state = useField(id, "state");
   const last = useChat((s) => s.turns.at(-1)?.id === id);
-  const refusal = useChat((s) => s.sandbox?.refusal ?? null);
+  // An unsandboxed session runs past its refusal, so a failure in it is its own
+  const refusal = useChat((s) =>
+    s.sandbox?.unsandboxed ? null : (s.sandbox?.refusal ?? null),
+  );
   if (!error) return null;
   // Only the turn that found the refusal says it: an older failed turn kept its own error
   if (refusal && last && state === "failed")
