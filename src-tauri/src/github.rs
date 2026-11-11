@@ -39,8 +39,8 @@ pub enum GithubStatus {
 ///
 /// # Errors
 ///
-/// `gh` answered something kelpie cannot read, or its answer said a rate limit
-/// is used up.
+/// `gh` failed for a reason that says nothing about a login, with `gh`'s own
+/// words, or `gh` could not be asked at all.
 fn status_of(gh: Option<&Gh>) -> Result<GithubStatus, String> {
     let Some(gh) = gh else {
         return Ok(GithubStatus::NoGh);
@@ -49,9 +49,24 @@ fn status_of(gh: Option<&Gh>) -> Result<GithubStatus, String> {
         Ok(login) => Ok(GithubStatus::SignedIn { login }),
         // gh's own line, not ForgeError's text for it: that one is worded for a
         // ticket read, and this row is about who kelpie acts as
-        Err(ForgeError::Failed(line)) => Ok(GithubStatus::NotSignedIn { line }),
-        Err(error) => Err(format!("kelpie could not ask gh who is signed in: {error}")),
+        Err(ForgeError::Failed(line)) if says_no_login(&line) => {
+            Ok(GithubStatus::NotSignedIn { line })
+        }
+        // a network fault or a GitHub outage is no answer about a login
+        Err(ForgeError::Failed(line)) => Err(line),
+        Err(ForgeError::Spawn(why)) => Err(format!("kelpie could not start gh: {why}")),
+        Err(ForgeError::Unreadable(what)) => {
+            let said = what.trim();
+            Err(format!("gh answered what kelpie cannot read: {said}"))
+        }
+        Err(error) => Err(error.to_string()),
     }
+}
+
+// Whether `gh`'s line is about its login: the advice to sign in, or a 401 for a
+// token GitHub will not take
+fn says_no_login(line: &str) -> bool {
+    line.to_lowercase().contains("auth login") || line.contains("HTTP 401")
 }
 
 /// Whose `gh` login every read and draft pull request goes out as
@@ -61,8 +76,8 @@ fn status_of(gh: Option<&Gh>) -> Result<GithubStatus, String> {
 ///
 /// # Errors
 ///
-/// `gh` answered something kelpie cannot read, or its answer said a rate limit
-/// is used up.
+/// `gh` failed for a reason that says nothing about a login, with `gh`'s own
+/// words, or `gh` could not be asked at all.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn github_status(state: State<'_, AppState>) -> Result<GithubStatus, String> {
@@ -159,6 +174,30 @@ mod tests {
     #[test]
     fn a_missing_gh_is_no_gh() {
         assert_eq!(status_of(None), Ok(GithubStatus::NoGh));
+    }
+
+    #[test]
+    fn a_failure_that_is_not_about_the_login_says_nothing_about_who_is_signed_in() {
+        // a token GitHub will not take is still a login problem
+        let bad = Gh::with_runner(Box::new(Scripted::refusing(
+            "gh: Bad credentials (HTTP 401)\n",
+        )));
+        assert_eq!(
+            status_of(Some(&bad)).unwrap(),
+            GithubStatus::NotSignedIn {
+                line: "gh: Bad credentials (HTTP 401)".to_owned(),
+            }
+        );
+
+        // a GitHub outage and a host no one can reach answer nothing about a login
+        for printed in [
+            "gh: Server Error (HTTP 500)\n",
+            "Get \"https://api.github.com/user\": dial tcp: lookup api.github.com: no such host\n",
+        ] {
+            let gh = Gh::with_runner(Box::new(Scripted::refusing(printed)));
+
+            assert_eq!(status_of(Some(&gh)).unwrap_err(), printed.trim_end());
+        }
     }
 
     #[test]

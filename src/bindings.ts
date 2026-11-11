@@ -205,8 +205,8 @@ export const commands = {
 	 * 
 	 *  # Errors
 	 * 
-	 *  `gh` answered something kelpie cannot read, or its answer said a rate limit
-	 *  is used up.
+	 *  `gh` failed for a reason that says nothing about a login, with `gh`'s own
+	 *  words, or `gh` could not be asked at all.
 	 */
 	githubStatus: () => typedError<GithubStatus, string>(__TAURI_INVOKE("github_status")),
 	/**

@@ -61,6 +61,20 @@ describe("the GitHub row", () => {
     );
   });
 
+  it("says what gh said when the failure is not about the login", async () => {
+    githubStatus.mockResolvedValue({
+      status: "error",
+      error: "gh: Server Error (HTTP 500)",
+    });
+    render(<GithubField />);
+    const row = await screen.findByRole("group", { name: "GitHub" });
+
+    await waitFor(() =>
+      expect(row.textContent).toContain("gh: Server Error (HTTP 500)"),
+    );
+    expect(row.textContent).not.toContain("not signed in");
+  });
+
   it("reads the status again on Refresh", async () => {
     const row = await openRow(
       { kind: "no_gh" },
