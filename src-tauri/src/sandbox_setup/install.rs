@@ -1,16 +1,18 @@
 //! Install: the one command that loads kelpie's AppArmor profile
 //!
-//! The `.deb` and `.rpm` ship the profile root-owned at [`PROFILE`]. Install
-//! asks `pkexec` to copy it to `/etc/apparmor.d/kelpie` and load it with
-//! `apparmor_parser -r`, one password prompt for both
-//! (`docs/design/sandbox-setup.md`, Install). Nothing is copied from a folder
-//! the person can write, so the prompt cannot be turned into root for another
-//! file.
+//! The `.deb` and `.rpm` ship the profile root-owned at [`PROFILE`], and a helper
+//! script at [`HELPER`] that copies it to `/etc/apparmor.d/kelpie` and loads it
+//! with `apparmor_parser -r`. Install asks `pkexec` to run the helper, one
+//! password prompt for both (`docs/design/sandbox-setup.md`, Install). Nothing
+//! is copied from a folder the person can write, so the prompt cannot be turned
+//! into root for another file.
 //!
-//! `pkexec` runs its program with a fixed `PATH`, so the script and every
-//! program in it are constants with absolute paths. No value from the
-//! environment, a setting or the webview reaches the command line, and the
-//! command carries no environment of its own.
+//! The helper is a program of its own so that polkit can name it: the packaged
+//! action `pm.shep.kelpie.install-profile` matches its path and gives the
+//! prompt its sentence, where `pkexec /bin/sh -c ...` showed the shell command.
+//! The helper takes no arguments, so no value from the environment, a setting
+//! or the webview reaches the command line, and the command carries no
+//! environment of its own.
 //!
 //! The command runs through the process tree (ADR 0001). [`outcome`] reads how
 //! it ended, in `pkexec`'s own terms (`pkexec(1)`): 126 is a prompt the person
@@ -36,14 +38,12 @@ const INSTALLED: &str = "/etc/apparmor.d/kelpie";
 /// `pkexec`, by the path polkit installs it at
 const PKEXEC: &str = "/usr/bin/pkexec";
 
-/// The shell `pkexec` runs the script with
-const SH: &str = "/bin/sh";
-
-/// Copies the profile with the mode a profile has
-const INSTALL: &str = "/usr/bin/install";
-
-/// Loads a profile into the kernel, replacing the one of the same name
-const APPARMOR_PARSER: &str = "/usr/sbin/apparmor_parser";
+/// Where the package ships the helper `pkexec` runs: copy the profile, then load it
+///
+/// `src-tauri/linux/install-profile`, which `src-tauri/tauri.conf.json` maps for
+/// the `.deb` and the `.rpm`. The polkit action `pm.shep.kelpie.install-profile`
+/// in `src-tauri/linux/pm.shep.kelpie.policy` names this path.
+pub const HELPER: &str = "/usr/libexec/kelpie-app/install-profile";
 
 /// What `pkexec` prints when no polkit agent runs to ask for the password
 const NO_AGENT: &str = "No authentication agent found";
@@ -59,18 +59,13 @@ const DISMISSED: i32 = 126;
 /// What `pkexec` exits with when it could not ask, or the person was not authorized
 const NOT_RUN: i32 = 127;
 
-/// The script `pkexec` runs: copy the profile, then load it
-fn script() -> String {
-    format!("{INSTALL} -m 0644 {PROFILE} {INSTALLED} && {APPARMOR_PARSER} -r {INSTALLED}")
-}
-
 /// The one `pkexec` run that installs the profile, not yet started
 ///
-/// `/bin/sh -c` with a script that is the same on every call.
+/// `pkexec` with [`HELPER`] as its only argument, the same on every call.
 #[must_use]
 pub fn install_command() -> Command {
     let mut command = Command::new(PKEXEC);
-    command.arg(SH).arg("-c").arg(script());
+    command.arg(HELPER);
     command
 }
 
@@ -179,21 +174,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_pkexec_command_runs_one_fixed_script_on_the_packaged_profile() {
+    fn the_pkexec_command_runs_the_packaged_helper_and_nothing_else() {
         let command = install_command();
 
         assert_eq!(command.get_program(), "/usr/bin/pkexec");
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
-            [
-                OsStr::new("/bin/sh"),
-                OsStr::new("-c"),
-                OsStr::new(
-                    "/usr/bin/install -m 0644 /usr/share/kelpie-app/kelpie.apparmor \
-                     /etc/apparmor.d/kelpie && \
-                     /usr/sbin/apparmor_parser -r /etc/apparmor.d/kelpie"
-                ),
-            ]
+            [OsStr::new("/usr/libexec/kelpie-app/install-profile")]
         );
         assert_eq!(
             command.get_envs().count(),
