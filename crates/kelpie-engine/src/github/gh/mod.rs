@@ -24,13 +24,17 @@ pub mod account;
 pub mod conditional;
 mod failed;
 pub mod hold;
+pub mod pulls;
 
 pub use account::{RateBucket, RateLimits};
+pub use pulls::GithubPulls;
 
 #[cfg(test)]
 mod conditional_tests;
 #[cfg(test)]
 mod hold_tests;
+#[cfg(test)]
+mod pulls_tests;
 #[cfg(test)]
 mod tests;
 
