@@ -116,7 +116,7 @@ Port `runner/several.rs` first. It is the acceptance suite for the loop: several
 |---|---|---|
 | `runner/gate/` | adapt | The order (foreign change, agents' files, catch-up, CI, unread head, threads, merge), `back_to_worker`, `settled`, `lag.rs`, `borrowed.rs`, `unread.rs`. `queued/` and `rerun/` are GitHub Actions'. SK ADR 0008 |
 | `core/ports/findings.rs`, `core/ports/reviewer.rs` | lift | `Finding` is what every reviewer returns. `Reviewer` is the port to implement with an ACP session |
-| `runner/review/` | adapt | One pass, each reviewer once, at most one fix turn each, then the gate (SK ADRs 0006, 0007). The bot stages wait for the GitHub slice. Tests: `review/tests/mod.rs` |
+| `runner/review/` | adapt | One pass, each reviewer once, at most one fix turn each, then the gate (SK ADRs 0006, 0007). The bot stages are deferred to a slice of their own (`docs/design/review.md`, Deferred: bot reviewers). Tests: `review/tests/mod.rs` |
 | `runner/reviewers_check.rs` | adapt | `left_in`, `check_local` |
 | `runner/merge/` | adapt | `drop_work_item`'s refusals, `withdraw` (a yes holds only for the head it was asked about), `refused`, `merged`, `regate`, `cleanup`. `queue.rs` goes behind a merge queue trait |
 | `runner/close_merged.rs` | lift | Through `Tickets`. `FORGE_CLOSE_WAIT` (600 s) was never measured: SK's `docs/facts/ci-and-the-merge.md` leaves it to the maintainer |
