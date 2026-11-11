@@ -36,7 +36,7 @@ use crate::board::poll::{Choices, Poller, Retry};
 use crate::board::{BoardEvent, Column};
 use crate::state::AppState;
 use crate::workers::{
-    Forge, Hands, NoteOutcome, WorkerStarted, note_through, plan, stop_and_tell_on,
+    Forge, Hands, NoteOutcome, Open, WorkerStarted, note_through, plan, stop_and_tell_on,
 };
 
 mod cases;
@@ -117,7 +117,12 @@ impl Rig {
             &["init", "--quiet", "--bare", "-b", "main", "origin.git"],
         );
         git(&checkout, &["init", "--quiet", "-b", "main"]);
-        git(&checkout, &["remote", "add", "origin", "../origin.git"]);
+        // An absolute URL, so a worker's clone can push to it too
+        let origin = dir.join("origin.git");
+        git(
+            &checkout,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
         git(
             &checkout,
             &["commit", "--quiet", "--allow-empty", "-m", "init"],
@@ -260,6 +265,62 @@ impl Rig {
             .unwrap();
     }
 
+    /// Ticket `number`'s worker commits `file` and pushes its branch, as a turn that did the work would
+    ///
+    /// The forge's head for the branch is the pushed commit, and the commit is returned.
+    fn push_work(&self, number: u64, file: &str) -> String {
+        let worktree = self.paths().worktree(&number.to_string());
+        fs::write(worktree.join(file), "mine\n").unwrap();
+        git(&worktree, &["add", file]);
+        git(
+            &worktree,
+            &["commit", "--quiet", "-m", &format!("work on {file}")],
+        );
+        let branch = format!("kelpie/{number}");
+        git(
+            &worktree,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("HEAD:refs/heads/{branch}"),
+            ],
+        );
+        let head = git(&worktree, &["rev-parse", "HEAD"]);
+        self.github.push(&branch, &head);
+        head
+    }
+
+    /// `main` takes a commit that adds `file`, pushed from a clone of its own
+    fn main_moves(&self, file: &str) {
+        let other = self.dir.join("other");
+        if !other.exists() {
+            git(&self.dir, &["clone", "--quiet", "origin.git", "other"]);
+        }
+        git(&other, &["pull", "--quiet", "origin", "main"]);
+        fs::write(other.join(file), "main\n").unwrap();
+        git(&other, &["add", file]);
+        git(
+            &other,
+            &["commit", "--quiet", "-m", &format!("main adds {file}")],
+        );
+        git(&other, &["push", "--quiet", "origin", "main"]);
+    }
+
+    /// What the origin holds at `branch`
+    fn origin(&self, branch: &str) -> String {
+        git(&self.dir.join("origin.git"), &["rev-parse", branch])
+    }
+
+    /// The parents of the commit `at` names in the origin
+    fn origin_parents(&self, at: &str) -> Vec<String> {
+        let line = git(
+            &self.dir.join("origin.git"),
+            &["rev-list", "--parents", "-n", "1", at],
+        );
+        line.split(' ').skip(1).map(str::to_owned).collect()
+    }
+
     /// Ticket `number`'s record
     fn record(&self, number: u64) -> Record {
         let records = self.state.workers().records(&self.project).unwrap();
@@ -346,7 +407,19 @@ impl Rig {
             })
         });
         let hands = self.hands();
-        let retry: Retry = Box::new(move |records: &[Record], _: &[OpenPull]| hands.retry(records));
+        // Each read then runs the gate on the Review tickets, as the app's does. These
+        // cases send no worker back, so its opener builds nothing.
+        let folder = self.state.project_path_of(&self.project).unwrap();
+        let open: Arc<Open> = Arc::new(|_, _| Err("these cases send no fix turn".to_owned()));
+        let gate = self
+            .state
+            .workers_arc()
+            .gate(&self.project, &folder, None, Arc::new(Fixed), open)
+            .expect("the project's gate");
+        let retry: Retry = Box::new(move |records: &[Record], pulls: &[OpenPull]| {
+            hands.retry(records);
+            gate.after_read(records, pulls);
+        });
         Poller::new(
             Arc::clone(&self.github),
             choose,

@@ -220,3 +220,36 @@ fn a_ruling_answered_for_one_ticket_leaves_the_other_alone() {
         "the answered ticket's ruling is over",
     );
 }
+
+#[test]
+fn a_push_to_the_base_catches_up_both_review_tickets() {
+    let rig = Rig::new(2);
+    rig.ticket(12, "Add the thing", "It does one.", &FakeAgent::new());
+    rig.ticket(13, "Fix the other", "It does two.", &FakeAgent::new());
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    let first = rig.push_work(12, "one.txt");
+    let second = rig.push_work(13, "two.txt");
+    // Someone else's change lands on the base
+    rig.main_moves("main.txt");
+
+    // The board's next read runs the gate, off its own thread
+    rig.columns();
+    rig.until(|| rig.origin("kelpie/12") != first && rig.origin("kelpie/13") != second);
+
+    for ticket in ["12", "13"] {
+        assert_eq!(
+            rig.origin_parents(&format!("kelpie/{ticket}")),
+            [rig.origin("main")],
+            "ticket {ticket}'s branch was caught up on the new base",
+        );
+    }
+    assert_eq!(
+        rig.columns(),
+        [("12".into(), Column::Review), ("13".into(), Column::Review)],
+        "both tickets stay in Review",
+    );
+}

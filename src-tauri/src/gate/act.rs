@@ -76,6 +76,7 @@ impl Gate {
     /// Rebase the branch onto the latest base and push it, and say what the push left
     fn catch_up(&self, work: &Work, kept: &mut Kept, head: &str) {
         let worktree = self.paths.worktree(&work.ticket);
+        let checkout = lock(&self.checkout);
         let caught = worktree::rebase(
             &self.tree,
             &self.folder,
@@ -86,6 +87,7 @@ impl Gate {
             &Remote::Origin,
             BASE,
         );
+        drop(checkout);
         match caught {
             Ok(Rebase::Pushed(pushed)) => kept.pushed(&pushed),
             Ok(Rebase::Conflicts { base, files }) => match conflicted(kept, head, &base, &files) {

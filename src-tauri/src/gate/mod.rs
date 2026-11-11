@@ -124,6 +124,12 @@ pub struct Gate {
 
     /// The tickets with a pass at work, so one works on a ticket at a time
     busy: Busy,
+
+    /// Held while a pass reads or changes the project's checkout
+    ///
+    /// Every ticket's fetch writes the same remote-tracking refs there, and two at once
+    /// fail to lock them.
+    checkout: Mutex<()>,
 }
 
 // The ports are trait objects, which no derive can print
@@ -230,6 +236,7 @@ impl Gate {
             fix: parts.fix,
             book: Mutex::new(book),
             busy: Busy::default(),
+            checkout: Mutex::new(()),
         })
     }
 
@@ -407,6 +414,7 @@ impl Gate {
 
     fn look_open(&self, work: &Work, pull: &OpenPull, limits: &Limits) -> Option<Look> {
         let (tree, repo) = (&*self.tree, self.folder.as_path());
+        let _checkout = lock(&self.checkout);
         let base = read_of(
             &work.ticket,
             "its base",
