@@ -316,6 +316,17 @@ fn fields(
                 &resolved.bridge_updates.value,
                 resolved.bridge_updates.from,
             ),
+            Field::PickUp => layered(field, &resolved.pick_up.value, resolved.pick_up.from),
+            Field::ReadyLabel => layered(
+                field,
+                &resolved.ready_label.value,
+                resolved.ready_label.from,
+            ),
+            Field::DoneWindow => layered(
+                field,
+                &resolved.done_window.value,
+                resolved.done_window.from,
+            ),
             // `Field` grows with each slice's settings, and a form shows only those it has
             _ => FieldView {
                 key: field.key().to_owned(),
