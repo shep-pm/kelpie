@@ -488,6 +488,12 @@ impl core::error::Error for StartError {
 /// Paused ([`super::ceiling`]). The time counts from the grant of the slot, which
 /// is before the worktree is prepared and the harness started.
 ///
+/// A worker whose sandbox cannot start is the one exception: its opener names
+/// the refusal ([`Opening::refuse`]), and the worker is parked Paused with the
+/// refusal's words as its reason and holds no slot, so the next ticket in line
+/// takes it. The record keeps its session id and notes, and a later start
+/// resumes it ([`StartError::Sandbox`]).
+///
 /// A slot held here is given back when the worker never began. The design's
 /// order puts the slot first (`docs/design/workers.md`, Starting one), and the
 /// worktree, the log and the opener can each still fail after it.
@@ -547,9 +553,10 @@ pub fn start(
 /// # Errors
 ///
 /// [`StartError::Worktree`], [`StartError::Log`], [`StartError::Login`],
-/// [`StartError::Token`] or [`StartError::Session`]: the worktree could not be
-/// prepared, the log could not be opened, the login could not be written, no
-/// token could be minted, or the session could not be built.
+/// [`StartError::Token`], [`StartError::Session`] or [`StartError::Sandbox`]: the
+/// worktree could not be prepared, the log could not be opened, the login could
+/// not be written, no token could be minted, the session could not be built, or
+/// the opener named a refusal of the worker's sandbox.
 fn begin(
     project: &Project<'_>,
     ticket: &Ticket,
