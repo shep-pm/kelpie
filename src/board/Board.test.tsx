@@ -117,6 +117,13 @@ async function open(view: BoardView = VIEW, onOpenWorker = vi.fn()) {
   return { onOpenWorker };
 }
 
+/**
+ * Wait for the board's status line to say `text`. The line is always on the
+ * page, empty until a notice sets it, so reading it at once can see it empty.
+ */
+const statusLine = (text: string) =>
+  waitFor(() => expect(screen.getByRole("status").textContent).toBe(text));
+
 const card = (title: string) => {
   const found = Array.from(
     document.querySelectorAll<HTMLElement>("[data-slot=kanban-card]"),
@@ -130,20 +137,6 @@ const titlesIn = (label: string) =>
   );
 const dragTo = (title: string, label: string) => dragCardTo(card(title), label);
 const status = () => screen.getByRole("status");
-
-/**
- * Wait until the board's status line says exactly `text`.
- *
- * The line is on the panel from its first render, empty until there is
- * something to say. `findByRole("status")` waits for the element, which is
- * already there, so it answers with the empty line whenever the panel has not
- * yet answered the click or the drop. A Start, a move or a link is a command
- * that answers on a later tick, and how far later depends on how loaded the
- * machine is, so reading the line once is a race the test can win or lose.
- */
-const said = async (text: string) => {
-  await waitFor(() => expect(status().textContent).toBe(text));
-};
 
 beforeEach(() => {
   channels.length = 0;
@@ -208,13 +201,40 @@ describe("the Board panel", () => {
     expect(workerStart).toHaveBeenCalledTimes(1);
   });
 
+  it("a successful Start calls onOpenWorker with the ticket's id and title", async () => {
+    const { onOpenWorker } = await open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+
+    await waitFor(() =>
+      expect(onOpenWorker).toHaveBeenCalledWith({
+        id: "12",
+        title: "Wire the poller",
+      }),
+    );
+    expect(onOpenWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Start that fails or waits for a slot opens no worker", async () => {
+    workerStart.mockResolvedValueOnce(err("The ticket is closed."));
+    workerStart.mockResolvedValueOnce(ok({ ticket: "12", waiting: true }));
+    const { onOpenWorker } = await open();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+    await screen.findByText("The ticket is closed.");
+    fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
+    await screen.findByText("#12 waits for a slot.");
+
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
   it("a Start that fails shows its error line", async () => {
     workerStart.mockResolvedValueOnce(err("The ticket is closed."));
     await open();
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    await said("The ticket is closed.");
+    await statusLine("The ticket is closed.");
   });
 
   it("a Start error stays in the line when a move that snaps back answers after it", async () => {
@@ -245,7 +265,7 @@ describe("the Board panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Start #12" }));
 
-    await said("#12 waits for a slot.");
+    await statusLine("#12 waits for a slot.");
   });
 
   it("Start does not open the ticket", async () => {
@@ -300,7 +320,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    await said("No slot, and none will come.");
+    await statusLine("No slot, and none will come.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
     expect(titlesIn("Building")).toEqual(["Open the draft"]);
   });
@@ -311,7 +331,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    await said("#12 waits for a slot.");
+    await statusLine("#12 waits for a slot.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -321,7 +341,7 @@ describe("the Board panel", () => {
 
     await dragTo("Wire the poller", "Building");
 
-    await said("Ticket 12 is not on the board.");
+    await statusLine("Ticket 12 is not on the board.");
     await waitFor(() => expect(titlesIn("Ready")).toEqual(["Wire the poller"]));
   });
 
@@ -334,7 +354,7 @@ describe("the Board panel", () => {
     await dragTo("Sketch the graph", "Ready");
 
     expect(boardMove).toHaveBeenCalledWith("11", "ready");
-    await said(line);
+    await statusLine(line);
     await waitFor(() =>
       expect(titlesIn("Draft")).toEqual(["Sketch the graph"]),
     );
@@ -358,7 +378,7 @@ describe("the Board panel", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Draft" }));
 
     await waitFor(() => expect(boardMove).toHaveBeenCalledWith("15", "draft"));
-    await said("A ticket's column follows its worker and its issue.");
+    await statusLine("A ticket's column follows its worker and its issue.");
     await waitFor(() => expect(titlesIn("Done")).toEqual(["Lift the board"]));
   });
 
@@ -384,12 +404,15 @@ describe("the Board panel", () => {
     );
   });
 
-  it("clicking a Building ticket calls onOpenWorker with its id", async () => {
+  it("clicking a Building ticket calls onOpenWorker with its id and title", async () => {
     const { onOpenWorker } = await open();
 
     fireEvent.click(card("Open the draft"));
 
-    expect(onOpenWorker).toHaveBeenCalledWith("13");
+    expect(onOpenWorker).toHaveBeenCalledWith({
+      id: "13",
+      title: "Open the draft",
+    });
     expect(openLink).not.toHaveBeenCalled();
   });
 
@@ -449,17 +472,22 @@ describe("the Board panel", () => {
 
     fireEvent.click(card("Sketch the graph"));
 
-    await said("This system has no browser to open it: the link is copied.");
+    await statusLine(
+      "This system has no browser to open it: the link is copied.",
+    );
     expect(writeText).toHaveBeenCalledWith("https://github.com/o/r/issues/11");
   });
 
   it("a link that cannot be opened shows the error line", async () => {
-    openLink.mockResolvedValueOnce(err("No project is picked."));
+    openLink.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return err("No project is picked.");
+    });
     await open();
 
     fireEvent.click(card("Sketch the graph"));
 
-    await said("No project is picked.");
+    await statusLine("No project is picked.");
   });
 
   it("a held limit shows when it lifts, with the board still there", async () => {
@@ -510,7 +538,7 @@ describe("the Board panel", () => {
 
     render(<Board onOpenWorker={() => {}} />);
 
-    await said("No project is picked.");
+    await statusLine("No project is picked.");
     expect(screen.queryByRole("group")).toBeNull();
   });
 

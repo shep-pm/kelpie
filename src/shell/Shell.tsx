@@ -6,13 +6,22 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { WorkerTab, type WorkerTicket } from "@/workers/WorkerTab";
 import { Panel, PanelStrip, PanelStripButton } from "./Panel";
 import { PmPanel } from "./PmPanel";
+import { registerTabBody, useTabs } from "./tabs";
 
 type PanelId = "pm" | "board";
 
 /** The narrowest a docked panel resizes to (`panel-min` in the design system). */
 const PANEL_MIN = "320px";
+
+/** Open the worker on `ticket` as a tab of the PM panel, or show it if it is open. */
+function openWorker(ticket: WorkerTicket) {
+  const id = `worker:${ticket.id}`;
+  registerTabBody(id, () => <WorkerTab ticket={ticket} />);
+  useTabs.getState().open({ id, title: `#${ticket.id}` });
+}
 
 /**
  * The window: the PM's panel on the left and the Board's on the right, each
@@ -57,8 +66,7 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
         {shown("board") && (
           <ResizablePanel id="board" minSize={PANEL_MIN} defaultSize="50%">
             <Panel title="Board" {...controls("board")}>
-              {/* #151 gives Board the PM panel's worker tabs to open. */}
-              <Board />
+              <Board onOpenWorker={openWorker} />
             </Panel>
           </ResizablePanel>
         )}

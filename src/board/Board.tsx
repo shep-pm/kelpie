@@ -41,14 +41,15 @@ function Limit({ until }: { until: number }) {
  * GitHub and streamed by the engine.
  *
  * Ready tickets carry Start, and a drop from Ready on Building does the same.
- * Clicking a Building ticket calls `onOpenWorker`, and clicking any other opens
- * its pull request in Review, else its issue.
+ * Clicking a Building ticket calls `onOpenWorker`, as does a Start that took a
+ * slot, and clicking any other opens its pull request in Review, else its
+ * issue.
  */
 export function Board({
   onOpenWorker,
 }: {
-  /** Open the worker on a ticket, which the PM panel's tabs answer (#151). */
-  onOpenWorker?: (id: string) => void;
+  /** Open the worker on a ticket, which the PM panel's tabs answer. */
+  onOpenWorker?: (ticket: { id: string; title: string }) => void;
 }) {
   const view = useBoard((s) => s.view);
   const unavailable = useBoard((s) => s.unavailable);
@@ -59,12 +60,14 @@ export function Board({
     return () => useBoard.getState().close();
   }, []);
 
-  async function start(id: string) {
+  async function start({ id, title }: TicketView) {
     setNotice(null);
     const result = await commands.workerStart(id);
     if (result.status === "error") return setNotice(result.error);
-    if (result.data.waiting) setNotice(waits(id));
-    else void commands.boardRefresh();
+    if (result.data.waiting) return setNotice(waits(id));
+    void commands.boardRefresh();
+    // The tab opens where Start was pressed
+    onOpenWorker?.({ id, title });
   }
 
   async function move(ticket: TicketView, to: Column): Promise<MoveOutcome> {
@@ -82,7 +85,8 @@ export function Board({
   }
 
   async function open(ticket: TicketView) {
-    if (ticket.column === "building") return onOpenWorker?.(ticket.id);
+    if (ticket.column === "building")
+      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
     const url =
       ticket.column === "review" && ticket.pull_url
         ? ticket.pull_url
@@ -148,7 +152,7 @@ export function Board({
                   type="button"
                   size="sm"
                   aria-label={`Start #${ticket.id}`}
-                  onClick={() => void start(ticket.id)}
+                  onClick={() => void start(ticket)}
                 >
                   Start
                 </Button>
