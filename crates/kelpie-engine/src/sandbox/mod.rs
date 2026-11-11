@@ -62,6 +62,7 @@ use crate::tools::{Door, Reach};
 use crate::tree::ProcessTree;
 
 pub mod fence;
+mod hop;
 mod policy;
 pub mod refusal;
 pub mod worker;
@@ -75,8 +76,10 @@ pub use worker::Worker;
 /// A host calls this first thing in `main`, before anything of its own,
 /// since on Linux and Windows the sandbox runs the host's binary again inside
 /// itself, and a `main` that skipped this would run there in place of the
-/// command. Any other run of the binary comes back at once.
+/// command. A run started by [`Sandbox::command`]'s profile hop execs its
+/// command first. Any other run of the binary comes back at once.
 pub fn run_from_args() {
+    hop::run_from_args();
     crabpot::run_from_args();
 }
 
@@ -281,11 +284,18 @@ impl Sandbox {
     /// and none of its standard streams: set those on the wrapped command.
     /// Spawn the result through the process tree (ADR 0001).
     ///
+    /// On Linux, a kelpie that runs `unconfined` while the `kelpie` AppArmor
+    /// profile is loaded, as after Install, wraps the command once more in a
+    /// fresh run of its own binary (`--sandbox-hop`), which the profile
+    /// confines, so bwrap starts without a relaunch. Any other kelpie wraps it
+    /// as crabpot does.
+    ///
     /// # Errors
     ///
     /// [`SandboxError::Wrap`] when the command cannot be put in the sandbox.
     pub fn command(&self, command: &Command) -> Result<Command, SandboxError> {
-        self.inner.command(command).map_err(SandboxError::Wrap)
+        let wrapped = self.inner.command(command).map_err(SandboxError::Wrap)?;
+        Ok(hop::through_profile(&wrapped).unwrap_or(wrapped))
     }
 
     /// Run `sh -c true` in this sandbox, to learn whether it can start a command
