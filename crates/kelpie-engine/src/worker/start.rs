@@ -78,7 +78,7 @@ const LOG_FILE: &str = "log.jsonl";
 pub(super) const PULL_REQUEST_FILE: &str = "pull-request.md";
 
 /// The prefix every ticket's branch carries, as SK's `home/paths.rs` has it
-const BRANCH_PREFIX: &str = "kelpie/";
+pub(crate) const BRANCH_PREFIX: &str = "kelpie/";
 
 /// Where one project's workers live under kelpie's data folder
 ///

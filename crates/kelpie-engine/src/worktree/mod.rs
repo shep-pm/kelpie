@@ -7,6 +7,10 @@
 //! instead of finding them, since the worker can write its worktree's `.git`.
 //! [`remove`] takes a ticket's worktree, its clone's git dir, its branch and its
 //! build folder away, ending whatever still runs from the build folder first.
+//! [`rebase`] catches a branch up with `origin/main` and pushes it, or leaves
+//! the conflict in the worktree for the worker, and [`abort_merge`] gives that
+//! merge up. [`merge_conflicts`] and [`runs_on_pull_requests`] ask whether a
+//! head would conflict and whether the base runs CI on a pull request.
 //!
 //! `main` and `origin/main` in these docs are the project's base branch, which
 //! each function takes as `base`.
@@ -29,8 +33,12 @@ use std::time::SystemTime;
 use crate::tree::ProcessTree;
 
 mod cache;
+mod catch_up;
+#[cfg(test)]
+mod catch_up_tests;
 pub mod clone;
 mod common;
+mod conflicts;
 mod in_process;
 #[cfg(test)]
 mod line_endings_tests;
@@ -38,6 +46,7 @@ mod loose;
 mod remote;
 mod stale_lock;
 mod stray;
+mod workflows;
 mod writable;
 
 #[cfg(test)]
@@ -46,9 +55,12 @@ pub(crate) mod tests;
 // `is_ancestor` and `local_config` are public here, where SK keeps them to its
 // crate: their callers are outside this one.
 pub use cache::{Pruned, TurnMark, prune};
+pub use catch_up::{Rebase, rebase};
+pub use conflicts::merge_conflicts;
 pub use in_process::{TreeFile, blobs, is_ancestor, local_config, tree_files};
 pub use loose::{commit_of, loose_commit, loose_commit_in, loose_head};
 pub use remote::Remote;
+pub use workflows::runs_on_pull_requests;
 pub use writable::remove_tree;
 
 /// Where a new worktree's branch starts
@@ -609,6 +621,15 @@ pub fn head(tree: &ProcessTree, repo: &Path, worktree: &Path) -> Result<String, 
         Some(commit) => Ok(commit),
         None => output(tree, trusted_git(worktree, &dirs), ["rev-parse", "HEAD"]),
     }
+}
+
+/// Gives up the merge in progress in `worktree`, which leaves it at its head
+///
+/// # Errors
+///
+/// [`WorktreeError`] naming the git command that failed.
+pub fn abort_merge(tree: &ProcessTree, repo: &Path, worktree: &Path) -> Result<(), WorktreeError> {
+    trusted(tree, repo, worktree)?(&["merge", "--abort"]).map(drop)
 }
 
 /// The files `worktree` holds that its last commit does not: changed, staged
