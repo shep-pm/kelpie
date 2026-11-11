@@ -1,10 +1,12 @@
 //! The ticket id's text and serde, the error's retry and not-found calls, and
-//! the fake that answers the port from a script
+//! the fakes that answer the ports from a script
 
 use serde_json::json;
 
-use super::fake::{Asked, FakeTickets};
-use super::{ForgeError, GithubTickets, Issue, Listed, TicketId, Tickets};
+use std::num::NonZeroU64;
+
+use super::fake::{Asked, FakePulls, FakeTickets, PullCall};
+use super::{ForgeError, GithubTickets, Issue, Listed, Pulls, TicketId, Tickets};
 use crate::github::{Cooldown, Timestamp};
 
 fn id(text: &str) -> TicketId {
@@ -158,4 +160,58 @@ fn a_fake_answers_each_port_method_from_its_script() {
             Asked::Closed(since),
         ]
     );
+}
+
+#[test]
+fn a_fake_of_the_pulls_port_answers_from_its_script_and_records_each_call() {
+    let fake = FakePulls::new();
+    let pulls: &dyn Pulls = &fake;
+    let seven = NonZeroU64::new(7).unwrap();
+
+    assert_eq!(
+        pulls.create_draft("kelpie/1", "main", "t", "b"),
+        Ok(NonZeroU64::MIN)
+    );
+    fake.script_create(Ok(seven));
+    fake.script_branch_head("kelpie/1", Ok(Some("abc".to_owned())));
+    fake.script_edit(Err(ForgeError::LocalPath));
+
+    assert_eq!(pulls.create_draft("kelpie/2", "dev", "t2", "b2"), Ok(seven));
+    assert_eq!(pulls.branch_head("kelpie/1"), Ok(Some("abc".to_owned())));
+    assert_eq!(pulls.branch_head("kelpie/2"), Ok(None));
+    assert_eq!(pulls.edit(seven, "t3", "b3"), Err(ForgeError::LocalPath));
+
+    assert_eq!(
+        fake.calls(),
+        [
+            PullCall::Create {
+                head: "kelpie/1".into(),
+                base: "main".into(),
+                title: "t".into(),
+                body: "b".into()
+            },
+            PullCall::Create {
+                head: "kelpie/2".into(),
+                base: "dev".into(),
+                title: "t2".into(),
+                body: "b2".into()
+            },
+            PullCall::BranchHead("kelpie/1".into()),
+            PullCall::BranchHead("kelpie/2".into()),
+            PullCall::Edit {
+                number: seven,
+                title: "t3".into(),
+                body: "b3".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_local_path_error_is_final_and_names_no_path() {
+    let error = ForgeError::LocalPath;
+
+    assert!(!error.passes());
+    assert!(!error.is_not_found());
+    assert!(!error.to_string().contains('/'));
 }
