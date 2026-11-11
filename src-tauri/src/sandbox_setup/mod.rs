@@ -9,6 +9,8 @@
 //!
 //! Only a [`Refusal`] is kept. The home-folder refusal and every other error
 //! are no setup a person can make, so the chat shows them as it always did.
+//! When the project lets the PM run without a sandbox, the refusal stays
+//! recorded and the view says the session is `unsandboxed`.
 //!
 //! [`pm::open`]: crate::pm::open
 
@@ -49,17 +51,21 @@ impl RefusalView {
 
 /// What the chat is told about the PM's sandbox
 // wire format: the bindings hold this object
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, specta::Type)]
 pub struct SandboxView {
     /// Why the PM's last start could not make its sandbox, `None` when it
     /// found no refusal
     pub refusal: Option<RefusalView>,
+
+    /// Whether the PM's session runs without a sandbox, because the project
+    /// allows it and the sandbox could not start. `refusal` stays set then.
+    pub unsandboxed: bool,
 }
 
 /// What the PM's last start found, held by the app for the whole run
 #[derive(Debug, Default)]
 pub struct SandboxSetup {
-    refusal: Mutex<Option<RefusalView>>,
+    found: Mutex<SandboxView>,
 }
 
 impl SandboxSetup {
@@ -68,16 +74,31 @@ impl SandboxSetup {
     /// `None` is a start that found no refusal, so a refusal stays only until
     /// the next start that works.
     pub fn record(&self, found: Option<Refusal>) {
-        *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) =
-            found.and_then(RefusalView::of);
+        self.keep(SandboxView {
+            refusal: found.and_then(RefusalView::of),
+            unsandboxed: false,
+        });
+    }
+
+    /// Keep a start that ran the PM without a sandbox because of `found`
+    ///
+    /// The refusal stays recorded while the session runs, so the chat still
+    /// has something to offer an install on.
+    pub fn record_unsandboxed(&self, found: Refusal) {
+        self.keep(SandboxView {
+            refusal: RefusalView::of(found),
+            unsandboxed: true,
+        });
+    }
+
+    fn keep(&self, view: SandboxView) {
+        *self.found.lock().unwrap_or_else(PoisonError::into_inner) = view;
     }
 
     /// What the last start found
     #[must_use]
     pub fn view(&self) -> SandboxView {
-        SandboxView {
-            refusal: *self.refusal.lock().unwrap_or_else(PoisonError::into_inner),
-        }
+        *self.found.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

@@ -967,4 +967,5 @@ fn a_project_answer_the_sandbox_could_not_take_says_so_and_saves_nothing() {
     assert!(network.allowed().is_empty(), "the sandbox took nothing");
 }
 
+mod confinement;
 mod plan;

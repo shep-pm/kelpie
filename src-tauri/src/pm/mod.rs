@@ -22,6 +22,12 @@
 //! `harness-global-folder` links the entries the session's harness reads from
 //! the person's own global config folder into the session's config folder.
 //!
+//! Where the sandbox cannot start (bwrap refuses), the PM runs without one only
+//! when the project's `run-without-sandbox` is on, and the chat marks it
+//! (`docs/design/sandbox-setup.md`, Running without a sandbox). A project in the
+//! home folder is refused whichever way it is set, and workers never run without
+//! a sandbox.
+//!
 //! The PM asks for anything else through kelpie's own tools, and [`pm_answer`]
 //! is the maintainer's reply: it widens the running sandbox for the host the PM
 //! named, and keeps a *Allow for this project* answer to the project's settings
@@ -45,7 +51,7 @@ use kelpie_engine::login::Store;
 use kelpie_engine::sandbox::{self, Reads, Sandbox, SandboxError};
 use kelpie_engine::session::{
     Bridge, Choice, Harness as SessionHarness, LogEntry, SandboxAnswer, SandboxOutcome, Session,
-    SessionEvent, Started, Swap, log, sandboxed_launcher,
+    SessionEvent, Started, Swap, launcher, log, sandboxed_launcher,
 };
 use kelpie_engine::settings::{
     BridgeUpdates, ConfigDir, Field, Harness, LayerFile, Settings, SettingsError,
@@ -110,6 +116,10 @@ pub struct PmPlan {
 
     /// Whether the harness reads the person's own global folder (`harness-global-folder`)
     pub harness_global_folder: bool,
+
+    /// Whether the PM may run without a sandbox where none can start
+    /// (`run-without-sandbox`)
+    pub run_without_sandbox: bool,
 }
 
 /// The PM's harness, model and effort once [`PM_DEFAULT`] fills what no layer set
@@ -196,6 +206,7 @@ pub fn plan(config: &ConfigDir, project_id: &str) -> Result<PmPlan, String> {
         network_allowlist: settings.network_allowlist.value,
         reads: Reads::from_setting(settings.read_anywhere.value),
         harness_global_folder: settings.harness_global_folder.value,
+        run_without_sandbox: settings.run_without_sandbox.value,
     })
 }
 
@@ -224,15 +235,17 @@ pub fn describe(harness: Harness, model: Option<&str>) -> String {
 /// idle point runs inside crabpot as the first one did. Each sandbox lives as
 /// long as the launcher that holds it.
 ///
-/// Before it builds the session it starts the PM's sandbox once and runs a
-/// command in it, and records in `opening.sandbox_setup` whether bwrap
-/// refused, so the chat can say why.
+/// Before it builds the session it checks the project's folder, then starts
+/// the PM's sandbox once and runs a command in it, and records in
+/// `opening.sandbox_setup` whether bwrap refused, so the chat can say why. A
+/// refusal runs the session without a sandbox when the project allows it
+/// ([`confinement`]), and the home-folder refusal is never lifted.
 ///
 /// # Errors
 ///
 /// The state folder cannot be made, the bridge cannot be installed, the
-/// harness is not installed or has no login, or the sandbox cannot start. The
-/// text says which.
+/// harness is not installed or has no login, or the sandbox cannot start and
+/// the project does not allow running without one. The text says which.
 pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
     let Opening {
         data_dir,
@@ -251,9 +264,9 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
             // kelpie's own pin is always there to fall back to
             let pinned =
                 bridge::ensure(data_dir, claude::pin()).map_err(|error| error.to_string())?;
-            probe(opening, tools.as_ref(), pinned)?;
+            let confinement = confined(opening, tools.as_ref(), pinned)?;
             Session::on_bridge(
-                claude_bridge(opening, tools.clone()),
+                claude_bridge(opening, tools.clone(), confinement),
                 project.path.clone(),
                 project.pm_session.clone(),
                 pm.choice.clone(),
@@ -280,8 +293,13 @@ pub fn open(opening: &Opening<'_>) -> Result<Session, String> {
 /// session's next idle point, and a version that fails a session is marked bad
 /// there and the one before it is used again (`docs/design/bridge-updates.md`,
 /// Swapping). Each version's harness starts inside a sandbox of its own, as the
-/// first one's does (ADR 0005), so no version runs outside crabpot.
-fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
+/// first one's does (ADR 0005), so no version runs outside crabpot, unless the
+/// session was opened [`Unsandboxed`](Confinement::Unsandboxed).
+fn claude_bridge(
+    opening: &Opening<'_>,
+    tools: Option<SessionTools>,
+    confinement: Confinement,
+) -> Bridge {
     let Opening {
         tree,
         data_dir,
@@ -318,18 +336,26 @@ fn claude_bridge(opening: &Opening<'_>, tools: Option<SessionTools>) -> Bridge {
         start: Box::new(move |version| {
             let cmd = bridge::installed(&start_dir, pin.id, version, claude::CMD)
                 .ok_or_else(|| format!("{} {version} is not installed", claude::CMD))?;
-            let (harness, sandbox) = pm_sandbox
-                .start(cmd, tools.as_ref().map(SessionTools::door))
-                .map_err(|error| error.to_string())?;
-            Ok(Started {
-                launch: sandboxed_launcher(
-                    Arc::clone(&tree),
-                    harness.clone(),
-                    sandbox,
-                    folder.clone(),
-                ),
-                harness,
-            })
+            let tree = Arc::clone(&tree);
+            let started = match confinement {
+                Confinement::Sandboxed => {
+                    let (harness, sandbox) = pm_sandbox
+                        .start(cmd, tools.as_ref().map(SessionTools::door))
+                        .map_err(|error| error.to_string())?;
+                    Started {
+                        launch: sandboxed_launcher(tree, harness.clone(), sandbox, folder.clone()),
+                        harness,
+                    }
+                }
+                Confinement::Unsandboxed => {
+                    let harness = pm_sandbox.harness(cmd).map_err(|error| error.to_string())?;
+                    Started {
+                        launch: launcher(tree, harness.clone(), folder.clone()),
+                        harness,
+                    }
+                }
+            };
+            Ok(started)
         }),
         failed: Box::new(move |version, reason| {
             let mut versions = versions(&failed_dir, pin);
@@ -352,6 +378,17 @@ struct PmSandbox {
     network_allowlist: Vec<String>,
     reads: Reads,
     harness_global_folder: bool,
+}
+
+/// Whether the PM's session runs inside its sandbox
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Confinement {
+    /// Every start of the session is inside a sandbox
+    Sandboxed,
+
+    /// The sandbox could not start and the project allows going on without it
+    /// (`docs/design/sandbox-setup.md`, Running without a sandbox)
+    Unsandboxed,
 }
 
 /// Why the PM's harness or its sandbox could not be made
@@ -390,68 +427,130 @@ impl PmSandbox {
         }
     }
 
+    /// The project the sandbox is asked for
+    fn project(&self) -> sandbox::Project<'_> {
+        sandbox::Project {
+            folder: &self.folder,
+            network_allowlist: &self.network_allowlist,
+            reads: self.reads,
+            sessions_root: &self.sessions_root,
+        }
+    }
+
+    /// The PM's harness on the bridge `cmd`
+    fn harness(&self, cmd: PathBuf) -> Result<SessionHarness, Unstarted> {
+        claude::harness(
+            cmd,
+            &self.state_dir,
+            &self.logins,
+            self.harness_global_folder,
+        )
+        .map_err(Unstarted::Harness)
+    }
+
     /// The PM's harness on the bridge `cmd`, and the sandbox it runs in
     fn start(
         &self,
         cmd: PathBuf,
         door: Option<&Door>,
     ) -> Result<(SessionHarness, Sandbox), Unstarted> {
-        let harness = claude::harness(
-            cmd,
-            &self.state_dir,
-            &self.logins,
-            self.harness_global_folder,
-        )
-        .map_err(Unstarted::Harness)?;
-        let sandbox = Sandbox::start_with_door(
-            &harness,
-            &sandbox::Project {
-                folder: &self.folder,
-                network_allowlist: &self.network_allowlist,
-                reads: self.reads,
-                sessions_root: &self.sessions_root,
-            },
-            &self.state_dir,
-            door,
-        )
-        .map_err(Unstarted::Sandbox)?;
+        let harness = self.harness(cmd)?;
+        let sandbox = Sandbox::start_with_door(&harness, &self.project(), &self.state_dir, door)
+            .map_err(Unstarted::Sandbox)?;
         Ok((harness, sandbox))
     }
 }
 
-/// Start the PM's sandbox, run a command in it, and drop it, so the session
-/// is not built on a sandbox that cannot start
+/// Whether the PM runs in a sandbox, from the folder check and the probe
 ///
-/// What it finds goes to `opening.sandbox_setup`: a bwrap [`Refusal`] is kept
-/// for the chat, and any other outcome clears what an earlier start kept. The
-/// probe sits here and not in the bridge's `start` closure, since a failure
-/// there on a freshly swapped version reads as that version's fault and marks
-/// it bad (`Bridge::start`, `fell_back`).
+/// The folder check's error always wins, so a project in the home folder is
+/// refused whichever way `run_without` is set. A passing probe is
+/// [`Confinement::Sandboxed`]. A [`SandboxError::Refused`] is
+/// [`Confinement::Unsandboxed`] only when `run_without` is on, since the
+/// setting covers a machine that cannot sandbox and nothing else. Every other
+/// error stays an error.
 ///
 /// # Errors
 ///
-/// The harness or the sandbox cannot start, or the command cannot run in it.
-/// The text names the refusal when bwrap gave one.
+/// The folder check's error, else the probe's unless it is a refusal the
+/// setting covers.
+fn confinement(
+    folder: Result<(), SandboxError>,
+    probe: Result<(), SandboxError>,
+    run_without: bool,
+) -> Result<Confinement, SandboxError> {
+    folder?;
+    match probe {
+        Ok(()) => Ok(Confinement::Sandboxed),
+        Err(SandboxError::Refused(_)) if run_without => Ok(Confinement::Unsandboxed),
+        Err(error) => Err(error),
+    }
+}
+
+/// Decide how the PM runs: check the folder, probe the sandbox, and apply
+/// [`confinement`]
+///
+/// The probe starts the PM's sandbox once, runs a command in it, and drops it,
+/// so the session is not built on a sandbox that cannot start. What it finds
+/// goes to `opening.sandbox_setup`: a bwrap [`Refusal`] is kept for the chat,
+/// along with whether the session runs without a sandbox because of it, and any
+/// other outcome clears what an earlier start kept. The probe sits here and not
+/// in the bridge's `start` closure, since a failure there on a freshly swapped
+/// version reads as that version's fault and marks it bad (`Bridge::start`,
+/// `fell_back`).
+///
+/// # Errors
+///
+/// The harness cannot start, or [`confinement`] refuses. The text names the
+/// refusal when bwrap gave one.
 ///
 /// [`Refusal`]: kelpie_engine::sandbox::Refusal
-fn probe(
+fn confined(
     opening: &Opening<'_>,
     tools: Option<&SessionTools>,
     pinned: PathBuf,
-) -> Result<(), String> {
-    let Opening { data_dir, tree, .. } = *opening;
-    // The version a session starts on now, else kelpie's own pin, which is always there
-    let pin = claude::pin();
-    let in_use = versions(data_dir, pin).in_use;
-    let cmd = bridge::installed(data_dir, pin.id, &in_use, claude::CMD).unwrap_or(pinned);
-    let found = PmSandbox::of(opening)
-        .start(cmd, tools.map(SessionTools::door))
-        .and_then(|(_, sandbox)| sandbox.ready(tree).map_err(Unstarted::Sandbox));
-    opening.sandbox_setup.record(match &found {
-        Err(Unstarted::Sandbox(SandboxError::Refused(refusal))) => Some(*refusal),
+) -> Result<Confinement, String> {
+    let Opening {
+        data_dir,
+        tree,
+        pm,
+        sandbox_setup,
+        ..
+    } = *opening;
+    let pm_sandbox = PmSandbox::of(opening);
+    let folder = sandbox::check_project(&pm_sandbox.project());
+    // A refused folder has no sandbox worth trying, and the harness is not asked either
+    let probed = if folder.is_ok() {
+        // The version a session starts on now, else kelpie's own pin, which is always there
+        let pin = claude::pin();
+        let in_use = versions(data_dir, pin).in_use;
+        let cmd = bridge::installed(data_dir, pin.id, &in_use, claude::CMD).unwrap_or(pinned);
+        match pm_sandbox
+            .start(cmd, tools.map(SessionTools::door))
+            .and_then(|(_, sandbox)| sandbox.ready(tree).map_err(Unstarted::Sandbox))
+        {
+            Err(Unstarted::Harness(error)) => {
+                sandbox_setup.record(None);
+                return Err(Unstarted::Harness(error).to_string());
+            }
+            Err(Unstarted::Sandbox(error)) => Err(error),
+            Ok(()) => Ok(()),
+        }
+    } else {
+        Ok(())
+    };
+    let refusal = match &probed {
+        Err(SandboxError::Refused(refusal)) => Some(*refusal),
         _ => None,
-    });
-    found.map_err(|error| error.to_string())
+    };
+    let decided = confinement(folder, probed, pm.run_without_sandbox);
+    match (&decided, refusal) {
+        (Ok(Confinement::Unsandboxed), Some(refusal)) => {
+            sandbox_setup.record_unsandboxed(refusal);
+        }
+        (_, refusal) => sandbox_setup.record(refusal),
+    }
+    decided.map_err(|error| Unstarted::Sandbox(error).to_string())
 }
 
 /// The bridge-updates policy for `bridge`, from the project's own settings
