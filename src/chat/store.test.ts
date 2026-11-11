@@ -40,6 +40,7 @@ const pmAnswer =
   >();
 
 const pmSandbox = vi.fn<() => Promise<SandboxView>>();
+const none: SandboxView = { refusal: null, unsandboxed: false };
 
 vi.mock("@/bindings", () => ({
   commands: {
@@ -90,7 +91,7 @@ beforeEach(() => {
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
   pmSandbox.mockReset();
-  pmSandbox.mockResolvedValue({ refusal: null });
+  pmSandbox.mockResolvedValue(none);
   useChat.getState().reset();
 });
 
@@ -214,31 +215,57 @@ describe("the chat store", () => {
   });
 
   it("a failed turn asks what the sandbox found and keeps the view", async () => {
-    pmSandbox.mockResolvedValue({ refusal: "no_capabilities" });
+    pmSandbox.mockResolvedValue({
+      refusal: "no_capabilities",
+      unsandboxed: false,
+    });
     await useChat.getState().send("go");
     emit({ kind: "failed", message: "the sandbox cannot start" });
 
     await vi.waitFor(() =>
       expect(useChat.getState().sandbox).toEqual({
         refusal: "no_capabilities",
+        unsandboxed: false,
       }),
     );
     expect(pmSandbox).toHaveBeenCalledTimes(1);
   });
 
-  it("a turn that works clears the view a failed one kept", async () => {
-    pmSandbox.mockResolvedValue({ refusal: "no_namespaces" });
+  it("a turn that works replaces the view a failed one kept with what the PM finds now", async () => {
+    pmSandbox.mockResolvedValue({
+      refusal: "no_namespaces",
+      unsandboxed: false,
+    });
     await useChat.getState().send("go");
     emit({ kind: "failed", message: "the sandbox cannot start" });
     await vi.waitFor(() =>
       expect(useChat.getState().sandbox?.refusal).toBe("no_namespaces"),
     );
 
+    pmSandbox.mockResolvedValue(none);
     await useChat.getState().send("again");
     emit({ kind: "text", delta: "Hello" });
     emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
 
-    expect(useChat.getState().sandbox).toBeNull();
+    await vi.waitFor(() => expect(useChat.getState().sandbox).toEqual(none));
+  });
+
+  it("the view is read again after a send ends", async () => {
+    const unsandboxed: SandboxView = {
+      refusal: "no_capabilities",
+      unsandboxed: true,
+    };
+    pmSandbox.mockResolvedValue(unsandboxed);
+    await useChat.getState().send("go");
+    emit({ kind: "text", delta: "Hello" });
+    expect(pmSandbox).not.toHaveBeenCalled();
+
+    emit({ kind: "turn_ended", stop_reason: "end_turn", usage: null });
+
+    await vi.waitFor(() =>
+      expect(useChat.getState().sandbox).toEqual(unsandboxed),
+    );
+    expect(pmSandbox).toHaveBeenCalledTimes(1);
   });
 
   it("a turn that goes on after a failed event is running again", async () => {

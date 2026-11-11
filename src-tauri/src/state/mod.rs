@@ -564,8 +564,13 @@ impl AppState {
     pub fn pm_session(&self) -> Result<(Arc<Session>, ProjectHandle, Option<String>), String> {
         let _opening = lock(&self.opening);
         // A refusal belongs to the start that found it: whatever fails before
-        // the opener probes the sandbox again must not leave it on the chat
-        self.sandbox_setup.record(None);
+        // the opener probes the sandbox again must not leave it on the chat.
+        // A session already held keeps its own record, since it still runs as
+        // that start left it, unsandboxed or not, and a send that reuses it
+        // probes nothing.
+        if lock(&self.session).is_none() {
+            self.sandbox_setup.record(None);
+        }
         let project = lock(&self.projects)
             .first()
             .cloned()

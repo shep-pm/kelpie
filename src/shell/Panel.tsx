@@ -14,6 +14,8 @@ type Props = PanelControls & {
   title: string;
   /** The panel's NeedsYouCount, once it has one. */
   count?: ReactNode;
+  /** A mark beside the title, such as the PM's No sandbox. */
+  badge?: ReactNode;
   /** Buttons to the left of collapse and maximise. */
   actions?: ReactNode;
   children: ReactNode;
@@ -23,6 +25,7 @@ type Props = PanelControls & {
 export function Panel({
   title,
   count,
+  badge,
   actions,
   maximised,
   onCollapse,
@@ -36,6 +39,7 @@ export function Panel({
     >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <h2 className="text-sm font-semibold">{title}</h2>
+        {badge}
         {count}
         <span className="ml-auto flex items-center gap-0.5">
           {actions}

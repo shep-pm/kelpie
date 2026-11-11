@@ -56,8 +56,9 @@ type Chat = {
   /** Why the history could not be read, `null` when it could. */
   historyError: string | null;
   /**
-   * What the PM's sandbox last found, asked for when a turn ends failed.
-   * `null` until one does, and again once a turn works.
+   * What the PM's sandbox last found, asked for each time a send ends, whether
+   * it failed or not. `null` until one does. `unsandboxed` is what the badge
+   * in the PM's header reads.
    */
   sandbox: SandboxView | null;
   /**
@@ -221,7 +222,7 @@ let loading: Promise<void> | null = null;
 let lookedAt = 0;
 
 export const useChat = create<Chat>()((set, get) => {
-  /** Ask what the PM's sandbox found, and keep it, unless a newer look or a working turn came first. */
+  /** Ask what the PM's sandbox found, and keep it, unless a newer look came first. */
   async function lookAtSandbox() {
     const look = ++lookedAt;
     try {
@@ -246,10 +247,8 @@ export const useChat = create<Chat>()((set, get) => {
     channel.onmessage = (event) => {
       set((s) => ({ turns: patch(s.turns, id, (t) => apply(t, event)) }));
       if (event.kind === "failed") void lookAtSandbox();
-      if (event.kind === "turn_ended") {
-        lookedAt++;
-        set({ sandbox: null });
-      }
+      // A send that ends has opened its session, so what the start found is current
+      if (event.kind === "turn_ended") void lookAtSandbox();
     };
     try {
       // A send that switched the harness answers with the divider it logged

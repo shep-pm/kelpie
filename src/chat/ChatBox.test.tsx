@@ -44,7 +44,10 @@ const pmAnswer =
 
 const pmSandbox =
   vi.fn<
-    () => Promise<{ refusal: "no_capabilities" | "no_namespaces" | null }>
+    () => Promise<{
+      refusal: "no_capabilities" | "no_namespaces" | null;
+      unsandboxed: boolean;
+    }>
   >();
 
 vi.mock("@/bindings", () => ({
@@ -112,7 +115,7 @@ beforeEach(() => {
   pmAnswer.mockReset();
   pmAnswer.mockResolvedValue({ status: "ok", data: null });
   pmSandbox.mockReset();
-  pmSandbox.mockResolvedValue({ refusal: null });
+  pmSandbox.mockResolvedValue({ refusal: null, unsandboxed: false });
   useChat.getState().reset();
 });
 
@@ -276,7 +279,10 @@ describe("the chat box", () => {
   });
 
   it("a failed turn the sandbox refused says why in place of the raw error", async () => {
-    pmSandbox.mockResolvedValue({ refusal: "no_capabilities" });
+    pmSandbox.mockResolvedValue({
+      refusal: "no_capabilities",
+      unsandboxed: false,
+    });
     await sendMessage("hello");
     emit({ kind: "failed", message: "bwrap: loopback: Failed RTM_NEWADDR" });
 
@@ -284,6 +290,18 @@ describe("the chat box", () => {
       await screen.findByText("Ubuntu restricts the sandbox"),
     ).toBeTruthy();
     expect(screen.queryByText(/RTM_NEWADDR/)).toBeNull();
+  });
+
+  it("a failed turn in an unsandboxed session shows its own error, not the setup", async () => {
+    pmSandbox.mockResolvedValue({
+      refusal: "no_capabilities",
+      unsandboxed: true,
+    });
+    await sendMessage("hello");
+    emit({ kind: "failed", message: "the model is overloaded" });
+
+    expect(await screen.findByText("the model is overloaded")).toBeTruthy();
+    expect(screen.queryByText("Ubuntu restricts the sandbox")).toBeNull();
   });
 
   it("with no project the box offers a folder picker", async () => {
