@@ -32,6 +32,8 @@ pub mod github;
 pub mod pm;
 pub mod sandbox_setup;
 pub mod settings;
+#[cfg(test)]
+mod several;
 pub mod state;
 pub mod theme;
 pub mod workers;

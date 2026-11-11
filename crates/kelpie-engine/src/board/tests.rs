@@ -78,7 +78,7 @@ fn an_open_issue_without_the_ready_label_is_draft_and_one_with_it_is_ready() {
 
 #[test]
 fn a_live_worker_puts_a_ticket_in_building_whatever_its_labels_say() {
-    for status in [Status::Running, Status::Paused, Status::WaitingOnMaintainer] {
+    for status in [Status::Running, Status::Paused] {
         let read = Read {
             ready: vec![issue(2, "rin", &[READY])],
             open: vec![
@@ -95,6 +95,72 @@ fn a_live_worker_puts_a_ticket_in_building_whatever_its_labels_say() {
 
         assert_eq!(ids(&board, Column::Building), [1, 2, 3], "{status:?}");
     }
+}
+
+/// A worker whose turn is running, or which is next to start, holds its ticket in
+/// Building even when its pull request is open: a fix turn on red CI is such a
+/// worker (`docs/design/gate-and-merge.md`, The Review column).
+#[test]
+fn a_running_worker_with_an_open_pull_is_in_building() {
+    let read = Read {
+        ready: vec![issue(3, "rin", &[READY])],
+        open: vec![issue(3, "rin", &[READY])],
+        pulls: vec![pull(9, "kelpie/3", &[3])],
+        ..Read::default()
+    };
+
+    let board = place(&read, &[worker(3, Status::Running)], &me());
+
+    assert_eq!(ids(&board, Column::Building), [3]);
+    assert!(ids(&board, Column::Review).is_empty());
+}
+
+/// A worker that has asked the maintainer something runs nothing and holds no slot,
+/// so its ticket stays where its open pull request puts it
+#[test]
+fn a_worker_waiting_on_the_maintainer_with_an_open_pull_is_in_review() {
+    let read = Read {
+        ready: vec![issue(2, "rin", &[READY]), issue(3, "rin", &[READY])],
+        open: vec![
+            issue(1, "rin", &[]),
+            issue(2, "rin", &[READY]),
+            issue(3, "rin", &[READY]),
+            issue(4, "rin", &[READY]),
+        ],
+        pulls: vec![pull(9, "other", &[3]), pull(10, "kelpie/4", &[])],
+        ..Read::default()
+    };
+    let workers = [
+        worker(1, Status::WaitingOnMaintainer),
+        worker(3, Status::WaitingOnMaintainer),
+        worker(4, Status::WaitingOnMaintainer),
+    ];
+
+    let board = place(&read, &workers, &me());
+
+    assert_eq!(ids(&board, Column::Review), [3, 4]);
+    assert_eq!(ids(&board, Column::Building), [1]);
+    assert_eq!(ids(&board, Column::Ready), [2]);
+}
+
+/// A waiting ticket with no pull request yet, such as one whose draft could not
+/// open, is still the ticket its worker was started on
+#[test]
+fn a_worker_waiting_with_no_pull_is_in_building() {
+    let read = Read {
+        ready: vec![issue(2, "rin", &[READY])],
+        open: vec![issue(1, "rin", &[]), issue(2, "rin", &[READY])],
+        ..Read::default()
+    };
+    let workers = [
+        worker(1, Status::WaitingOnMaintainer),
+        worker(2, Status::WaitingOnMaintainer),
+    ];
+
+    let board = place(&read, &workers, &me());
+
+    assert_eq!(ids(&board, Column::Building), [1, 2]);
+    assert!(ids(&board, Column::Review).is_empty());
 }
 
 #[test]
