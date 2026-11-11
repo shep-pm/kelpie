@@ -13,12 +13,11 @@
 //!   hand-over's ruling does, and the gate passes it no more until its head moves.
 //! - [`Step::Yes`] keeps the head ready to merge, which the ticket's needs-you line says.
 //!   The merge itself comes later.
-//! - [`Step::Red`] rules still red with the failing run's link, until red CI goes back to the
-//!   worker.
+//! - [`Step::Red`] is red CI, which `red` settles: a rerun of a run likely not the worker's,
+//!   a ruling, or the worker's next turn with the failing logs.
 //! - [`Step::Done`] ends the ticket's time in the gate. Cleaning up after the merge comes later.
 
-use kelpie_engine::ci::FailedCheck;
-use kelpie_engine::gate::{Kept, Look, Pull, Ruling, Step, conflicted};
+use kelpie_engine::gate::{Kept, Limits, Look, Pull, Ruling, Step, conflicted};
 use kelpie_engine::github::Timestamp;
 use kelpie_engine::worker::Status;
 use kelpie_engine::worktree::{self, Rebase, Remote};
@@ -43,6 +42,7 @@ impl Gate {
         look: &Look,
         kept: &mut Kept,
         step: Step,
+        limits: &Limits,
         now: Timestamp,
     ) -> Carried {
         let head = match &look.pull {
@@ -53,10 +53,6 @@ impl Gate {
         match step {
             Step::Done => return Carried::Forget,
             Step::Rule(ruling) => {
-                self.rule(work, kept, &ruling, head);
-            }
-            Step::Red(checks) => {
-                let ruling = still_red(head, &checks);
                 self.rule(work, kept, &ruling, head);
             }
             other => {
@@ -70,6 +66,7 @@ impl Gate {
                         self.rerun(&runs, kept, head, now);
                         false
                     }
+                    Step::Red(checks) => self.red(work, kept, head, &checks, limits, now),
                     Step::Yes => {
                         kept.ready_at(head);
                         false
@@ -170,7 +167,7 @@ impl Gate {
     /// The reason goes with the status under one hold of the records' lock, as the engine's
     /// own settling does. A record the maintainer moved while the pass was at work is left
     /// as they left it, and the head is not marked ruled: that worker is not waiting.
-    fn rule(&self, work: &Work, kept: &mut Kept, ruling: &Ruling, head: &str) -> bool {
+    pub(super) fn rule(&self, work: &Work, kept: &mut Kept, ruling: &Ruling, head: &str) -> bool {
         let Some(records) = self.records() else {
             return false;
         };
@@ -223,15 +220,5 @@ impl Gate {
             .and_then(|()| records.set_reason(&work.ticket, None));
         drop(records);
         self.lost(&work.ticket, written, "the gate's ruling going away");
-    }
-}
-
-/// The ruling for red checks, with the failing run's link, until red CI goes back to the worker
-fn still_red(head: &str, checks: &[FailedCheck]) -> Ruling {
-    Ruling::StillRed {
-        head: head.to_owned(),
-        checks: checks.iter().map(|check| check.name.clone()).collect(),
-        fix_turns: None,
-        link: checks.iter().find_map(|check| check.url.clone()),
     }
 }

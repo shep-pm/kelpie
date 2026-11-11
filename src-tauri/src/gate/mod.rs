@@ -20,6 +20,9 @@
 //!   ([`kelpie_engine::gate::Book`]), which also says which tickets are ready to merge:
 //!   the board reads [`Gate::ready`] for each ticket's needs-you line.
 //!
+//! A red run is the worker's to fix (`red`): the failed logs and the files the branch changed
+//! decide between a rerun, a ruling and a fix turn that carries the log.
+//!
 //! A catch-up push and a fix turn reach the worker's own branch only: the rebase pushes
 //! from the worker's clone with the credential git finds for its `origin`, and the fix
 //! turn is a prompt to the worker's own session. The maintainer's `gh` login reads
@@ -49,6 +52,7 @@ use kelpie_engine::worktree::{self, Base, Remote};
 use crate::workers::BASE;
 
 mod act;
+mod red;
 #[cfg(test)]
 mod tests;
 
@@ -395,7 +399,7 @@ impl Gate {
         }
         kept.ready = None;
         let step = gate::pass(&look, &mut kept, &limits, now);
-        let carried = self.carry_out(work, &look, &mut kept, step, now);
+        let carried = self.carry_out(work, &look, &mut kept, step, &limits, now);
         let mut book = lock(&self.book);
         match carried {
             act::Carried::Keep => *book.entry(work.id) = kept,

@@ -76,6 +76,11 @@ impl Held {
     pub(super) fn reruns(&self) -> Vec<u64> {
         self.inner.reruns()
     }
+
+    /// The failed logs `head` has, which a pass reads for a red run
+    pub(super) fn script_logs(&self, head: &str, logs: Vec<FailedLog>) {
+        self.inner.script_logs(head, false, Ok(logs));
+    }
 }
 
 impl Ci for Held {
