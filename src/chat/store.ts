@@ -101,6 +101,11 @@ export type Chat = {
    * then says in its own line.
    */
   answer: (id: string, answer: SandboxAnswer) => Promise<void>;
+  /**
+   * Stop following what the transport's `watch` sends. Reading the history
+   * again after it needs a new chat.
+   */
+  close: () => void;
   /** Forget every turn. For tests. */
   reset: () => void;
 };
@@ -183,6 +188,32 @@ function apply(turn: Turn, event: SessionEvent): Turn {
   }
 }
 
+/** Events that carry a turn's own content, and so open one when none is running. */
+const OPENS_TURN: ReadonlySet<SessionEvent["kind"]> = new Set([
+  "started",
+  "text",
+  "tool_step",
+  "sandbox_request",
+]);
+
+/**
+ * Add what a watched session sent to the turn it belongs to. A turn the log
+ * never ended was shown as `interrupted`, and the session going on shows it was
+ * only running. The feed carries no user entry, so content that follows a turn
+ * that ended opens a new turn, with no message of its own.
+ */
+function follow(turns: Turn[], event: SessionEvent): Turn[] {
+  const last = turns.at(-1);
+  if (!last) return turns;
+  const ended = last.state === "done" || last.state === "cancelled";
+  if (ended && OPENS_TURN.has(event.kind)) {
+    return [...turns, apply(begin(""), event)];
+  }
+  const turn: Turn =
+    last.state === "interrupted" ? { ...last, state: "running" } : last;
+  return [...turns.slice(0, -1), apply(turn, event)];
+}
+
 let nextId = 1;
 
 function begin(user: string, dividers: string[] = []): Turn {
@@ -246,6 +277,9 @@ export type ChatStore = UseBoundStore<StoreApi<Chat>>;
  */
 export function createChat(transport: Transport): ChatStore {
   let loading: Promise<void> | null = null;
+
+  /** The channel the transport's `watch` was given, `null` before it and after `close`. */
+  let watching: Channel<SessionEvent> | null = null;
 
   /** The install in flight, so a second click shares it instead of asking for a second password. */
   let installing: Promise<InstallOutcome> | null = null;
@@ -314,6 +348,17 @@ export function createChat(transport: Transport): ChatStore {
 
       load() {
         loading ??= (async () => {
+          // What the session sends while the history is read waits for it, so it lands on the last turn
+          let held: SessionEvent[] | null = [];
+          if (transport.watch) {
+            const channel = new Channel<SessionEvent>();
+            channel.onmessage = (event) => {
+              if (held) held.push(event);
+              else set((s) => ({ turns: follow(s.turns, event) }));
+            };
+            watching = channel;
+            transport.watch(channel);
+          }
           try {
             const history = await transport.history();
             if (history.status === "error") {
@@ -322,8 +367,13 @@ export function createChat(transport: Transport): ChatStore {
             }
             const past = fold(history.data);
             set((s) => ({ turns: [...past, ...s.turns], historyError: null }));
+            for (const event of held.splice(0)) {
+              set((s) => ({ turns: follow(s.turns, event) }));
+            }
           } catch (error) {
             set({ historyError: String(error) });
+          } finally {
+            held = null;
           }
         })();
         return loading;
@@ -401,6 +451,14 @@ export function createChat(transport: Transport): ChatStore {
             })),
           }));
         }
+      },
+
+      close() {
+        const channel = watching;
+        watching = null;
+        if (!channel) return;
+        channel.onmessage = () => {};
+        void transport.unwatch?.(channel)?.catch(() => {});
       },
 
       reset() {

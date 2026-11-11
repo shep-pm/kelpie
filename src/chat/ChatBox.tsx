@@ -124,8 +124,17 @@ function PickFolder({ onPicked }: { onPicked: (folder: string) => void }) {
  *
  * `picker` shows the project picker until a project is kept, which only the
  * PM's tab needs. A chat without it reads its history at once.
+ *
+ * `readOnly` leaves the composer out, for a chat that only shows what a
+ * session did.
  */
-export function ChatBox({ picker = true }: { picker?: boolean }) {
+export function ChatBox({
+  picker = true,
+  readOnly = false,
+}: {
+  picker?: boolean;
+  readOnly?: boolean;
+}) {
   const useChat = useChatStore();
   // `undefined` until the backend says whether a project is kept.
   const [project, setProject] = useState<string | null | undefined>(
@@ -162,7 +171,7 @@ export function ChatBox({ picker = true }: { picker?: boolean }) {
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <Turns />
-      <Composer />
+      {!readOnly && <Composer />}
     </main>
   );
 }

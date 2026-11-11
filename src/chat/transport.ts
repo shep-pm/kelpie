@@ -34,6 +34,15 @@ export type Transport = {
     { status: "ok"; data: null } | { status: "error"; error: string }
   >;
   /**
+   * Follow a session that runs on its own: `load` hands it a channel before it
+   * asks for the history, and every event the session sends after that goes to
+   * the channel. The PM's transport has none, since a PM turn streams into the
+   * channel of the `send` that started it.
+   */
+  watch?: (channel: Channel<SessionEvent>) => void;
+  /** Stop sending to a channel `watch` was given, when its chat closes. */
+  unwatch?: (channel: Channel<SessionEvent>) => Promise<void>;
+  /**
    * What the session's sandbox last found. Only the PM's session has a sandbox
    * view so far: a transport without one leaves the chat's `sandbox` empty.
    */

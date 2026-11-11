@@ -34,6 +34,8 @@ function Dividers({ id }: { id: number }) {
 
 function UserBubble({ id }: { id: number }) {
   const user = useField(id, "user");
+  // A turn a watched session began on its own has no message of the maintainer's
+  if (!user) return null;
   return (
     <p className="ml-auto max-w-[85%] rounded-lg bg-secondary px-3 py-1.5 text-base whitespace-pre-wrap text-secondary-foreground">
       {user}
