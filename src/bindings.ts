@@ -27,7 +27,7 @@ export const commands = {
 	 *  the harness, which can take a while, so this runs off the main thread. The
 	 *  session id is saved to `projects.json` when the session starts, so the next
 	 *  launch resumes it. A failure before the session exists is the turn's only
-	 *  event, a `Failed`.
+	 *  event, a `Failed`, which is in the PM's log with the message.
 	 * 
 	 *  A send whose settings name another harness than the session runs on stops
 	 *  that session and starts a new one with a seed ahead of the message. It
