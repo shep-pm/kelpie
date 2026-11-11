@@ -264,6 +264,7 @@ fn counting_opener(opened: &Arc<AtomicUsize>, refusal: Option<Refusal>) -> Opene
 fn an_unsandboxed_session_is_reopened_once_the_profile_is_loaded() {
     let dir = Dir::new();
     let opened = Arc::new(AtomicUsize::new(0));
+    let loaded = Arc::new(AtomicBool::new(false));
     let state = AppState::open(
         dir.0.clone(),
         ConfigDir::at(dir.0.join("config")),
@@ -273,12 +274,22 @@ fn an_unsandboxed_session_is_reopened_once_the_profile_is_loaded() {
         None,
     )
     .unwrap()
-    .with_profile_check(Box::new(|| true));
+    .with_profile_check({
+        let loaded = Arc::clone(&loaded);
+        Box::new(move || loaded.load(Ordering::SeqCst))
+    });
     state.set_project(PathBuf::from("/work/one")).unwrap();
 
     let (first, ..) = state.pm_session().unwrap();
     assert!(state.sandbox_setup().view().unsandboxed);
+    let (kept, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &kept),
+        "no profile loaded is no reason to reopen"
+    );
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
 
+    loaded.store(true, Ordering::SeqCst);
     let (next, ..) = state.pm_session().unwrap();
     assert_eq!(opened.load(Ordering::SeqCst), 2, "the opener runs again");
     assert!(
@@ -291,6 +302,14 @@ fn an_unsandboxed_session_is_reopened_once_the_profile_is_loaded() {
         !Arc::ptr_eq(&first, &held),
         "the stopped session is held no more"
     );
+
+    // The new start probed with the profile loaded, so no later send reopens
+    let (later, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&next, &later),
+        "one reopen per profile, not one per send"
+    );
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -316,6 +335,38 @@ fn an_unsandboxed_session_is_kept_while_no_profile_is_loaded() {
         "no profile is no reason to reopen"
     );
     assert_eq!(opened.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_unsandboxed_session_that_started_with_the_profile_loaded_is_kept() {
+    let dir = Dir::new();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let state = AppState::open(
+        dir.0.clone(),
+        ConfigDir::at(dir.0.join("config")),
+        Store::memory(),
+        counting_opener(&opened, Some(Refusal::NoCapabilities)),
+        Box::new(|| Ok(None)),
+        None,
+    )
+    .unwrap()
+    .with_profile_check(Box::new(|| true));
+    state.set_project(PathBuf::from("/work/one")).unwrap();
+
+    // The profile was loaded before the start and the probe still refused, as it
+    // does for an AppImage or a build the profile does not name
+    let (first, ..) = state.pm_session().unwrap();
+    let (again, ..) = state.pm_session().unwrap();
+    let (later, ..) = state.pm_session().unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &again) && Arc::ptr_eq(&again, &later),
+        "a profile loaded before the start is no reason to reopen"
+    );
+    assert_eq!(
+        opened.load(Ordering::SeqCst),
+        1,
+        "no send stops the harness"
+    );
 }
 
 #[test]

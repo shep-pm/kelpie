@@ -358,6 +358,12 @@ pub struct AppState {
     sandbox_setup: SandboxSetup,
     /// What says whether a `kelpie` profile is loaded on this machine
     profile_check: ProfileCheck,
+    /// Whether a `kelpie` profile was loaded when the held session's start probed
+    ///
+    /// `None` for a start that made a sandbox, and before the first send. Kept
+    /// with the session it describes, under the same `opening` lock. A machine
+    /// whose probe refuses whatever the profile says reopens nothing.
+    profile_at_start: Mutex<Option<bool>>,
     /// Whether an Install is waiting on its password prompt, which ends the
     /// session when it loads the profile
     installing: AtomicBool,
@@ -441,6 +447,7 @@ impl AppState {
             tools,
             sandbox_setup,
             profile_check: Box::new(kelpie_engine::sandbox::profile_loaded),
+            profile_at_start: Mutex::new(None),
             installing: AtomicBool::new(false),
             bridge_checks: Mutex::new(None),
             workers,
@@ -587,6 +594,7 @@ impl AppState {
         let _opening = lock(&self.opening);
         lock(&self.projects).replace_all(project)?;
         *lock(&self.session) = None;
+        *lock(&self.profile_at_start) = None;
         Ok(())
     }
 
@@ -601,8 +609,9 @@ impl AppState {
     /// text is the third thing returned, `None` when nothing was switched.
     ///
     /// A session running without a sandbox ends once a `kelpie` profile is
-    /// loaded, by Install or at a terminal, before this send opens one that
-    /// probes the sandbox again (`docs/design/sandbox-setup.md`, Install).
+    /// loaded that was not loaded when it started, by Install or at a terminal,
+    /// before this send opens one that probes the sandbox again
+    /// (`docs/design/sandbox-setup.md`, Install).
     ///
     /// A new session that cannot be built leaves the old one running, unless
     /// this send ended it for a loaded profile.
@@ -638,13 +647,17 @@ impl AppState {
         if let Some((was, session)) = &held
             && was.harness == plan.harness
         {
-            if self.sandbox_setup.view().unsandboxed && (self.profile_check)() {
-                // A profile loaded at a terminal cannot reach a session already
-                // running: it ends, with its record, and the send below opens one
-                // that probes again. A failed open leaves nothing held, and the
-                // next send resumes from the saved session id.
+            if self.sandbox_setup.view().unsandboxed
+                && *lock(&self.profile_at_start) == Some(false)
+                && (self.profile_check)()
+            {
+                // A profile loaded since this session started cannot reach a
+                // session already running: it ends, with its record, and the send
+                // below opens one that probes again. A failed open leaves nothing
+                // held, and the next send resumes from the saved session id.
                 session.stop();
                 *lock(&self.session) = None;
+                *lock(&self.profile_at_start) = None;
                 self.sandbox_setup.record(None);
             } else {
                 session.choose(plan.choice.clone());
@@ -713,6 +726,13 @@ impl AppState {
         };
         let session = Arc::new(session);
         *lock(&self.session) = Some((now, Arc::clone(&session)));
+        // What this start probed under, read after it, so it matches what the
+        // probe itself saw through the hop
+        *lock(&self.profile_at_start) = self
+            .sandbox_setup
+            .view()
+            .unsandboxed
+            .then(|| (self.profile_check)());
         Ok((session, handle, divider))
     }
 
@@ -751,6 +771,7 @@ impl AppState {
         if let Some((_, session)) = held {
             session.stop();
         }
+        *lock(&self.profile_at_start) = None;
         self.sandbox_setup.record(None);
     }
 
