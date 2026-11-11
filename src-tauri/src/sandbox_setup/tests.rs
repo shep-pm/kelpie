@@ -3,10 +3,10 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use kelpie_engine::sandbox::Refusal;
+use kelpie_engine::sandbox::{Refusal, SandboxError};
 
 use super::install::PROFILE;
-use super::{Install, RefusalView, SandboxSetup, SandboxView};
+use super::{Install, RefusalView, SandboxSetup, SandboxView, proven};
 
 #[test]
 fn a_start_that_found_no_refusal_says_none() {
@@ -156,4 +156,39 @@ fn the_packaged_profile_path_is_where_tauri_conf_ships_it() {
             "the {package} must ship the profile at {PROFILE}"
         );
     }
+}
+
+#[test]
+fn a_probe_that_refuses_gives_the_refusal_and_not_the_sandbox() {
+    let error = proven(Ok("sandbox"), |_| {
+        Err(SandboxError::Refused(Refusal::NoCapabilities))
+    })
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        SandboxError::Refused(Refusal::NoCapabilities)
+    ));
+    assert!(!error.to_string().contains("RTM_NEWADDR"));
+}
+
+#[test]
+fn a_probe_that_passes_gives_the_started_value() {
+    let started = proven(Ok("sandbox"), |sandbox| {
+        assert_eq!(*sandbox, "sandbox");
+        Ok(())
+    });
+
+    assert_eq!(started.unwrap(), "sandbox");
+}
+
+#[test]
+fn a_start_that_failed_runs_no_probe() {
+    let error = proven(
+        Err::<&str, _>(SandboxError::Probe("no bwrap".to_owned())),
+        |_| panic!("ready ran on a start that failed"),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, SandboxError::Probe(text) if text == "no bwrap"));
 }
