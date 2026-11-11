@@ -6,8 +6,8 @@ import {
   type RefusalView,
 } from "@/bindings";
 import { Button } from "@/components/ui/button";
+import { useChatStore } from "./context";
 import { NeedsYou } from "./SandboxRequest";
-import { useChat } from "./store";
 
 /** What the maintainer reads for each way a sandbox can refuse to start (`docs/design/sandbox-setup.md`, Flow). */
 const WORDS: Record<RefusalView, { title: string; detail: string }> = {
@@ -73,6 +73,7 @@ export function SandboxSetup({
   install?: Install;
 }) {
   const { title, detail } = WORDS[refusal];
+  const useChat = useChatStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [left, setLeft] = useState<Left | null>(null);
