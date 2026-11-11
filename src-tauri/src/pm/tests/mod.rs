@@ -12,9 +12,6 @@ use kelpie_engine::run::RunId;
 use kelpie_engine::session::SessionId;
 use kelpie_engine::session::fake::{FakeAgent, FakeNetwork, Turn};
 use kelpie_engine::settings::ConfigDir;
-use kelpie_engine::tools::DOOR_VAR;
-use kelpie_engine::tools::SERVER_NAME;
-use kelpie_engine::tools::TOKEN_VAR;
 use kelpie_engine::tools::fake::FakeTools;
 use kelpie_protocol::{LogEntry, StopReason, ToolStatus};
 use tauri::ipc::InvokeResponseBody;
@@ -122,7 +119,10 @@ impl Chat {
         let opener: Opener = {
             let kept = Arc::clone(&kept);
             Box::new(move |opening| {
-                let Some(tools) = opening.tools.map(Tools::session) else {
+                let Some(tools) = opening
+                    .tools
+                    .map(|tools| tools.pm_session(Arc::clone(opening.starter)))
+                else {
                     return Err("kelpie's tools door did not open".to_owned());
                 };
                 *kept.lock().unwrap() = Some(tools.clone());
@@ -877,122 +877,7 @@ fn a_log_with_a_bad_line_in_the_middle_does_not_stop_a_send() {
     assert!(pm_history(chat.state()).unwrap_err().contains("line 1"));
 }
 
-#[test]
-fn the_pm_session_is_given_kelpies_tools() {
-    let agent = FakeAgent::new().turn(Turn::new().text("Hello"));
-    let chat = Chat::with_tools(&agent, &FakeNetwork::allowing(&["api.anthropic.com"]));
-
-    chat.send("Fetch docs.rs").until_turn_ends();
-
-    let opened = agent.params("session/new");
-    let [new] = opened.as_slice() else {
-        panic!("the agent should have been opened once");
-    };
-    let tools = chat.session_tools();
-    let servers = new["mcpServers"].as_array().unwrap();
-    assert_eq!(servers.len(), 1, "{servers:?}");
-    let server = &servers[0];
-    assert_eq!(server["name"], serde_json::json!(SERVER_NAME));
-    assert_eq!(server["args"], serde_json::json!(["tools"]));
-    assert_eq!(
-        server["env"],
-        serde_json::json!([
-            {"name": DOOR_VAR, "value": tools.door().to_string()},
-            {"name": TOKEN_VAR, "value": tools.token()},
-        ])
-    );
-}
-
-#[test]
-fn pm_answer_widens_the_session() {
-    let network = FakeNetwork::allowing(&["api.anthropic.com"]);
-    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
-    let chat = Chat::with_tools(&agent, &network);
-    let events = chat.send("Fetch docs.rs");
-    let mut asked = chat.asking();
-
-    asked.ask("docs.rs", "to read the crate's docs").unwrap();
-    let (id, host, why) = events.until_request();
-    assert_eq!(
-        (host.as_str(), why.as_str()),
-        ("docs.rs", "to read the crate's docs")
-    );
-    assert_eq!(
-        network.allowed(),
-        ["api.anthropic.com"],
-        "refused until the answer"
-    );
-
-    pm_answer(chat.state(), id.clone(), SandboxAnswer::Once).unwrap();
-
-    assert_eq!(
-        asked.answered().unwrap(),
-        ("docs.rs is allowed for this session".to_owned(), false)
-    );
-    assert_eq!(network.allowed(), ["api.anthropic.com", "docs.rs"]);
-    assert_eq!(
-        pm_answer(chat.state(), id, SandboxAnswer::Once),
-        Err("That request is over.".to_owned()),
-        "the answered request is not waiting any more"
-    );
-}
-
-#[test]
-fn allow_for_this_project_saves_the_host() {
-    let network = FakeNetwork::default();
-    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
-    let chat = Chat::with_tools(&agent, &network);
-    let events = chat.send("Fetch docs.rs");
-    let mut asked = chat.asking();
-
-    asked.ask("docs.rs", "to read the crate's docs").unwrap();
-    let (id, ..) = events.until_request();
-
-    pm_answer(chat.state(), id, SandboxAnswer::Project).unwrap();
-
-    assert_eq!(
-        asked.answered().unwrap().0,
-        "docs.rs is allowed and saved for this project"
-    );
-    assert_eq!(network.allowed(), ["docs.rs"]);
-
-    let project = chat.state().project_id(None).unwrap();
-    let plan = plan(chat.state().config(), &project).unwrap();
-    assert_eq!(plan.network_allowlist, ["docs.rs"]);
-}
-
-#[test]
-fn a_project_answer_the_sandbox_could_not_take_says_so_and_saves_nothing() {
-    let network = FakeNetwork::gone();
-    let agent = FakeAgent::new().turn(Turn::new().until_cancelled());
-    let chat = Chat::with_tools(&agent, &network);
-    let events = chat.send("Fetch docs.rs");
-    let mut asked = chat.asking();
-
-    asked.ask("docs.rs", "to read the crate's docs").unwrap();
-    let (id, ..) = events.until_request();
-
-    assert_eq!(
-        pm_answer(chat.state(), id, SandboxAnswer::Project),
-        Err(
-            "docs.rs is not through this session's sandbox, so kelpie saved nothing for it"
-                .to_owned()
-        ),
-    );
-    assert_eq!(
-        asked.answered().unwrap().0,
-        "docs.rs was allowed, but the sandbox could not take it, so it is still refused"
-    );
-
-    let project = chat.state().project_id(None).unwrap();
-    let plan = plan(chat.state().config(), &project).unwrap();
-    assert!(
-        plan.network_allowlist.is_empty(),
-        "the project was not told"
-    );
-    assert!(network.allowed().is_empty(), "the sandbox took nothing");
-}
-
 mod confinement;
 mod goose;
 mod plan;
+mod tools;

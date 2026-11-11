@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 use kelpie_engine::github::gh::{Gh, GithubSource, hold::Hold};
 use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
@@ -26,7 +26,7 @@ use kelpie_engine::login::Store;
 use kelpie_engine::session::{Session, log};
 use kelpie_engine::settings::{ConfigDir, Settings};
 use kelpie_engine::ticket::{ForgeError, TicketId, Tickets};
-use kelpie_engine::tools::Tools;
+use kelpie_engine::tools::{Tools, WorkerStarter};
 use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::worker::{self, Opening, Paths, Records, Seat, Started, Status, Ticket};
 use kelpie_protocol::{LogEntry, SessionEvent};
@@ -502,6 +502,74 @@ pub fn start_on(
     state
         .workers()
         .start(project_id, &folder, state.tools(), &ticket, open)
+}
+
+/// The PM's `start_worker`, for the project `project_id`, whose checkout is `folder`
+///
+/// `tools` is kelpie's tools server, which each worker this starts is given. It is
+/// held weakly, since the server holds the PM's token and the token holds this
+/// starter: holding the server back would close the loop. `OnProject` says what
+/// that would cost.
+#[must_use]
+pub fn starter_for(
+    workers: &Arc<Workers>,
+    project_id: &str,
+    folder: &Path,
+    tools: Option<&Arc<Tools>>,
+) -> Arc<dyn WorkerStarter> {
+    Arc::new(OnProject {
+        workers: Arc::clone(workers),
+        project_id: project_id.to_owned(),
+        folder: folder.to_owned(),
+        tools: tools.map(Arc::downgrade),
+    })
+}
+
+/// The PM's `start_worker` reaching the one start function, for one project
+///
+/// The ticket is read from the project's source exactly as the Start button and a
+/// drop on Building read it, so the PM is refused the same lines the maintainer
+/// would be. What a start answers becomes the tool's one line.
+///
+/// The tools are held weakly, which is what keeps `Tools` droppable. The strong
+/// ring is `Tools` → its live token → the PM's role → this starter, so a strong
+/// `Tools` here is a cycle: the server could only drop once its own session and
+/// every connection of it were gone, which leaves the door's socket in the data
+/// folder and its thread unjoined, and hands the last drop to a connection task
+/// that would then join the thread it runs on. Held weakly, the app is the only
+/// strong holder, and dropping it closes the door from a thread the door is not
+/// on. A start that finds the server gone gives the worker no kelpie tools, as a
+/// run whose door never opened does.
+#[derive(Debug)]
+struct OnProject {
+    workers: Arc<Workers>,
+    project_id: String,
+    folder: PathBuf,
+    tools: Option<Weak<Tools>>,
+}
+
+impl WorkerStarter for OnProject {
+    fn start(&self, ticket: &str) -> Result<String, String> {
+        let source = self.workers.source(&self.project_id, &self.folder)?;
+        let ticket = ticket_of(source.as_ref(), ticket)?;
+        let tools = self.tools.as_ref().and_then(Weak::upgrade);
+        let started = self.workers.start(
+            &self.project_id,
+            &self.folder,
+            tools.as_deref(),
+            &ticket,
+            &open::open,
+        )?;
+        Ok(said(&started))
+    }
+}
+
+/// What a start answers the PM, in one line
+fn said(started: &WorkerStarted) -> String {
+    if started.waiting {
+        return format!("#{} waits for a free slot", started.ticket);
+    }
+    format!("Started a worker on #{}", started.ticket)
 }
 
 /// Start a worker on the GitHub issue `ticket` of the project

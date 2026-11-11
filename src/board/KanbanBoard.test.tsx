@@ -101,6 +101,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * Wait for the board's status line to say `text`. The line is always on the
+ * page, empty until a move or a notice sets it, so reading it at once can see
+ * it empty, and how long `onMove` takes to answer depends on the machine.
+ */
+const statusLine = (text: string) =>
+  waitFor(() => expect(screen.getByRole("status").textContent).toBe(text));
+
 const pickUp = (title: string, pointerType: "mouse" | "touch" = "mouse") =>
   pickUpCard(card(title), pointerType);
 const dragTo = (
@@ -219,9 +227,7 @@ describe("<KanbanBoard>", () => {
 
     await dragTo("Write it", "In progress");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Ready first: nothing starts from Draft.",
-    );
+    await statusLine("Ready first: nothing starts from Draft.");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
@@ -236,9 +242,7 @@ describe("<KanbanBoard>", () => {
 
     await dragTo("Write it", "In progress");
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "the window lost the engine",
-    );
+    await statusLine("the window lost the engine");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );
@@ -472,7 +476,7 @@ describe("<KanbanBoard>", () => {
     fireEvent.keyDown(trigger, { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Done" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe("No.");
+    await statusLine("No.");
     await waitFor(() =>
       expect(cardTitles("To do")).toEqual(["Write it", "Test it"]),
     );

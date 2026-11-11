@@ -31,7 +31,9 @@
 //! The PM asks for anything else through kelpie's own tools, and [`pm_answer`]
 //! is the maintainer's reply: it widens the running sandbox for the host the PM
 //! named, and keeps a *Allow for this project* answer to the project's settings
-//! (`docs/design/kelpie-tools.md`, The sandbox request).
+//! (`docs/design/kelpie-tools.md`, The sandbox request). The PM's session is the
+//! only one given `start_worker`, which starts a worker on a ticket through the
+//! app's one start function (`docs/design/kelpie-tools.md`, The role split).
 //!
 //! The PM runs on what the settings resolve to at each send ([`plan`]): the
 //! global `pm` agent, then the project's own setting, over [`PM_DEFAULT`], the
@@ -60,7 +62,7 @@ use kelpie_engine::session::{
 use kelpie_engine::settings::{
     BridgeUpdates, ConfigDir, Field, Harness, LayerFile, Settings, SettingsError,
 };
-use kelpie_engine::tools::{Door, SessionTools, Tools};
+use kelpie_engine::tools::{Door, SessionTools};
 use semver::Version;
 use serde_json::Value;
 use tauri::State;
@@ -282,7 +284,9 @@ fn open_with(
         ..
     } = *opening;
     // One token for the session, shared by its sandbox's door and its harness's server
-    let tools = opening.tools.map(Tools::session);
+    let tools = opening
+        .tools
+        .map(|tools| tools.pm_session(Arc::clone(opening.starter)));
     // parity: harness.pm
     let session = match pm.harness {
         Harness::ClaudeCode => {

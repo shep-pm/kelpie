@@ -26,10 +26,10 @@ const WAIT: Duration = Duration::from_secs(10);
 /// A folder of its own under the temporary folder, removed when it drops
 ///
 /// Named short, since on macOS a socket's path may be 103 bytes at most.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let folder = env::temp_dir().join(format!(
             "kt{}-{}",
@@ -120,7 +120,7 @@ fn until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
-fn started(scratch: &Scratch) -> Tools {
+pub(super) fn started(scratch: &Scratch) -> Tools {
     Tools::start(&scratch.0).expect("the door opens")
 }
 
