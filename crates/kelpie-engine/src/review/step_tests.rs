@@ -635,3 +635,90 @@ fn the_kept_facts_round_trip_through_review_json() {
     let json = fs::read_to_string(reloaded.file()).unwrap();
     assert!(json.contains("\"stage\": \"round\""), "{json}");
 }
+
+#[test]
+fn answer_files_that_cannot_be_read_are_a_ruling_that_says_so() {
+    let (build, lineup) = (tempfile::tempdir().unwrap(), three());
+    let (look, mut kept) = (look(build.path(), HEAD), Kept::default());
+    reads(&mut kept, &lineup, &look, vec![high()]);
+    fix_turn(step(&look, &mut kept, &lineup, now()));
+    // A folder where the worker's file belongs: it is there, and it cannot be read
+    fs::create_dir(disputed_path(build.path())).unwrap();
+
+    let ruling = step(&look, &mut kept, &lineup, now());
+
+    let ReviewStep::Rule(ruling @ Ruling::AnswersUnreadable { round: 1, .. }) = ruling else {
+        panic!("not unreadable: {ruling:?}");
+    };
+    assert!(ruling.reason().contains("cannot be read"), "{ruling:?}");
+    // The turn is still the fix's: once the file reads, the step goes on
+    assert!(matches!(
+        kept.review.as_ref().unwrap().stage,
+        ReviewStage::Fixing { .. }
+    ));
+}
+
+#[test]
+fn a_deferred_file_that_cannot_be_read_holds_the_fix_turn_back() {
+    let (build, lineup) = (tempfile::tempdir().unwrap(), three());
+    let (look, mut kept) = (look(build.path(), HEAD), Kept::default());
+    reads(&mut kept, &lineup, &look, vec![high()]);
+    fs::create_dir(deferred_path(build.path())).unwrap();
+
+    let ruling = step(&look, &mut kept, &lineup, now());
+
+    assert!(
+        matches!(
+            ruling,
+            ReviewStep::Rule(Ruling::AnswersUnreadable { round: 1, .. })
+        ),
+        "{ruling:?}"
+    );
+    assert!(matches!(
+        kept.review.as_ref().unwrap().stage,
+        ReviewStage::Found { .. }
+    ));
+}
+
+#[test]
+fn a_reviewer_the_list_dropped_is_neither_a_read_nor_passed_over() {
+    let (build, lineup) = (tempfile::tempdir().unwrap(), three());
+    let (look, mut kept) = (look(build.path(), HEAD), Kept::default());
+    assert_eq!(step(&look, &mut kept, &lineup, now()), read("a", false));
+
+    // The Reviewers setting dropped a before its read came back
+    let without = self::lineup(&[("b.md", PLAIN), ("c.md", PLAIN)], &["b", "c"]);
+
+    assert_eq!(step(&look, &mut kept, &without, now()), read("b", false));
+    assert!(kept.passed_over.is_empty());
+    assert!(kept.review.as_ref().unwrap().ran.is_empty());
+}
+
+#[test]
+fn a_second_look_that_keeps_failing_leaves_the_first_look_as_a_read() {
+    let files = [("a.md", TWICE), ("b.md", PLAIN)];
+    let (build, lineup) = (tempfile::tempdir().unwrap(), lineup(&files, &["a", "b"]));
+    let (look, mut kept) = (look(build.path(), HEAD), Kept::default());
+    assert_eq!(step(&look, &mut kept, &lineup, now()), read("a", true));
+    after_read(&mut kept, &lineup, Ok(vec![]));
+    for _ in 0..3 {
+        let second = step(&look, &mut kept, &lineup, now());
+        assert!(
+            matches!(second, ReviewStep::SecondLook { .. }),
+            "{second:?}"
+        );
+        after_read(
+            &mut kept,
+            &lineup,
+            Err(ReviewerError::Failed("no".to_owned())),
+        );
+    }
+    assert!(kept.passed_over.is_empty());
+    reads(&mut kept, &lineup, &look, vec![]);
+
+    // a's first look and b's read are the two reads the pass owes
+    assert_eq!(
+        step(&look, &mut kept, &lineup, now()),
+        ReviewStep::Ended { unread: None }
+    );
+}

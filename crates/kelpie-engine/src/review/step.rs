@@ -106,6 +106,14 @@ pub enum Ruling {
         /// The tests that fail
         tests: Vec<FailingTest>,
     },
+    /// The worker's deferred or disputed findings file is there but cannot be read, so what
+    /// the worker said of the findings is not known
+    AnswersUnreadable {
+        /// The round whose findings they were
+        round: u32,
+        /// Why the file cannot be read, as the read said it
+        why: String,
+    },
     /// The worktree is still not the pushed head after the worker's turn to push
     NotPushed {
         /// What is off, as [`off_text`] says it
@@ -136,6 +144,10 @@ impl Ruling {
                     .map(|t| t.test.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
+            ),
+            Self::AnswersUnreadable { round, why } => format!(
+                "The worker's deferred or disputed findings file for round {round}'s review \
+                 findings cannot be read: {why}. The review waits for it."
             ),
             Self::NotPushed { what } => format!(
                 "The worker's worktree is still not the pushed head after its turn to push: \
@@ -246,9 +258,11 @@ fn round(look: &Look, kept: &mut Kept, lineup: &Lineup) -> ReviewStep {
     if let Some(name) = review.reviewer.clone() {
         // A restart cleared its read, or its last call failed: it reads again
         let Some(listed) = lineup.get(&name) else {
-            // The project's list dropped it since
-            kept.passed_over.push(name);
-            *review = review.clone().next_round();
+            // The project's list dropped it since: it never read, so it is neither a read
+            // nor passed over, and the round goes to the next reviewer due
+            review.reviewer = None;
+            review.reading = None;
+            review.failures = 0;
             return round(look, kept, lineup);
         };
         review.reading = Some(look.head.clone());
@@ -306,7 +320,10 @@ fn found(look: &Look, kept: &mut Kept, findings: &[Finding]) -> ReviewStep {
     if unrun {
         return ReviewStep::RunTests;
     }
-    let deferred_before = deferred(&look.build).unwrap_or_default();
+    let deferred_before = match deferred(&look.build) {
+        Ok(before) => before,
+        Err(why) => return ReviewStep::Rule(Ruling::AnswersUnreadable { round, why }),
+    };
     let review = kept.review.as_mut().expect("the pass is kept");
     review.stage = ReviewStage::Fixing {
         head: look.head.clone(),
@@ -336,12 +353,13 @@ pub fn after_read(kept: &mut Kept, lineup: &Lineup, outcome: Result<Vec<Finding>
             if !review.fail() {
                 return;
             }
-            let name = review.reviewer.clone().unwrap_or_default();
-            kept.passed_over.push(name);
-            // A second look that was passed over leaves the first's list as the round's
+            // A second look that was passed over leaves the first's list as the round's, and
+            // the reviewer did read: its first look is a read
             if let ReviewStage::SecondLook { first } = review.stage.clone() {
                 finish_read(kept, first);
             } else {
+                let name = review.reviewer.clone().unwrap_or_default();
+                kept.passed_over.push(name);
                 after_round(kept);
             }
             return;
@@ -438,9 +456,10 @@ pub fn after_fix(kept: &mut Kept, look: &Look) -> Option<ReviewStep> {
             Next::Ruling(tests) => return Some(ReviewStep::Rule(Ruling::TestStillFails { tests })),
         }
     }
-    let answered = match moved {
-        true => Answers::default(),
-        false => answers(
+    let answered = if moved {
+        Answers::default()
+    } else {
+        let read = answers(
             &look.build,
             Sent {
                 findings: &sent,
@@ -448,8 +467,15 @@ pub fn after_fix(kept: &mut Kept, look: &Look) -> Option<ReviewStep> {
             },
             round,
             &kept.disputes,
-        )
-        .unwrap_or_default(),
+        );
+        match read {
+            Ok(answered) => answered,
+            // Nits alone need no answer; anything above one does, and it cannot be known
+            Err(why) if sent.iter().any(|f| !f.is_nit()) => {
+                return Some(ReviewStep::Rule(Ruling::AnswersUnreadable { round, why }));
+            }
+            Err(_) => Answers::default(),
+        }
     };
     match fix_ended(&sent, &answered, &kept.disputes, round, moved) {
         Err(ruling) => Some(ReviewStep::Rule(ruling)),
