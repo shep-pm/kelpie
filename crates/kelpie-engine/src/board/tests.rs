@@ -365,11 +365,25 @@ fn ready_to_building_is_start_and_the_same_column_is_stay() {
 }
 
 #[test]
+fn review_to_done_is_the_merge_move() {
+    assert_eq!(plan_move(Column::Review, Column::Done), Move::Merge);
+    for from in COLUMNS {
+        if from != Column::Review {
+            assert_ne!(plan_move(from, Column::Done), Move::Merge, "{from:?}");
+        }
+    }
+}
+
+#[test]
 fn every_other_move_snaps_back_with_a_line_naming_why() {
     let mut lines = std::collections::BTreeSet::new();
     for from in COLUMNS {
         for to in COLUMNS {
-            if from == to || (from, to) == (Column::Ready, Column::Building) {
+            let own = [
+                (Column::Ready, Column::Building),
+                (Column::Review, Column::Done),
+            ];
+            if from == to || own.contains(&(from, to)) {
                 continue;
             }
             let Move::SnapBack(line) = plan_move(from, to) else {
@@ -381,13 +395,10 @@ fn every_other_move_snaps_back_with_a_line_naming_why() {
     }
 
     let draft_to_ready = plan_move(Column::Draft, Column::Ready);
-    let review_to_done = plan_move(Column::Review, Column::Done);
     let other = plan_move(Column::Done, Column::Draft);
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 2);
     assert!(matches!(draft_to_ready, Move::SnapBack(line)
         if line.contains("ready label") && line.contains("Phase 3") && line.contains("GitHub")));
-    assert!(matches!(review_to_done, Move::SnapBack(line)
-        if line.contains("Merging") && line.contains("Phase 3")));
     assert!(matches!(other, Move::SnapBack(line)
         if line.contains("worker") && line.contains("issue")));
 }

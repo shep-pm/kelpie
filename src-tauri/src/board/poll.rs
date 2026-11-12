@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use kelpie_engine::board::{Board, Read, Rules, place};
+use kelpie_engine::gate::Line;
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::settings::PickUp;
 use kelpie_engine::ticket::{ForgeError, GithubTickets, OpenPull};
@@ -67,6 +68,9 @@ pub type Retry = Box<dyn Fn(&[Record], &[OpenPull]) + Send>;
 /// Where a placing finds the tickets the gate found ready to merge
 pub type Ready = Box<dyn Fn() -> BTreeSet<String> + Send>;
 
+/// Where a placing finds the line the gate shows on each ticket
+pub type Lines = Box<dyn Fn() -> BTreeMap<String, Line> + Send>;
+
 const DAY: u64 = 24 * 60 * 60;
 
 /// What the window says when `gh` is missing or holds no login
@@ -111,6 +115,7 @@ pub struct Poller<F> {
     requests: Requests,
     retry: Retry,
     ready: Ready,
+    lines: Lines,
     clock: Arc<dyn Clock>,
     last: Option<Last>,
     held: Option<Timestamp>,
@@ -141,6 +146,7 @@ impl<F: Feed> Poller<F> {
             requests,
             retry,
             ready: Box::new(BTreeSet::new),
+            lines: Box::new(BTreeMap::new),
             clock,
             last: None,
             held: None,
@@ -152,6 +158,13 @@ impl<F: Feed> Poller<F> {
     #[must_use]
     pub fn with_ready(mut self, ready: Ready) -> Self {
         self.ready = ready;
+        self
+    }
+
+    /// Say which line the gate shows on each ticket, from `lines`, on each placing
+    #[must_use]
+    pub fn with_lines(mut self, lines: Lines) -> Self {
+        self.lines = lines;
         self
     }
 
@@ -243,6 +256,7 @@ impl<F: Feed> Poller<F> {
         // Asked before the records lock is held: the feeds' locks are never taken under it
         let requests = (self.requests)();
         let ready = (self.ready)();
+        let lines = (self.lines)();
         let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
         let board = match &self.last {
             Some(last) => place(&last.read, records.list(), &last.rules),
@@ -257,6 +271,7 @@ impl<F: Feed> Poller<F> {
             records.list(),
             &requests,
             &ready,
+            &lines,
         );
         drop(records);
         self.show(BoardEvent::Board(view))

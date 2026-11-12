@@ -31,6 +31,7 @@ use specta::Type;
 use tauri::State;
 use tauri::ipc::Channel;
 
+use crate::gate::NotReady;
 use crate::state::AppState;
 use crate::workers::{self, WorkerStarted};
 use poll::{Cadence, Choices, Command, Feed, Poller};
@@ -82,6 +83,28 @@ impl From<engine::Column> for Column {
     }
 }
 
+/// The one line a Review ticket shows for where the gate is
+// wire format: the Board panel reads these fields
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct GateLine {
+    /// What the line says
+    pub text: String,
+    /// The failing run's page, for a line that has one
+    pub url: Option<String>,
+    /// Whether the ticket waits on the maintainer's yes to merge, which its Merge button gives
+    pub ready: bool,
+}
+
+impl From<&Line> for GateLine {
+    fn from(line: &Line) -> Self {
+        Self {
+            text: line.text(),
+            url: line.link().map(str::to_owned),
+            ready: *line == Line::ReadyToMerge,
+        }
+    }
+}
+
 /// One ticket on the board, with the pages it links out to
 // wire format: the Board panel reads these fields
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
@@ -100,6 +123,8 @@ pub struct TicketView {
     pub pull_url: Option<String>,
     /// One line for each wait on the maintainer, empty when its worker waits on nothing
     pub needs_you: Vec<String>,
+    /// Where the gate is, for a ticket in Review, `None` in any other column
+    pub gate: Option<GateLine>,
 }
 
 /// Every ticket of the project, column by column, as the window shows them
@@ -113,6 +138,12 @@ pub struct BoardView {
     /// How many lines the tickets' `needs_you` hold in all
     pub needs_you: u32,
 }
+
+/// What the board says when the maintainer's yes is kept
+const MERGING: &str = "Merging once its checks settle";
+
+/// What the board says when a yes finds no line from the gate, which has not read the ticket yet
+const NOT_CHECKED: &str = "The gate has not checked this ticket yet";
 
 /// What a Paused worker waits for
 const PAUSED: &str = "Paused, resumes when you say so";
@@ -158,7 +189,8 @@ impl BoardView {
     ///
     /// `records` and `requests` (the hosts each ticket's worker waits to reach, by
     /// ticket) say which tickets wait on the maintainer, and so does `ready`, the
-    /// tickets the gate found ready to merge.
+    /// tickets the gate found ready to merge. `lines` are the gate's lines by ticket, which only
+    /// a ticket in Review shows: a fix turn moves it to Building, where it shows none.
     #[must_use]
     pub fn of(
         board: &Board,
@@ -167,6 +199,7 @@ impl BoardView {
         records: &[Record],
         requests: &BTreeMap<String, Vec<String>>,
         ready: &BTreeSet<String>,
+        lines: &BTreeMap<String, Line>,
     ) -> Self {
         let page = |kind: &str, number: &dyn std::fmt::Display| {
             format!("https://github.com/{repo}/{kind}/{number}")
@@ -182,6 +215,9 @@ impl BoardView {
                 url: page("issues", &placed.id),
                 pull_url: placed.pull.map(|number| page("pull", &number)),
                 needs_you: needs_you(&placed.id.to_string(), records, requests, ready),
+                gate: (placed.column == engine::Column::Review)
+                    .then(|| lines.get(&placed.id.to_string()).map(GateLine::from))
+                    .flatten(),
             })
             .collect::<Vec<_>>();
         let waits = tickets
@@ -325,7 +361,8 @@ impl BoardHost {
 /// What dropping `ticket` on the column `to` does
 ///
 /// `start` is what a Start does for a ticket: the move runs it only for a drop
-/// from Ready on Building, and every other drop changes nothing.
+/// from Ready on Building. `yes` is the maintainer's yes to merging, which the move
+/// gives only for a drop from Review on Done. Every other drop changes nothing.
 ///
 /// # Errors
 ///
@@ -335,6 +372,7 @@ pub fn move_ticket(
     ticket: &str,
     to: Column,
     start: impl FnOnce(&str) -> Result<WorkerStarted, String>,
+    yes: impl FnOnce(&str) -> Result<(), NotReady>,
 ) -> Result<MoveView, String> {
     let from = host.column_of(ticket)?;
     Ok(match plan_move(from.into(), to.into()) {
@@ -342,6 +380,16 @@ pub fn move_ticket(
             waiting: start(ticket)?.waiting,
         },
         Move::Stay => MoveView::Stay,
+        // The yes is kept and the merge is the gate's next pass, so the card stays in Review
+        Move::Merge => MoveView::SnapBack {
+            line: match yes(ticket) {
+                Ok(()) => MERGING.to_owned(),
+                Err(NotReady {
+                    line: Some(line), ..
+                }) => line.text(),
+                Err(NotReady { line: None, .. }) => NOT_CHECKED.to_owned(),
+            },
+        },
         Move::SnapBack(line) => MoveView::SnapBack {
             line: line.to_owned(),
         },
@@ -372,6 +420,7 @@ fn poller_of(
         workers::app_open(),
     )?;
     let ready = Arc::clone(&gate);
+    let lines = Arc::clone(&gate);
     let retry = Box::new(move |records: &[Record], pulls: &[OpenPull]| {
         hands.retry(records);
         gate.after_read(records, pulls);
@@ -387,7 +436,8 @@ fn poller_of(
         })
     });
     Ok(Poller::new(source, choose, records, waiting, retry, clock)
-        .with_ready(Box::new(move || ready.ready())))
+        .with_ready(Box::new(move || ready.ready()))
+        .with_lines(Box::new(move || lines.lines())))
 }
 
 /// Stream the project's board to the window, and keep it current
@@ -434,8 +484,9 @@ pub fn board_refresh(state: State<'_, AppState>) {
 /// What dropping `ticket` on the column `to` does
 ///
 /// A drop from Ready on Building starts a worker through the one function the
-/// Start button calls. Any other drop changes nothing, and a snap back carries
-/// the line the window shows.
+/// Start button calls. A drop from Review on Done is the maintainer's yes to the
+/// merge, the same as the card's Merge button, given to the project's gate. Any
+/// other drop changes nothing, and a snap back carries the line the window shows.
 ///
 /// # Errors
 ///
@@ -447,7 +498,18 @@ pub fn board_move(
     ticket: String,
     to: Column,
 ) -> Result<MoveView, String> {
-    move_ticket(state.board(), &ticket, to, |ticket| {
-        workers::start_ticket(&state, ticket)
-    })
+    let project = state.project_id(None)?;
+    move_ticket(
+        state.board(),
+        &ticket,
+        to,
+        |ticket| workers::start_ticket(&state, ticket),
+        |ticket| match state.workers().gate_of(&project) {
+            Some(gate) => gate.yes(ticket),
+            None => Err(NotReady {
+                ticket: ticket.to_owned(),
+                line: None,
+            }),
+        },
+    )
 }

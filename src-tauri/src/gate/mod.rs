@@ -318,6 +318,15 @@ impl Gate {
             .collect()
     }
 
+    /// The line each ticket showed after its last pass, by ticket
+    #[must_use]
+    pub fn lines(&self) -> BTreeMap<String, Line> {
+        lock(&self.lines)
+            .iter()
+            .map(|(ticket, line)| (ticket.to_string(), line.clone()))
+            .collect()
+    }
+
     /// What the gate keeps of `ticket`, which a test reads back
     #[cfg(test)]
     pub(crate) fn kept(&self, ticket: &str) -> Option<gate::Kept> {
