@@ -96,6 +96,24 @@ pub struct Look {
     pub merges_clean: bool,
     /// Whether the base branch holds a workflow that runs on a pull request
     pub base_runs_pull_workflow: bool,
+    /// Where the review pass stands for this head (`docs/design/review.md`, The pass)
+    pub review: Reviewed,
+}
+
+/// What the review pass says of the head a pass read (`docs/design/review.md`, The pass)
+///
+/// A head a pass has not read goes to the pass before the merge yes. A head the pass
+/// vouches for is one its own fix turn pushed, which the pass has already read for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Reviewed {
+    /// A fix turn of the pass pushed this head, so the pass vouches for it and it needs no new read
+    pub vouches: bool,
+    /// The pass has a read left to run: it owes its reads and has a reviewer whose paths the diff touches
+    pub can_run: bool,
+    /// The read the pass is on, 1-indexed, as the ticket's line says it: `read 1 of 2`
+    pub read: u32,
+    /// The reads the pass owes
+    pub of: u32,
 }
 
 /// The project's settings the gate reads (`docs/design/gate-and-merge.md`, Settings)
@@ -139,6 +157,13 @@ pub enum Step {
     Rerun(Vec<u64>),
     /// Red: read the failed runs' logs, then decide with [`red`]
     Red(Vec<FailedCheck>),
+    /// CI is green on a head the review pass has not read: the pass runs before the yes
+    Review {
+        /// The read the pass is on
+        read: u32,
+        /// The reads the pass owes
+        of: u32,
+    },
     /// Everything holds: ask the maintainer for the merge
     Yes,
 }
@@ -155,6 +180,10 @@ impl Step {
             Self::Rerun(_) => Line::WaitingForCi,
             Self::Red(checks) => Line::FixingRed {
                 link: checks.iter().find_map(|check| check.url.clone()),
+            },
+            Self::Review { read, of } => Line::Reviewing {
+                read: *read,
+                of: *of,
             },
             Self::Yes => Line::ReadyToMerge,
         })
@@ -173,6 +202,13 @@ pub enum Line {
     FixingRed {
         /// The failing run's page
         link: Option<String>,
+    },
+    /// A reviewer is reading the head, read `read` of `of`
+    Reviewing {
+        /// The read the pass is on
+        read: u32,
+        /// The reads the pass owes
+        of: u32,
     },
     /// Ready to merge, on the maintainer's yes
     ReadyToMerge,
@@ -209,6 +245,7 @@ impl Line {
             Self::CatchingUp => "Catching up with the base branch".to_owned(),
             Self::WaitingForCi => "Waiting for CI".to_owned(),
             Self::FixingRed { .. } => "Fixing red CI".to_owned(),
+            Self::Reviewing { read, of } => format!("Reviewing, read {read} of {of}"),
             Self::ReadyToMerge => "Ready to merge".to_owned(),
             Self::InMergeQueue => "In the merge queue".to_owned(),
             Self::BaseLagging { head } => format!(
@@ -269,7 +306,7 @@ pub fn pass(look: &Look, kept: &mut Kept, limits: &Limits, now: Timestamp) -> St
         return Step::CatchUp;
     }
     if !limits.ci_holds_merge {
-        return Step::Yes;
+        return reviewed(&look.review);
     }
     if !settled(since, now) {
         return Step::Wait(Line::WaitingForCi);
@@ -284,9 +321,21 @@ pub fn pass(look: &Look, kept: &mut Kept, limits: &Limits, now: Timestamp) -> St
             limits.ci_wait.duration().as_secs(),
             now,
         ),
-        HeadStatus::Passed | HeadStatus::Skipped => Step::Yes,
+        HeadStatus::Passed | HeadStatus::Skipped => reviewed(&look.review),
         HeadStatus::Failed(checks) => Step::Red(checks.clone()),
     }
+}
+
+/// What a head the checks let through comes to: the review pass first, unless it has read
+/// the head, vouches for it, or has nothing left to run
+fn reviewed(review: &Reviewed) -> Step {
+    if review.can_run && !review.vouches {
+        return Step::Review {
+            read: review.read,
+            of: review.of,
+        };
+    }
+    Step::Yes
 }
 
 /// What a conflict on catch-up comes to: the worker's next turn, or a ruling
@@ -415,7 +464,7 @@ fn without_checks(
     now: Timestamp,
 ) -> Step {
     if !look.base_runs_pull_workflow {
-        return Step::Yes;
+        return reviewed(&look.review);
     }
     if now.secs().saturating_sub(since.secs()) < limits.ci_wait.duration().as_secs() {
         return Step::Wait(Line::WaitingForCi);

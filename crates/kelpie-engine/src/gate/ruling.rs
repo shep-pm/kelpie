@@ -67,6 +67,9 @@ pub enum Ruling {
         /// The forge's reason
         why: String,
     },
+    /// The review pass ruled: readers disagree, a fix pushed nothing, a reviewer's test still
+    /// fails, or the worktree is not the pushed head
+    Review(crate::review::Ruling),
 }
 
 impl Ruling {
@@ -149,6 +152,7 @@ impl Ruling {
             Self::MergeRefused { head, why } => {
                 format!("Kelpie could not merge at {}: {why}.", short(head))
             }
+            Self::Review(ruling) => ruling.reason(),
         }
     }
 

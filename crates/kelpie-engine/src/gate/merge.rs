@@ -206,6 +206,7 @@ mod tests {
             agents_files: vec![],
             merges_clean: false,
             base_runs_pull_workflow: true,
+            review: crate::gate::Reviewed::default(),
         }
     }
 
