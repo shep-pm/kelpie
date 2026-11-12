@@ -23,6 +23,11 @@
 //! A red run is the worker's to fix (`red`): the failed logs and the files the branch changed
 //! decide between a rerun, a ruling and a fix turn that carries the log.
 //!
+//! A ready head merges on the maintainer's yes and on nothing else. [`Gate::yes`] keeps the
+//! yes with the head it was given on, and the next pass of that ticket carries it out
+//! (`merge`): it marks a draft ready, waits out the checks, and merges pinned to the head,
+//! or withdraws the yes where the head, CI or the base moved.
+//!
 //! A catch-up push and a fix turn reach the worker's own branch only: the rebase pushes
 //! from the worker's clone with the credential git finds for its `origin`, and the fix
 //! turn is a prompt to the worker's own session. The maintainer's `gh` login reads
@@ -32,7 +37,7 @@
 //! branch behind its base that git finds merges cleanly reads as current, and a head git
 //! cannot judge is caught up, as under Always.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -40,11 +45,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 
 use kelpie_engine::ci::{Ci, HeadStatus};
-use kelpie_engine::gate::{self, Book, Limits, Look, Pull};
+use kelpie_engine::gate::{self, Book, Limits, Line, Look, Pull};
 use kelpie_engine::github::Clock;
 use kelpie_engine::sandbox::fence;
 use kelpie_engine::settings::CatchUp;
-use kelpie_engine::ticket::{OpenPull, PullState, Pulls, TicketId};
+use kelpie_engine::ticket::{MergeQueue, OpenPull, PullState, Pulls, TicketId};
 use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::worker::{Paths, Record, Records, Status};
 use kelpie_engine::worktree::{self, Base, Remote};
@@ -52,6 +57,7 @@ use kelpie_engine::worktree::{self, Base, Remote};
 use crate::workers::BASE;
 
 mod act;
+mod merge;
 mod red;
 #[cfg(test)]
 mod tests;
@@ -64,6 +70,8 @@ pub type Choose = Box<dyn Fn() -> Result<Limits, String> + Send + Sync>;
 /// The app's is [`crate::workers::Workers::fix_turn`], which a test replaces with the
 /// worker's own agent.
 pub type Fix = Box<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+
+pub use merge::NotReady;
 
 /// What a project's gate is made from
 pub struct Parts {
@@ -90,6 +98,9 @@ pub struct Parts {
 
     /// The project's CI, which a stuck run is rerun through
     pub ci: Arc<dyn Ci>,
+
+    /// The base branch's merge queue, which a merge is watched through
+    pub queue: Arc<dyn MergeQueue>,
 
     /// Where a pass reads the present moment from
     pub clock: Arc<dyn Clock>,
@@ -119,9 +130,13 @@ pub struct Gate {
     records: Weak<Mutex<Records>>,
     pulls: Arc<dyn Pulls>,
     ci: Arc<dyn Ci>,
+    queue: Arc<dyn MergeQueue>,
     clock: Arc<dyn Clock>,
     limits: Choose,
     fix: Fix,
+
+    /// The line each ticket showed after its last pass, which a yes that is refused says
+    lines: Mutex<BTreeMap<TicketId, Line>>,
 
     /// What the gate keeps of each ticket, and `gate.json`, which holds it
     book: Mutex<Book>,
@@ -235,9 +250,11 @@ impl Gate {
             records: parts.records,
             pulls: parts.pulls,
             ci: parts.ci,
+            queue: parts.queue,
             clock: parts.clock,
             limits: parts.limits,
             fix: parts.fix,
+            lines: Mutex::default(),
             book: Mutex::new(book),
             busy: Busy::default(),
             checkout: Mutex::new(()),
@@ -394,15 +411,42 @@ impl Gate {
         };
         let now = self.clock.now();
         let mut kept = lock(&self.book).get(work.id).cloned().unwrap_or_default();
+        let started_with_yes = kept.yes.is_some();
         if let Pull::Open(pull) = &look.pull {
             kept.pull = Some(pull.number.get());
         }
         kept.ready = None;
-        let step = gate::pass(&look, &mut kept, &limits, now);
-        let carried = self.carry_out(work, &look, &mut kept, step, &limits, now);
+        // A yes, or a merge already sent, is carried out before the order runs again
+        let after = match &look.pull {
+            Pull::Open(pull) if kept.yes.is_some() || kept.sent.is_some() => {
+                self.merge_pass(work, &look, pull, &mut kept, &limits, now)
+            }
+            _ => merge::After::Order,
+        };
+        let (carried, line) = match after {
+            merge::After::Carried(carried) => (carried, Some(merge::line_of(&kept))),
+            merge::After::Order => {
+                let step = gate::pass(&look, &mut kept, &limits, now);
+                let line = step.line();
+                (
+                    self.carry_out(work, &look, &mut kept, step, &limits, now),
+                    line,
+                )
+            }
+        };
         let mut book = lock(&self.book);
         match carried {
-            act::Carried::Keep => *book.entry(work.id) = kept,
+            act::Carried::Keep => {
+                // The maintainer's yes can land while the pass is at work, on the head it found ready
+                if kept.yes.is_none()
+                    && !started_with_yes
+                    && let Some(said) = book.get(work.id).and_then(|then| then.yes.clone())
+                    && kept.ready.as_deref() == Some(said.as_str())
+                {
+                    kept.yes = Some(said);
+                }
+                *book.entry(work.id) = kept;
+            }
             act::Carried::Forget => book.forget(work.id),
         }
         if let Err(why) = book.save() {
@@ -410,6 +454,16 @@ impl Gate {
                 "kelpie: the gate's facts of ticket {} did not keep: {why}",
                 work.ticket
             );
+        }
+        drop(book);
+        let mut lines = lock(&self.lines);
+        match (carried, line) {
+            (act::Carried::Keep, Some(line)) => {
+                lines.insert(work.id, line);
+            }
+            _ => {
+                lines.remove(&work.id);
+            }
         }
     }
 

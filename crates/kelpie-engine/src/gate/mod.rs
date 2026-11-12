@@ -8,11 +8,13 @@
 //! [`Look`], acts on the [`Step`], and saves the facts it changed in [`Book`].
 //!
 //! [`red`] and [`removed`] decide what a red run or a merge queue removal comes
-//! to, [`conflicted`] what a conflict on catch-up comes to, and [`Ruling`] holds
+//! to, [`conflicted`] what a conflict on catch-up comes to, [`yes`], [`refused`]
+//! and [`queue`] what the maintainer's yes and the merge it sends come to, and
+//! [`Ruling`] holds
 //! what the gate will not settle itself. [`Kept`] is what the gate remembers of
 //! a ticket between passes. Lifted from SK's `runner/gate/` (`check_ci`, `lag.rs`,
-//! `catch_up.rs`, `fix_attempts.rs`), `runner/gate/queued/` and `rerun/`, and
-//! `runner/rework/`: `docs/lifted.md`.
+//! `catch_up.rs`, `fix_attempts.rs`), `runner/gate/queued/` and `rerun/`,
+//! `runner/rework/`, and `runner/merge/`: `docs/lifted.md`.
 //!
 //! # Quick start
 //!
@@ -31,13 +33,15 @@ use crate::ticket::OpenPull;
 use crate::worktree::Base;
 
 mod kept;
+mod merge;
 mod prompt;
 mod red;
 mod ruling;
 #[cfg(test)]
 mod tests;
 
-pub use kept::{Book, Conflict, FILE, Kept, Lag, QueuedReruns, Seen, Wait};
+pub use kept::{Book, Conflict, FILE, Kept, Lag, QueuedReruns, Seen, Sent, Wait};
+pub use merge::{Merge, Queue, Refusal, disarm, queue, refused, yes};
 pub(crate) use prompt::KEEP_BODY_TRUE;
 pub use red::{Logs, Red, red, removed};
 pub use ruling::Ruling;
@@ -237,16 +241,7 @@ pub fn pass(look: &Look, kept: &mut Kept, limits: &Limits, now: Timestamp) -> St
         Pull::Closed => return Step::Rule(Ruling::Closed),
         Pull::Open(pull) => pull,
     };
-    let since = match &kept.wait {
-        Some(wait) if wait.head == pull.head => wait.since,
-        _ => {
-            kept.wait = Some(Wait {
-                head: pull.head.clone(),
-                since: now,
-            });
-            now
-        }
-    };
+    let since = waiting_since(kept, &pull.head, now);
     if look.base == Base::Lagging {
         return lagging(&pull.head, kept, now);
     }
@@ -311,6 +306,20 @@ pub fn conflicted(kept: &Kept, head: &str, base: &str, files: &[String]) -> Step
         });
     }
     Step::Conflict(prompt::conflict(files))
+}
+
+// When the wait for `head`'s checks began, starting it at `now` for a head that has none
+fn waiting_since(kept: &mut Kept, head: &str, now: Timestamp) -> Timestamp {
+    match &kept.wait {
+        Some(wait) if wait.head == head => wait.since,
+        _ => {
+            kept.wait = Some(Wait {
+                head: head.to_owned(),
+                since: now,
+            });
+            now
+        }
+    }
 }
 
 /// Whether a check set has had its time to register since `since`
