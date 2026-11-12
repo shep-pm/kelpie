@@ -2,7 +2,7 @@
 
 Phase 2's ticket surface: the Board panel, kelpie reading a project's tickets from GitHub, and kelpie opening a worker's draft pull request. It brings in what `docs/design/workers.md` left waiting: Start, the worker's chat, Note and Stop and tell, `start_worker`, usage drafts and the draft pull request. It places itself in `docs/design/ux.md` (Layout, Tickets and links, Workers, Attention) and lifts from SK's ADR 0014, `core/ticket.rs`, `ports/tickets.rs` and `adapters/gh/`, row by row from `docs/lift-plan.md` (GitHub). Terms are in `GLOSSARY.md`.
 
-**Status:** confirmed by the maintainer on 2026-11-10: tickets in and a draft pull request out, GitHub only; the maintainer's own `gh` login; SK's `gh` adapter behind the forge adapter; chelone's board with drag and drop and one live move; Pick up issues from Me by default; a ticket that is not building links out; three waits mark a ticket as needing the maintainer.
+**Status:** confirmed by the maintainer on 2026-11-10: tickets in and a draft pull request out, GitHub only; the maintainer's own `gh` login; SK's `gh` adapter behind the forge adapter; chelone's board with drag and drop and one live move; Pick up issues from Me by default; three waits mark a ticket as needing the maintainer. Confirmed on 2026-11-11: a ticket with a live worker opens its tab, and any other links out.
 
 ## Use case
 
@@ -49,7 +49,7 @@ An issue is a ticket when the per-project setting Pick up issues from says so: M
 1. A column is a fact read from GitHub and the engine, not a place the maintainer puts it.
 2. A ticket on the board shows its number, the title, the priority label and the needs-you marker. Tickets sort by priority, then oldest first.
 3. Ready tickets carry Start.
-4. Clicking a Building ticket opens its worker's tab. Clicking any other opens its issue, or its pull request in Review, on GitHub.
+4. Clicking a ticket whose worker is live opens its worker's tab: a Building ticket, or a Review ticket whose worker waits on the maintainer. Clicking any other opens its issue, or its pull request in Review, on GitHub. The gate's ready-to-merge line is a wait on the merge yes and not on the worker, so that ticket links out (`gate-and-merge.md`, The Review column).
 5. The marker shows while the ticket's worker waits on the maintainer: a sandbox request, a fence refusal holding the ticket (#83), or Paused after a quit or because its sandbox cannot start, which says why. Phase 3 adds rulings. It counts toward the project's badge in the rail (`docs/design/ux.md`, Attention).
 6. A ticket whose worker waits on the maintainer stays in Review while its pull request is open, since a gate ruling is that ticket's needs-you line and its card must not jump to Building (`docs/design/gate-and-merge.md`, The Review column). A waiting ticket with no pull request yet, such as one whose draft could not open, stays in Building.
 
