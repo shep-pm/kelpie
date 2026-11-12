@@ -189,7 +189,7 @@ impl Gate {
             .and_then(|()| records.set_reason(&work.ticket, Some(reason.clone())));
         drop(records);
         self.lost(&work.ticket, written, "the gate's ruling");
-        kept.ruled_at(head, &reason);
+        kept.ruled_at(head, &reason, ruling.link());
         if matches!(ruling, Ruling::Closed) {
             // Nothing is left to read once the pull request is closed
             kept.pull = None;

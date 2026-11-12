@@ -36,6 +36,7 @@ const ticket = (
   url: `https://github.com/o/r/issues/${id}`,
   pull_url: null,
   needs_you,
+  gate: null,
 });
 
 /** What the engine streams as the board. A test changes it and sends it again. */

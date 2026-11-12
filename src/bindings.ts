@@ -374,8 +374,9 @@ export const commands = {
 	 *  What dropping `ticket` on the column `to` does
 	 * 
 	 *  A drop from Ready on Building starts a worker through the one function the
-	 *  Start button calls. Any other drop changes nothing, and a snap back carries
-	 *  the line the window shows.
+	 *  Start button calls. A drop from Review on Done is the maintainer's yes to the
+	 *  merge, the same as the card's Merge button, given to the project's gate. Any
+	 *  other drop changes nothing, and a snap back carries the line the window shows.
 	 * 
 	 *  # Errors
 	 * 
@@ -525,6 +526,16 @@ export type Frontmatter = {
 	paths: string[] | null,
 	/**  Whether a reviewer reads a second time. The form passes it through. */
 	second_look: boolean | null,
+};
+
+/**  The one line a Review ticket shows for where the gate is */
+export type GateLine = {
+	/**  What the line says */
+	text: string,
+	/**  The failing run's page, for a line that has one */
+	url: string | null,
+	/**  Whether the gate holds the ticket ready for the maintainer's yes, which its Merge button gives */
+	ready: boolean,
 };
 
 /**  Whose `gh` login kelpie acts as */
@@ -809,6 +820,8 @@ export type TicketView = {
 	pull_url: string | null,
 	/**  One line for each wait on the maintainer, empty when its worker waits on nothing */
 	needs_you: string[],
+	/**  Where the gate is, for a ticket in Review, `None` in any other column */
+	gate: GateLine | null,
 };
 
 /**  How far a tool call got */

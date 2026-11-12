@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::Merged;
+use super::{Line, Merged};
 use crate::github::Timestamp;
 use crate::ticket::TicketId;
 
@@ -147,6 +147,9 @@ pub struct Kept {
     /// gate's wait from one of the worker's own
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ruled_for: Option<String>,
+    /// The failing run's page the ruling named, which the ticket's gate line links to
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruled_link: Option<String>,
     /// The head the gate found ready to merge, which the ticket's needs-you line says
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<String>,
@@ -228,17 +231,32 @@ impl Kept {
         });
     }
 
-    /// Records that the gate ruled at `head` with `reason`, which is no longer ready
-    pub fn ruled_at(&mut self, head: &str, reason: &str) {
+    /// Records that the gate ruled at `head` with `reason`, linking `link`, which is no longer ready
+    pub fn ruled_at(&mut self, head: &str, reason: &str, link: Option<&str>) {
         self.ruled = Some(head.to_owned());
         self.ruled_for = Some(reason.to_owned());
+        self.ruled_link = link.map(str::to_owned);
         self.ready = None;
+    }
+
+    /// The line of the ruling the gate holds, which a relaunch shows again
+    ///
+    /// A ruled ticket gets no pass until its head moves, so nothing else would write its
+    /// line after the app starts.
+    #[must_use]
+    pub fn ruled_line(&self) -> Option<Line> {
+        self.ruled.as_ref()?;
+        Some(Line::Ruling {
+            reason: self.ruled_for.clone()?,
+            link: self.ruled_link.clone(),
+        })
     }
 
     /// Gives up the ruling, so the gate passes over the ticket again
     pub fn unruled(&mut self) {
         self.ruled = None;
         self.ruled_for = None;
+        self.ruled_link = None;
     }
 
     /// Whether a worker waiting with `reason` is waiting on the gate's ruling

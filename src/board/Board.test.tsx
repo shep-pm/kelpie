@@ -85,6 +85,7 @@ const ticket = (
   url: `https://github.com/o/r/issues/${id}`,
   pull_url: null,
   needs_you: [],
+  gate: null,
   ...more,
 });
 
@@ -554,6 +555,109 @@ describe("the Board panel", () => {
       title: "Read the board",
     });
     expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("a Review card shows its gate line, links a red run, and shows Merge only when ready to merge", async () => {
+    const run = "https://github.com/o/r/actions/runs/7";
+    await open({
+      held_until: null,
+      needs_you: 0,
+      tickets: [
+        ticket("14", "Waiting one", "review", {
+          gate: { text: "Waiting for CI", url: null, ready: false },
+        }),
+        ticket("15", "Red one", "review", {
+          gate: { text: "Still red: build", url: run, ready: false },
+        }),
+        ticket("16", "Ready one", "review", {
+          gate: { text: "Ready to merge", url: null, ready: true },
+        }),
+        ticket("17", "Fresh one", "review"),
+      ],
+    });
+
+    expect(card("Waiting one").textContent).toContain("Waiting for CI");
+    expect(card("Waiting one").querySelector("a")).toBeNull();
+    const link = card("Red one").querySelector("a");
+    expect(link?.textContent).toBe("Still red: build");
+    expect(link?.getAttribute("href")).toBe(run);
+    expect(card("Ready one").textContent).toContain("Ready to merge");
+    expect(card("Fresh one").querySelector("[data-slot=gate-line]")).toBeNull();
+    const merges = screen.getAllByRole("button", { name: /^Merge #/ });
+    expect(merges.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Merge #16",
+    ]);
+  });
+
+  it("a gate line's link opens through openLink and not the card", async () => {
+    const run = "https://github.com/o/r/actions/runs/7";
+    const { onOpenWorker } = await open({
+      held_until: null,
+      needs_you: 0,
+      tickets: [
+        ticket("15", "Red one", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          gate: { text: "Still red: build", url: run, ready: false },
+        }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("link", { name: "Still red: build" }));
+
+    await waitFor(() => expect(openLink).toHaveBeenCalledWith(run));
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
+  it("Merge calls boardMove with the ticket and done, and shows the line it answers", async () => {
+    boardMove.mockResolvedValueOnce(
+      ok({ kind: "snap_back", line: "Merging once its checks settle" }),
+    );
+    await open({
+      held_until: null,
+      needs_you: 1,
+      tickets: [
+        ticket("16", "Ready one", "review", {
+          pull_url: "https://github.com/o/r/pull/41",
+          needs_you: ["Ready to merge"],
+          gate: { text: "Ready to merge", url: null, ready: true },
+        }),
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge #16" }));
+
+    await waitFor(() => expect(boardMove).toHaveBeenCalledWith("16", "done"));
+    await statusLine("Merging once its checks settle");
+    expect(openLink).not.toHaveBeenCalled();
+    expect(titlesIn("Review")).toEqual(["Ready one"]);
+  });
+
+  it("moving a Review ticket to Done is the same yes and snaps back with the gate's line", async () => {
+    boardMove.mockResolvedValueOnce(
+      ok({ kind: "snap_back", line: "Waiting for CI" }),
+    );
+    await open({
+      held_until: null,
+      needs_you: 0,
+      tickets: [
+        ticket("14", "Waiting one", "review", {
+          gate: { text: "Waiting for CI", url: null, ready: false },
+        }),
+      ],
+    });
+
+    const trigger = within(card("Waiting one")).getByRole("button", {
+      name: "Move Waiting one",
+    });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Done" }));
+
+    await waitFor(() => expect(boardMove).toHaveBeenCalledWith("14", "done"));
+    await statusLine("Waiting for CI");
+    await waitFor(() => expect(titlesIn("Review")).toEqual(["Waiting one"]));
+    expect(titlesIn("Done")).toEqual([]);
   });
 
   it("clicking a Review ticket opens its pull request through openLink", async () => {

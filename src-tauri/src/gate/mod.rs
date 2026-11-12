@@ -262,6 +262,12 @@ impl Gate {
     pub fn new(parts: Parts) -> Result<Self, String> {
         let file = parts.paths.project().join(gate::FILE);
         let book = Book::load(file).map_err(|error| error.to_string())?;
+        // A ruled ticket gets no pass until its head moves, so its line is read back from
+        // the facts: nothing else would write it again after a relaunch
+        let lines = book
+            .iter()
+            .filter_map(|(ticket, kept)| Some((ticket, kept.ruled_line()?)))
+            .collect();
         Ok(Self {
             project_id: parts.project_id,
             folder: parts.folder,
@@ -276,7 +282,7 @@ impl Gate {
             limits: parts.limits,
             fix: parts.fix,
             stop: parts.stop,
-            lines: Mutex::default(),
+            lines: Mutex::new(lines),
             book: Mutex::new(book),
             busy: Busy::default(),
             checkout: Mutex::new(()),
@@ -337,6 +343,15 @@ impl Gate {
             .iter()
             .filter(|(_, kept)| kept.ready.is_some())
             .map(|(ticket, _)| ticket.to_string())
+            .collect()
+    }
+
+    /// The line each ticket showed after its last pass, by ticket
+    #[must_use]
+    pub fn lines(&self) -> BTreeMap<String, Line> {
+        lock(&self.lines)
+            .iter()
+            .map(|(ticket, line)| (ticket.to_string(), line.clone()))
             .collect()
     }
 
