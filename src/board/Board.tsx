@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { type Column, commands, type TicketView } from "@/bindings";
+import {
+  type Column,
+  commands,
+  type GateLine as GateLineView,
+  type TicketView,
+} from "@/bindings";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +45,51 @@ const MERGE_YES = "Ready to merge";
  */
 const workerWaits = (ticket: TicketView) =>
   ticket.needs_you.some((line) => line !== MERGE_YES);
+
+/**
+ * The lines the status badge shows: the ticket's waits, less the merge yes when
+ * the card's gate line already says it and carries the Merge button.
+ */
+const waitsOn = (ticket: TicketView) =>
+  ticket.needs_you.filter(
+    (line) => !(ticket.gate?.ready && line === MERGE_YES),
+  );
+
+/**
+ * The one line a Review card shows for where the gate is, a link to the failing
+ * run when it has one. The link goes through `onOpen`, so the OS's own broker
+ * opens it and the webview never navigates (ADR 0001).
+ */
+function GateLine({
+  gate,
+  onOpen,
+}: {
+  gate: GateLineView;
+  onOpen: (url: string) => void;
+}) {
+  const { url } = gate;
+  return (
+    <span data-slot="gate-line" className="text-sm text-muted-foreground">
+      {url === null ? (
+        gate.text
+      ) : (
+        <a
+          href={url}
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={(e) => {
+            // The card's click would open the pull request too
+            e.preventDefault();
+            e.stopPropagation();
+            onOpen(url);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {gate.text}
+        </a>
+      )}
+    </span>
+  );
+}
 
 /** The time a held limit lifts, in the maintainer's own clock. */
 function Limit({ until }: { until: number }) {
@@ -106,18 +156,16 @@ export function Board({
     return { kind: "moved" };
   }
 
-  async function open(ticket: TicketView) {
-    if (ticket.column === "building")
-      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
-    if (ticket.column === "review" && workerWaits(ticket))
-      // The worker's own needs-you line asks the maintainer to answer that
-      // worker, so the card opens the tab where they can, even after the tab
-      // was closed.
-      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
-    const url =
-      ticket.column === "review" && ticket.pull_url
-        ? ticket.pull_url
-        : ticket.url;
+  /** The yes to merging `ticket`: the same call the drop on Done makes. */
+  async function merge(ticket: TicketView) {
+    setNotice(null);
+    const result = await commands.boardMove(ticket.id, "done");
+    if (result.status === "error") return setNotice(result.error);
+    // The yes is kept and the gate merges on its next pass, so the card stays in Review
+    if (result.data.kind === "snap_back") setNotice(result.data.line);
+  }
+
+  async function openPage(url: string) {
     const result = await commands.openLink(url);
     if (result.status === "error") return setNotice(result.error);
     if (result.data.kind === "copy") {
@@ -129,6 +177,21 @@ export function Board({
       return setNotice(result.data.message);
     }
     setNotice(null);
+  }
+
+  async function open(ticket: TicketView) {
+    if (ticket.column === "building")
+      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
+    if (ticket.column === "review" && workerWaits(ticket))
+      // The worker's own needs-you line asks the maintainer to answer that
+      // worker, so the card opens the tab where they can, even after the tab
+      // was closed.
+      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
+    return openPage(
+      ticket.column === "review" && ticket.pull_url
+        ? ticket.pull_url
+        : ticket.url,
+    );
   }
 
   if (unavailable !== null) {
@@ -167,15 +230,39 @@ export function Board({
             <span data-slot="ticket-title" className="text-lg font-semibold">
               {ticket.title}
             </span>
-            {ticket.needs_you.length > 0 && (
+            {ticket.gate && (
+              <GateLine
+                gate={ticket.gate}
+                onOpen={(url) => void openPage(url)}
+              />
+            )}
+            {waitsOn(ticket).length > 0 && (
               // The first line is what you read. The rest wait in its title.
               <StatusBadge
                 status="needs"
-                title={ticket.needs_you.join("\n")}
+                title={waitsOn(ticket).join("\n")}
                 className="max-w-full shrink"
               >
-                {ticket.needs_you[0]}
+                {waitsOn(ticket)[0]}
               </StatusBadge>
+            )}
+            {ticket.gate?.ready && (
+              // A press here is the button's own: the card's click would open the pull request.
+              // biome-ignore lint/a11y/noStaticElementInteractions: only stops the click reaching the card
+              <span
+                className="mt-1 flex"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <Button
+                  type="button"
+                  size="sm"
+                  aria-label={`Merge #${ticket.id}`}
+                  onClick={() => void merge(ticket)}
+                >
+                  Merge
+                </Button>
+              </span>
             )}
             {ticket.column === "ready" && (
               // A press here is the button's own: the card's click would open the ticket.
