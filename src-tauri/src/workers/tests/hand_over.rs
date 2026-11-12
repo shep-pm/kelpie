@@ -824,7 +824,10 @@ fn a_board_read_rules_on_no_refusal_the_worker_has_not_answered() {
 
     // The worker's session goes, as it does when kelpie is relaunched, so the refusal
     // has nowhere to go but its record: the worker is told nothing until it starts again
-    rig.state.workers().forget_session(&rig.project, TICKET);
+    assert!(
+        rig.state.workers().forget_session(&rig.project, TICKET),
+        "the worker kept a session to forget"
+    );
     assert!(
         rig.state.workers().session(&rig.project, TICKET).is_none(),
         "the record still says the turn ended, and no session is kept for it",

@@ -304,17 +304,17 @@ impl Workers {
         drop(before);
     }
 
-    /// Drop the session of the worker on `ticket`, which is what a relaunch leaves
+    /// Drop the session of the worker on `ticket`, stopping its harness, `true` when it had one
     ///
-    /// While kelpie runs, an ended worker keeps its session ([`Workers::keeps_session`]).
-    /// A test that wants a worker whose session went with the launch that started it, and
-    /// whose record still says what it did, drops it here.
-    #[cfg(test)]
-    pub(crate) fn forget_session(&self, project_id: &str, ticket: &str) {
-        let gone = lock(&self.sessions)
-            .remove(&(project_id.to_owned(), ticket.to_owned()))
-            .is_some();
-        assert!(gone, "ticket {ticket} kept no session to forget");
+    /// A merged ticket's worker has no more turns, so the gate stops its session here
+    /// (`docs/design/gate-and-merge.md`, After the merge). A test that wants a worker whose
+    /// session went with the launch that started it, and whose record still says what it
+    /// did, drops it here too. Run from the caller's thread and never from a session's own
+    /// event sink: the last reference to a session stops its harness and joins its thread.
+    pub(crate) fn forget_session(&self, project_id: &str, ticket: &str) -> bool {
+        let gone = lock(&self.sessions).remove(&(project_id.to_owned(), ticket.to_owned()));
+        // Dropped here, outside the lock: the last of a session stops its harness
+        gone.is_some()
     }
 
     /// Drop the session of each worker its record says kelpie cannot tell
