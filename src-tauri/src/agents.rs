@@ -11,7 +11,7 @@
 //! not saved yet, so the editor can show the agent as a session would get it
 //! before the maintainer saves.
 
-use kelpie_engine::agents::{Agent, Agents, Frontmatter as Keys, Origin, PM, Role, Source};
+use kelpie_engine::agents::{Agent, Agents, Frontmatter as Keys, Origin, PM, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -25,7 +25,7 @@ pub struct Frontmatter {
     /// The agent it builds on: another file's name, or `kelpie:<name>` for one of kelpie's own
     pub extends: Option<String>,
 
-    /// What the agent is for. Only `pm` so far, and an agent that extends none needs it
+    /// What the agent is for: `pm`, `worker` or `reviewer`. An agent that extends none needs it
     pub role: Option<String>,
 
     /// The harness it runs on, such as `claude-code`
@@ -39,6 +39,12 @@ pub struct Frontmatter {
 
     /// `append` puts this file's body after its parent's, and none replaces it
     pub body: Option<String>,
+
+    /// A reviewer's globs, which limit it to diffs that touch one. The form passes them through.
+    pub paths: Option<Vec<String>>,
+
+    /// Whether a reviewer reads a second time. The form passes it through.
+    pub second_look: Option<bool>,
 }
 
 impl From<Keys> for Frontmatter {
@@ -50,6 +56,8 @@ impl From<Keys> for Frontmatter {
             model: keys.model,
             effort: keys.effort,
             body: keys.body,
+            paths: keys.paths,
+            second_look: keys.second_look,
         }
     }
 }
@@ -63,6 +71,8 @@ impl From<Frontmatter> for Keys {
             model: front.model,
             effort: front.effort,
             body: front.body,
+            paths: front.paths,
+            second_look: front.second_look,
         }
     }
 }
@@ -125,11 +135,7 @@ fn field<T: Serialize>(key: &str, value: &T, origin: &Origin) -> FieldView {
 }
 
 fn resolved(agent: &Agent, chain: Vec<String>) -> ResolvedAgent {
-    let role = match agent.role.value {
-        Role::Pm => PM,
-        // `Role` grows with the board's workers
-        _ => "",
-    };
+    let role = agent.role.value.name();
     ResolvedAgent {
         fields: vec![
             field("role", &role, &agent.role.from),

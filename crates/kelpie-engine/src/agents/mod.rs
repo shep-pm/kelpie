@@ -8,9 +8,11 @@
 //! parent's, a file with no body takes its parent's, and `body: append` adds
 //! to it.
 //!
-//! The keys are `role` (`pm` or `worker`), `harness`, `model`,
-//! `effort`, `extends` and `body`. A file with any other key is refused naming
-//! the file and the key. A file whose name starts with `_` is ignored, as if it
+//! The keys are `role` (`pm`, `worker` or `reviewer`), `harness`, `model`,
+//! `effort`, `extends` and `body`, and a reviewer's `paths` (a list of globs
+//! that limit it to diffs touching them) and `second_look` (a bool). A file
+//! with any other key is refused naming the file and the key, and so is a
+//! reviewer's key on a `pm` or `worker` file. A file whose name starts with `_` is ignored, as if it
 //! were not there, so a draft can sit beside the real ones.
 //!
 //! A value belongs to the layer that set it: [`Sourced`] carries it with an
@@ -69,10 +71,14 @@ pub const PM: &str = "pm";
 /// The worker's name: kelpie's own `kelpie:worker`, and the global `worker.md` that layers over it
 pub const WORKER: &str = "worker";
 
+/// The reviewer's name: kelpie's own `kelpie:reviewer`, and the global `reviewer.md` that layers over it
+pub const REVIEWER: &str = "reviewer";
+
 /// Kelpie's own agents, by name: what `extends: kelpie:<name>` reaches
-const BUILT_IN: [(&str, &str); 2] = [
+const BUILT_IN: [(&str, &str); 3] = [
     (PM, include_str!("builtin/pm.md")),
     (WORKER, include_str!("builtin/worker.md")),
+    (REVIEWER, include_str!("builtin/reviewer.md")),
 ];
 
 /// What an agent is for
@@ -86,6 +92,21 @@ pub enum Role {
 
     /// An agent that builds one ticket in its own worktree
     Worker,
+
+    /// An agent that reads a worker's diff and reports findings
+    Reviewer,
+}
+
+impl Role {
+    /// The word an agent file writes for it
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Pm => "pm",
+            Self::Worker => "worker",
+            Self::Reviewer => "reviewer",
+        }
+    }
 }
 
 /// The layer a value came from
@@ -146,6 +167,12 @@ pub struct Agent {
 
     /// The instructions: the file's body, with its parents' merged in. None when blank.
     pub body: Sourced<Option<String>>,
+
+    /// A reviewer's globs: it reads only diffs that touch one. Empty for every diff, and for any agent that is no reviewer.
+    pub paths: Sourced<Vec<String>>,
+
+    /// Whether a second fresh session reads again after a reviewer's first, shown what the first found. Off for any agent that is no reviewer.
+    pub second_look: Sourced<bool>,
 }
 
 /// What an agent runs as: kelpie's own, the global file of its name, then the project's setting
@@ -377,6 +404,43 @@ impl Agents {
         self.of_kelpie(WORKER)
     }
 
+    /// The reviewer of file `name` with its `extends` chain resolved: `reviewer` is the global `reviewer.md` over `kelpie:reviewer`, or `kelpie:reviewer` alone
+    ///
+    /// # Errors
+    ///
+    /// [`AgentsError::File`] naming the file when it cannot be used, when no
+    /// file has that name, and when its role is not `reviewer`.
+    pub fn reviewer(&self, name: &str) -> Result<Agent, AgentsError> {
+        let agent = if name == REVIEWER {
+            self.of_kelpie(REVIEWER)?
+        } else {
+            let file = || PathBuf::from(format!("{name}.md"));
+            if let Some(error) = self.broken.get(name) {
+                return Err(error.clone());
+            }
+            self.agents
+                .get(name)
+                .cloned()
+                .ok_or_else(|| AgentsError::File {
+                    path: file(),
+                    message: format!(
+                        "no reviewer of this name: write `{name}.md` with `role: reviewer`, or use `{REVIEWER}`"
+                    ),
+                })?
+        };
+        match agent.role.value {
+            Role::Reviewer => Ok(agent),
+            other => Err(AgentsError::File {
+                path: PathBuf::from(format!("{name}.md")),
+                message: format!(
+                    "is not a reviewer: its `role` is `{}`, from {}",
+                    other.name(),
+                    agent.role.from
+                ),
+            }),
+        }
+    }
+
     /// The agent of kelpie's own `name` as the files define it
     fn of_kelpie(&self, name: &str) -> Result<Agent, AgentsError> {
         if let Some(error) = self.broken.get(name) {
@@ -481,6 +545,11 @@ struct Front {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    // A reviewer's keys: refused by name on any other role
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    #[serde(default)]
+    second_look: Option<bool>,
 }
 
 /// The agent the merged text defines, or what is wrong with it
@@ -510,6 +579,32 @@ fn parse(merged: &extends::Merged) -> Result<Agent, String> {
             from: sourced(key),
         }),
     };
+    let line =
+        |key: &str| extends::line_of(front, key).map_or(String::new(), |n| format!(" at line {n}"));
+    if keys.role != Role::Reviewer {
+        let set = [
+            ("paths", keys.paths.is_some()),
+            ("second_look", keys.second_look.is_some()),
+        ];
+        if let Some((key, _)) = set.into_iter().find(|(_, set)| *set) {
+            return Err(format!(
+                "`{key}` is a reviewer's key: a `{}` file takes none, so set `role: reviewer` \
+                 or take it out{}",
+                keys.role.name(),
+                line(key)
+            ));
+        }
+    }
+    if keys
+        .paths
+        .as_ref()
+        .is_some_and(|paths| paths.iter().any(|glob| glob.trim().is_empty()))
+    {
+        return Err(format!(
+            "`paths` has a blank glob: take it out{}",
+            line("paths")
+        ));
+    }
     let body = body.trim();
     Ok(Agent {
         role: Sourced {
@@ -525,6 +620,14 @@ fn parse(merged: &extends::Merged) -> Result<Agent, String> {
         body: Sourced {
             value: (!body.is_empty()).then(|| body.to_owned()),
             from: sourced(extends::BODY),
+        },
+        paths: Sourced {
+            value: keys.paths.unwrap_or_default(),
+            from: sourced("paths"),
+        },
+        second_look: Sourced {
+            value: keys.second_look.unwrap_or(false),
+            from: sourced("second_look"),
         },
     })
 }

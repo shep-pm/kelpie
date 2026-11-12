@@ -119,6 +119,8 @@ const noKeys: Frontmatter = {
   model: null,
   effort: null,
   body: null,
+  paths: null,
+  second_look: null,
 };
 
 /** The PM's own instructions, which `child` builds on. */
@@ -129,7 +131,7 @@ const parentBody = "You are the PM.";
  * and is tested there; this is enough of it to see the editor ask and show.
  */
 function resolve(front: Frontmatter, body: string): ResolvedAgent {
-  const own = (key: keyof Frontmatter, value: string | null) =>
+  const own = (key: "harness" | "model" | "effort", value: string | null) =>
     front[key] ? field(key, front[key], "child") : field(key, value, "kelpie");
   return {
     chain: ["kelpie:pm"],
@@ -286,5 +288,38 @@ describe("the agent editor", () => {
     expect((extendsField as HTMLInputElement).value).toBe("");
     fireEvent.change(extendsField, { target: { value: "base" } });
     expect((extendsField as HTMLInputElement).value).toBe("base");
+  });
+
+  it("a reviewer saved from the form keeps its paths and second look", async () => {
+    const reviewer: AgentView = {
+      ...child,
+      name: "rust-eyes",
+      frontmatter: {
+        ...noKeys,
+        extends: "kelpie:reviewer",
+        paths: ["src/**/*.rs", "docs/*.md"],
+        second_look: false,
+      },
+      body: "",
+    };
+    agentGet.mockResolvedValue(ok(reviewer));
+    render(<AgentEditor name="rust-eyes" onClose={() => {}} />);
+    await screen.findByRole("group", { name: "Model" });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Instructions" }), {
+      target: { value: "Read it twice." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(agentSave).toHaveBeenCalledTimes(1));
+    expect(agentSave).toHaveBeenCalledWith(
+      "rust-eyes",
+      expect.objectContaining({
+        extends: "kelpie:reviewer",
+        paths: ["src/**/*.rs", "docs/*.md"],
+        second_look: false,
+      }),
+      "Read it twice.",
+    );
   });
 });

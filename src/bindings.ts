@@ -511,7 +511,7 @@ export type FieldView = {
 export type Frontmatter = {
 	/**  The agent it builds on: another file's name, or `kelpie:<name>` for one of kelpie's own */
 	extends: string | null,
-	/**  What the agent is for. Only `pm` so far, and an agent that extends none needs it */
+	/**  What the agent is for: `pm`, `worker` or `reviewer`. An agent that extends none needs it */
 	role: string | null,
 	/**  The harness it runs on, such as `claude-code` */
 	harness: string | null,
@@ -521,6 +521,10 @@ export type Frontmatter = {
 	effort: string | null,
 	/**  `append` puts this file's body after its parent's, and none replaces it */
 	body: string | null,
+	/**  A reviewer's globs, which limit it to diffs that touch one. The form passes them through. */
+	paths: string[] | null,
+	/**  Whether a reviewer reads a second time. The form passes it through. */
+	second_look: boolean | null,
 };
 
 /**  Whose `gh` login kelpie acts as */

@@ -44,6 +44,7 @@ mod tests;
 pub use after::{Close, FORGE_CLOSE_WAIT, Merged, TRIES, closing, comment};
 pub use kept::{Book, Conflict, FILE, Kept, Lag, QueuedReruns, Seen, Sent, Wait};
 pub use merge::{Merge, Queue, Refusal, disarm, queue, refused, yes};
+pub(crate) use prompt::KEEP_BODY_TRUE;
 pub use red::{Logs, Red, red, removed};
 pub use ruling::Ruling;
 
