@@ -74,6 +74,23 @@ pub struct QueuedReruns {
     pub runs: Vec<u64>,
 }
 
+/// A merge kelpie sent, recorded before the call is made
+///
+/// A relaunch that finds one watches the pull request rather than merging again.
+// wire format: `gate.json` holds this
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sent {
+    /// The head the merge was pinned to
+    pub head: String,
+    /// The merge queue's removals of the pull request when the merge was sent
+    pub removals: u32,
+    /// When it was sent, or last seen in the merge queue
+    pub since: Timestamp,
+    /// Whether the call is known to have left the pull request open and waiting, in the queue or armed
+    #[serde(default)]
+    pub queued: bool,
+}
+
 /// What the gate keeps about one ticket's pull request
 // wire format: `gate.json` holds this
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +125,9 @@ pub struct Kept {
     /// The head the maintainer's yes was given on
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yes: Option<String>,
+    /// The merge sent on the yes, which the gate watches until it merges or the queue removes it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<Sent>,
     /// The merges the forge refused
     #[serde(default)]
     pub merge_refusals: u32,
@@ -248,6 +268,32 @@ impl Kept {
     /// Withdraws the yes, so the gate runs again
     pub fn withdraw_yes(&mut self) {
         self.yes = None;
+    }
+
+    /// Records that a merge pinned to `head` is about to be sent, with the queue's `removals` so far
+    ///
+    /// The caller saves it before the call, so a relaunch watches the pull request
+    /// rather than merging it twice.
+    pub fn merge_sent(&mut self, head: &str, removals: u32, now: Timestamp) {
+        self.sent = Some(Sent {
+            head: head.to_owned(),
+            removals,
+            since: now,
+            queued: false,
+        });
+    }
+
+    /// Records that the sent merge left the pull request open and waiting, seen at `now`
+    pub fn merge_waiting(&mut self, now: Timestamp) {
+        if let Some(sent) = &mut self.sent {
+            sent.queued = true;
+            sent.since = now;
+        }
+    }
+
+    /// Gives up the sent merge, which the pull request is no longer waiting on
+    pub fn merge_gone(&mut self) {
+        self.sent = None;
     }
 
     /// Records a merge the forge refused, and how many it has refused
