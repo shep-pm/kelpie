@@ -12,7 +12,7 @@ use super::short;
 use crate::ci::FailedCheck;
 
 /// What a prompt asks of the body, as SK's `KEEP_BODY_TRUE` has it
-const KEEP_BODY_TRUE: &str = "Update the pull request's title and body in your hand-over file \
+pub(crate) const KEEP_BODY_TRUE: &str = "Update the pull request's title and body in your hand-over file \
     so they match the head you push: what changed, the files touched, the test evidence, and \
     the decisions you made.";
 

@@ -38,6 +38,7 @@ mod ruling;
 mod tests;
 
 pub use kept::{Book, Conflict, FILE, Kept, Lag, QueuedReruns, Seen, Wait};
+pub(crate) use prompt::KEEP_BODY_TRUE;
 pub use red::{Logs, Red, red, removed};
 pub use ruling::Ruling;
 
