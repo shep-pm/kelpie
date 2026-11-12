@@ -18,7 +18,8 @@
 //! - A merge the forge refuses goes back through the order once, which catches the branch
 //!   up if the base moved, and a second refusal is the merge refused ruling.
 //!
-//! A merge leaves the ticket for the board to place in Done once its issue closes.
+//! A merge leaves the ticket for the board to place in Done once its issue closes, which
+//! `after` sees to.
 
 use std::fmt;
 
@@ -295,7 +296,7 @@ impl Gate {
                 // The call left no trace and the forge had its time. The pull request may
                 // have merged since the listing, which is read before it is sent again.
                 if self.pulls.state(pull.number) == Ok(PullState::Merged) {
-                    return Some(After::Carried(Carried::Forget));
+                    return Some(After::Carried(self.after_merge(work, kept, now)));
                 }
                 kept.merge_gone();
                 None

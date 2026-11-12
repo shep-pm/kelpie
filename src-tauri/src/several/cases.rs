@@ -6,10 +6,11 @@
 //! opened, and the prompts each worker got. No case needs `gh`, the network or a model.
 
 use kelpie_engine::ci::HeadStatus;
+use kelpie_engine::gate::FORGE_CLOSE_WAIT;
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::worker::Status;
 
-use super::{Rig, SETTLE};
+use super::{Rig, SETTLE, git, lock};
 use crate::board::Column;
 use crate::workers::{NoteOutcome, WorkerStarted};
 
@@ -368,4 +369,83 @@ fn a_merge_of_one_ticket_sends_the_other_to_catch_up_with_the_base() {
         "its yes was withdrawn, and it is asked for again on the new head",
     );
     assert!(!rig.merged("kelpie/13"), "nothing merged the stale head");
+}
+
+#[test]
+fn a_merged_ticket_is_done_and_its_sibling_keeps_its_worktree() {
+    let rig = Rig::new(2);
+    rig.ticket(12, "Add the thing", "It does one.", &FakeAgent::new());
+    rig.ticket(13, "Fix the other", "It does two.", &FakeAgent::new());
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.push_work(12, "one.txt");
+    rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.gate().ready().len() == 2
+    });
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_some(),
+        "the worker keeps its session until its ticket is merged"
+    );
+    rig.gate().yes("12").expect("the first ticket is ready");
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.merged("kelpie/12")
+    });
+
+    // The read after the merge cleans up, and GitHub is left its time to close the issue
+    rig.columns();
+    rig.until_passed();
+    rig.clock.advance(FORGE_CLOSE_WAIT);
+    rig.columns();
+    rig.until_passed();
+
+    assert_eq!(
+        rig.columns(),
+        [("12".into(), Column::Done), ("13".into(), Column::Review)],
+        "the merged ticket is Done and the other stays in Review",
+    );
+    let worktree = |number: u64| rig.paths().worktree(&number.to_string());
+    assert!(
+        !worktree(12).exists(),
+        "the merged ticket's worktree is gone"
+    );
+    assert!(worktree(13).exists(), "the sibling keeps its worktree");
+    let branches = git(
+        &rig.dir.join("origin.git"),
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    );
+    assert!(
+        !branches.contains("kelpie/12"),
+        "the merged branch is gone from the origin: {branches}"
+    );
+    assert!(branches.contains("kelpie/13"), "the sibling's stays");
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_none(),
+        "the merged ticket's session stopped"
+    );
+    assert!(
+        rig.state.workers().session(&rig.project, "13").is_some(),
+        "the sibling's did not"
+    );
+    let records = rig.state.workers().records(&rig.project).unwrap();
+    assert_eq!(
+        lock(&records).get("12").map(|record| record.status),
+        None,
+        "its record is gone"
+    );
+    assert!(
+        lock(&records).get("13").is_some(),
+        "and the sibling's stays"
+    );
 }

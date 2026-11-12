@@ -9,12 +9,12 @@
 //!
 //! [`red`] and [`removed`] decide what a red run or a merge queue removal comes
 //! to, [`conflicted`] what a conflict on catch-up comes to, [`yes`], [`refused`]
-//! and [`queue`] what the maintainer's yes and the merge it sends come to, and
-//! [`Ruling`] holds
+//! and [`queue`] what the maintainer's yes and the merge it sends come to, [`closing`]
+//! what a merged ticket's issue comes to, and [`Ruling`] holds
 //! what the gate will not settle itself. [`Kept`] is what the gate remembers of
 //! a ticket between passes. Lifted from SK's `runner/gate/` (`check_ci`, `lag.rs`,
 //! `catch_up.rs`, `fix_attempts.rs`), `runner/gate/queued/` and `rerun/`,
-//! `runner/rework/`, and `runner/merge/`: `docs/lifted.md`.
+//! `runner/rework/`, `runner/merge/` and `runner/close_merged.rs`: `docs/lifted.md`.
 //!
 //! # Quick start
 //!
@@ -32,6 +32,7 @@ use crate::settings::{CatchUp, CiWait, FixAttempts, Resolved};
 use crate::ticket::OpenPull;
 use crate::worktree::Base;
 
+mod after;
 mod kept;
 mod merge;
 mod prompt;
@@ -40,6 +41,7 @@ mod ruling;
 #[cfg(test)]
 mod tests;
 
+pub use after::{Close, FORGE_CLOSE_WAIT, Merged, TRIES, closing, comment};
 pub use kept::{Book, Conflict, FILE, Kept, Lag, QueuedReruns, Seen, Sent, Wait};
 pub use merge::{Merge, Queue, Refusal, disarm, queue, refused, yes};
 pub(crate) use prompt::KEEP_BODY_TRUE;
