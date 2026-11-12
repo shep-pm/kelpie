@@ -7,12 +7,25 @@
 
 use kelpie_engine::ci::HeadStatus;
 use kelpie_engine::gate::FORGE_CLOSE_WAIT;
+use kelpie_engine::review::{Finding, Severity};
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::worker::Status;
 
 use super::{Rig, SETTLE, git, lock};
 use crate::board::Column;
 use crate::workers::{NoteOutcome, WorkerStarted};
+
+/// A reviewer's finding of `file:line`, for scripting one ticket's reader
+fn finding(file: &str, line: u32, what: &str) -> Finding {
+    Finding::new(Severity::High, file, line, what, "the maintainer sees it")
+}
+
+/// A worker whose first turn ends and whose second, the review's fix turn, keeps working
+fn worker_that_fixes() -> FakeAgent {
+    FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("fixing").until_cancelled())
+}
 
 #[test]
 fn two_tickets_started_at_once_each_reach_review_with_a_draft_of_their_own() {
@@ -447,5 +460,134 @@ fn a_merged_ticket_is_done_and_its_sibling_keeps_its_worktree() {
     assert!(
         lock(&records).get("13").is_some(),
         "and the sibling's stays"
+    );
+}
+
+#[test]
+fn two_tickets_each_get_their_own_reads_and_fix_turns() {
+    let rig = Rig::new(2);
+    let (one, two) = (worker_that_fixes(), worker_that_fixes());
+    rig.ticket(12, "Add the thing", "It does one.", &one);
+    rig.ticket(13, "Fix the other", "It does two.", &two);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.push_work(12, "one.txt");
+    rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    // Each ticket's reader is scripted with a finding in that ticket's own file
+    rig.reviewer(12).script_read(Ok(vec![finding(
+        "one.txt",
+        2,
+        "the first ticket reads a file it never opens",
+    )]));
+    rig.reviewer(13).script_read(Ok(vec![finding(
+        "two.txt",
+        3,
+        "the second ticket drops what it wrote",
+    )]));
+
+    // The first read has each head wait for its checks to register, and the next reads them
+    rig.columns();
+    rig.until_passed();
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2 && rig.prompts(&two).len() == 2
+    });
+
+    for (number, own, other) in [(12, "one.txt", "two.txt"), (13, "two.txt", "one.txt")] {
+        let read = rig.read_prompts(number);
+        assert_eq!(
+            read.len(),
+            2,
+            "ticket {number}'s reader read its own head, then looked again",
+        );
+        for prompt in read {
+            assert!(prompt.contains(own), "and showed it its own diff: {own}");
+            assert!(
+                !prompt.contains(other),
+                "ticket {number}'s reader was shown no other ticket's file",
+            );
+        }
+    }
+    let sent = |agent: &FakeAgent| rig.prompts(agent)[1].clone();
+    assert!(sent(&one).contains("one.txt:2"), "{}", sent(&one));
+    assert!(
+        !sent(&one).contains("two.txt"),
+        "the first worker was sent only its own finding",
+    );
+    assert!(sent(&two).contains("two.txt:3"), "{}", sent(&two));
+    assert!(
+        !sent(&two).contains("one.txt"),
+        "the second worker was sent only its own finding",
+    );
+    assert_eq!(
+        rig.columns(),
+        [
+            ("12".into(), Column::Building),
+            ("13".into(), Column::Building)
+        ],
+        "each ticket is in Building while its own fix turn works",
+    );
+}
+
+#[test]
+fn a_review_ruling_on_one_ticket_leaves_the_other_to_the_merge_yes() {
+    let rig = Rig::new(2);
+    // The first ticket's fix turn ends with nothing pushed; the second is clean
+    let one = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("I left it as it is"));
+    let two = FakeAgent::new();
+    rig.ticket(12, "Add the thing", "It does one.", &one);
+    rig.ticket(13, "Fix the other", "It does two.", &two);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.push_work(12, "one.txt");
+    rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    rig.reviewer(12).script_read(Ok(vec![finding(
+        "one.txt",
+        2,
+        "it is wrong, and it is in scope",
+    )]));
+
+    // The finding goes to the first ticket's worker, and the second ticket's pass ends clean
+    rig.columns();
+    rig.until_passed();
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2 && rig.gate().ready().contains("13")
+    });
+    assert!(
+        !rig.gate().ready().contains("12"),
+        "the ruled ticket is not put up to merge"
+    );
+
+    // Its turn ended with nothing pushed and nothing said of the finding
+    rig.until_turns(12, 2);
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.record(12).status == Status::WaitingOnMaintainer
+    });
+    let reason = rig.record(12).reason.expect("the ruling says why");
+    assert!(reason.contains("pushed nothing"), "{reason}");
+    assert_eq!(
+        rig.gate().ready().into_iter().collect::<Vec<_>>(),
+        ["13".to_owned()],
+        "the other ticket is still the one put up to merge",
     );
 }
