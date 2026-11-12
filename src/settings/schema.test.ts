@@ -17,6 +17,13 @@ const raw: Value = {
         { const: "conflicts", description: "Only on conflict", type: "string" },
       ],
     },
+    Harness: {
+      description: "A harness kelpie can run a session on",
+      oneOf: [
+        { const: "claude-code", description: "Claude Code", type: "string" },
+        { const: "goose", description: "goose", type: "string" },
+      ],
+    },
     PickUp: {
       description: "Who a project's tickets come from",
       oneOf: [
@@ -99,6 +106,33 @@ const raw: Value = {
       anyOf: [{ $ref: "#/$defs/CatchUp" }, { type: "null" }],
       default: null,
       description: "When a pull request behind the base is caught up.",
+    },
+    reviewers: {
+      default: null,
+      description: "The reviewer agents this project uses.",
+      items: { minLength: 1, type: "string" },
+      type: ["array", "null"],
+      uniqueItems: true,
+    },
+    "test-command": {
+      default: null,
+      description: "A command that runs one failing test a reviewer wrote.",
+      type: ["string", "null"],
+    },
+    "reviewer-harness": {
+      anyOf: [{ $ref: "#/$defs/Harness" }, { type: "null" }],
+      default: null,
+      description: "Which harness every listed reviewer runs on.",
+    },
+    "reviewer-model": {
+      default: null,
+      description: "Which model every listed reviewer runs on.",
+      type: ["string", "null"],
+    },
+    "reviewer-effort": {
+      default: null,
+      description: "How much effort every listed reviewer puts in.",
+      type: ["string", "null"],
     },
     "worker-slots": {
       default: null,
@@ -247,6 +281,65 @@ describe("the settings form's fields", () => {
     expect(
       ordered(["ci-wait", "fix-attempts", "ci-holds-merge", "done-window"]),
     ).toEqual(["done-window", "ci-holds-merge", "fix-attempts", "ci-wait"]);
+  });
+
+  it("draws the review pass's five rows with their labels and form fields", () => {
+    const review = formSchema(raw, [
+      "reviewers",
+      "test-command",
+      "reviewer-harness",
+      "reviewer-model",
+      "reviewer-effort",
+    ]);
+
+    const reviewers = field("reviewers", review) ?? {};
+    expect(reviewers.title).toBe("Reviewers");
+    expect(reviewers.type).toBe("array");
+    expect(reviewers.items).toEqual({ minLength: 1, type: "string" });
+    expect(reviewers.uniqueItems).toBe(true);
+
+    const command = field("test-command", review) ?? {};
+    expect(command.title).toBe("Test command");
+    expect(command.type).toBe("string");
+
+    const harness = field("reviewer-harness", review) ?? {};
+    expect(harness.title).toBe("Reviewer harness");
+    expect(harness.type).toBe("string");
+    expect(harness.oneOf).toEqual([
+      { const: "claude-code", title: "Claude Code" },
+      { const: "goose", title: "goose" },
+    ]);
+
+    const plain: [string, string][] = [
+      ["reviewer-model", "Reviewer model"],
+      ["reviewer-effort", "Reviewer effort"],
+    ];
+    for (const [key, title] of plain) {
+      const row = field(key, review) ?? {};
+      expect(row.title).toBe(title);
+      expect(row.type).toBe("string");
+      expect(row.oneOf).toBeUndefined();
+    }
+  });
+
+  it("shows the review rows after the gate's, the harness trio last", () => {
+    expect(
+      ordered([
+        "reviewer-effort",
+        "reviewer-model",
+        "reviewer-harness",
+        "test-command",
+        "reviewers",
+        "catch-up",
+      ]),
+    ).toEqual([
+      "catch-up",
+      "reviewers",
+      "test-command",
+      "reviewer-harness",
+      "reviewer-model",
+      "reviewer-effort",
+    ]);
   });
 
   it("shows the board's fields after the sandbox ones", () => {

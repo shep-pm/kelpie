@@ -290,11 +290,60 @@
       "default": null,
       "description": "How kelpie asks a harness to phrase its replies"
     },
+    "reviewer-effort": {
+      "default": null,
+      "description": "How much effort every listed reviewer puts in, named as the harness names it. Empty leaves the effort to each reviewer agent and the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reviewer-harness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Harness"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Which harness every listed reviewer runs on. Where it is empty, each reviewer agent's own harness decides."
+    },
+    "reviewer-model": {
+      "default": null,
+      "description": "Which model every listed reviewer runs on, named as the harness names it. Empty leaves the model to each reviewer agent and the harness.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reviewers": {
+      "default": null,
+      "description": "The reviewer agents this project uses, by name, in the order they read. An empty list means no reviewer can run, and a name listed twice is refused.",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ],
+      "uniqueItems": true
+    },
     "run-without-sandbox": {
       "default": null,
       "description": "Whether the project's PM runs without a sandbox. It applies only while the machine's sandbox cannot start, and only to the PM: a worker never runs without one.",
       "type": [
         "boolean",
+        "null"
+      ]
+    },
+    "test-command": {
+      "default": null,
+      "description": "A command that runs one failing test a reviewer wrote, with the test file's path at `{test}` or its file stem at `{name}`, such as `cargo test --test {name}`. Set, a reviewer is asked to leave a failing test for each finding it can. Absent, none is asked.",
+      "type": [
+        "string",
         "null"
       ]
     },

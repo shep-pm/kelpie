@@ -20,6 +20,9 @@ mod ci;
 // The catch-up choice, in its own file beside the type it reads
 mod git;
 
+// The review pass's five fields, in their own file beside the types they read
+mod review;
+
 /// A config folder of its own for one test, never written over by another
 struct Dir(PathBuf);
 
@@ -217,6 +220,26 @@ fn an_unset_field_comes_from_the_built_in_layer() {
             },
             catch_up: Layered {
                 value: CatchUp::Always,
+                from: Layer::BuiltIn,
+            },
+            reviewers: Layered {
+                value: Reviewers::built_in(),
+                from: Layer::BuiltIn,
+            },
+            test_command: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            reviewer_harness: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            reviewer_model: Layered {
+                value: None,
+                from: Layer::BuiltIn,
+            },
+            reviewer_effort: Layered {
+                value: None,
                 from: Layer::BuiltIn,
             },
         }
