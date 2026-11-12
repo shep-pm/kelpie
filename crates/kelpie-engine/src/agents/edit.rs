@@ -81,13 +81,7 @@ impl Source {
                 "effort" => frontmatter.effort = value,
                 "body" => frontmatter.body = value,
                 "paths" => frontmatter.paths = paths_of(&entry),
-                "second_look" => {
-                    frontmatter.second_look = match value.as_deref() {
-                        Some("true") => Some(true),
-                        Some("false") => Some(false),
-                        _ => None,
-                    }
-                }
+                "second_look" => frontmatter.second_look = second_look_of(&entry),
                 _ => {}
             }
         }
@@ -152,6 +146,17 @@ fn value_of(entry: &extends::Entry) -> String {
         return text;
     }
     entry.value()
+}
+
+/// A `second_look` entry's bool, read as the loader reads it, or `None` when it is not one
+fn second_look_of(entry: &extends::Entry) -> Option<bool> {
+    #[derive(serde::Deserialize)]
+    struct Look {
+        second_look: bool,
+    }
+    serde_saphyr::from_str::<Look>(&entry.text)
+        .ok()
+        .map(|found| found.second_look)
 }
 
 /// A `paths` entry's globs, as a block or flow list, or `None` when it is not a list of strings
@@ -414,6 +419,22 @@ mod tests {
         let saved = Source::parse(&dir.read("rust-eyes.md"));
         assert_eq!(saved, source);
         assert!(dir.read("rust-eyes.md").contains("second_look: false\n"));
+    }
+
+    #[test]
+    fn a_second_look_the_loader_reads_as_a_bool_is_kept_as_one() {
+        for (written, read) in [
+            ("True", true),
+            ("TRUE", true),
+            ("false", false),
+            ("False", false),
+        ] {
+            let text = format!("---\nrole: reviewer\nsecond_look: {written}\n---\n");
+
+            let source = Source::parse(&text);
+
+            assert_eq!(source.frontmatter.second_look, Some(read), "{written}");
+        }
     }
 
     #[test]
