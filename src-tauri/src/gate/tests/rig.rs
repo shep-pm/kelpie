@@ -131,6 +131,7 @@ pub(super) struct Rig {
     pub(super) state: AppState,
     pub(super) project: String,
     pub(super) pulls: Arc<FakePulls>,
+    pub(super) tickets: Arc<FakeTickets>,
     pub(super) ci: Arc<Held>,
     pub(super) queue: Arc<FakeQueue>,
     pub(super) agent: FakeAgent,
@@ -182,7 +183,7 @@ impl Rig {
         state.workers().stand_in_forge(
             &project,
             Arc::new(Forge::new(
-                tickets as Arc<dyn GithubTickets>,
+                Arc::clone(&tickets) as Arc<dyn GithubTickets>,
                 Arc::clone(&pulls) as Arc<dyn Pulls>,
                 Arc::clone(&ci) as Arc<dyn Ci>,
                 Arc::clone(&queue) as Arc<dyn MergeQueue>,
@@ -208,6 +209,7 @@ impl Rig {
             state,
             project,
             pulls,
+            tickets,
             ci,
             queue,
             agent,
@@ -369,6 +371,13 @@ impl Rig {
             labels: Vec::new(),
             checks,
         }
+    }
+
+    /// Whether the gate read `ticket`'s pull request merged, and has its cleanup to finish
+    pub(super) fn seen_merged(&self, ticket: &str) -> bool {
+        self.gate
+            .kept(ticket)
+            .is_some_and(|kept| kept.merged.is_some())
     }
 
     /// The worker records, as the board reads them

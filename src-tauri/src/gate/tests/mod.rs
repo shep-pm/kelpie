@@ -7,6 +7,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod after;
 mod merge;
 mod red;
 mod rig;
@@ -328,7 +329,7 @@ fn a_conflict_ruling_on_a_ticket_whose_head_moved_while_ruled_is_recorded() {
 }
 
 #[test]
-fn a_pull_merged_by_hand_leaves_the_gate() {
+fn a_pull_merged_by_hand_is_read_as_merged_and_not_ruled_on() {
     let rig = rig();
     let head = rig.worker_on(TICKET, "work.txt", "mine\n");
     let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
@@ -338,7 +339,7 @@ fn a_pull_merged_by_hand_leaves_the_gate() {
 
     rig.read(&[]);
 
-    assert!(rig.gate.kept(TICKET).is_none(), "the ticket left the gate");
+    assert!(rig.seen_merged(TICKET), "the gate read it merged");
     assert_eq!(rig.pulls.calls(), [PullCall::State(pull.number)]);
     assert_eq!(
         rig.record(TICKET).status,

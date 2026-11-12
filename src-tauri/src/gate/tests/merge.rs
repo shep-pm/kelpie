@@ -98,8 +98,8 @@ fn a_yes_merges_the_head_it_was_given_on_pinned_to_it() {
     rig.read(&[]);
     assert_eq!(merges(&rig).len(), 1, "and no second");
     assert!(
-        rig.gate.kept(TICKET).is_none(),
-        "a merged pull request leaves the gate"
+        rig.seen_merged(TICKET),
+        "a merged pull request is left to its cleanup"
     );
 }
 
@@ -311,7 +311,7 @@ fn a_relaunch_between_the_record_and_the_merge_does_not_merge_twice() {
     rig.pulls.script_state(NUMBER, Ok(PullState::Merged));
     rig.read(&[]);
     assert!(merges(&rig).is_empty());
-    assert!(rig.gate.kept(TICKET).is_none(), "the merge is seen as done");
+    assert!(rig.seen_merged(TICKET), "the merge is seen as done");
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn a_queued_pull_is_watched_until_it_merges() {
     rig.pulls.script_state(NUMBER, Ok(PullState::Merged));
     rig.read(&[]);
     assert_eq!(merges(&rig).len(), 1);
-    assert!(rig.gate.kept(TICKET).is_none(), "the queue landed it");
+    assert!(rig.seen_merged(TICKET), "the queue landed it");
 }
 
 #[test]

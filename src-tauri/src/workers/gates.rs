@@ -20,7 +20,7 @@ use kelpie_engine::tools::Tools;
 use kelpie_engine::worker::{Opening, Paths};
 
 use super::{OpenOn, Workers, lock};
-use crate::gate::{Choose, Fix, Gate, Parts};
+use crate::gate::{Choose, Fix, Gate, Parts, Stop};
 
 /// Builds the session of a worker that has none live, as a fix turn needs
 ///
@@ -89,6 +89,14 @@ impl Workers {
                 )
             })
         };
+        let stop: Stop = {
+            let (workers, project) = (Arc::downgrade(self), project_id.to_owned());
+            Box::new(move |ticket| {
+                if let Some(workers) = workers.upgrade() {
+                    workers.forget_session(&project, ticket);
+                }
+            })
+        };
         let gate = Arc::new(Gate::new(Parts {
             project_id: project_id.to_owned(),
             folder: folder.to_owned(),
@@ -96,11 +104,13 @@ impl Workers {
             tree: Arc::clone(&self.tree),
             records: Arc::downgrade(&records),
             pulls: Arc::clone(forge.pulls()),
+            tickets: Arc::clone(forge.tickets()) as Arc<dyn Tickets>,
             ci: Arc::clone(forge.ci()),
             queue: Arc::clone(forge.queue()),
             clock,
             limits,
             fix,
+            stop,
         })?);
         // Two reads can race to build one: the first to insert is the project's
         let mut kept = lock(&self.gates);

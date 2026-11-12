@@ -15,7 +15,8 @@
 //!   The maintainer's yes merges it, which `merge` carries out on the ticket's next pass.
 //! - [`Step::Red`] is red CI, which `red` settles: a rerun of a run likely not the worker's,
 //!   a ruling, or the worker's next turn with the failing logs.
-//! - [`Step::Done`] ends the ticket's time in the gate. Cleaning up after the merge comes later.
+//! - [`Step::Done`] is a merge, by the maintainer's yes or by hand: the ticket's issue is closed
+//!   and the worker cleaned up (`after`), and it leaves the gate once that holds.
 
 use kelpie_engine::gate::{Kept, Limits, Look, Pull, Ruling, Step, conflicted};
 use kelpie_engine::github::Timestamp;
@@ -51,7 +52,7 @@ impl Gate {
             _ => "",
         };
         match step {
-            Step::Done => return Carried::Forget,
+            Step::Done => return self.after_merge(work, kept, now),
             Step::Rule(ruling) => {
                 self.rule(work, kept, &ruling, head);
             }
