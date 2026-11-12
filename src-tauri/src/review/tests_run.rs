@@ -40,6 +40,12 @@ use crate::workers::{WorkerPlan, git_common_dir};
 /// What a run that has no lease door says: the ceiling and the queue are the lease's
 const NO_DOOR: &str = "the cargo-test lease has no socket here, so the test is not run";
 
+/// A shell's number for a process ended by SIGTERM, which the tree sends on a stop
+const TERMINATED: u8 = 143;
+
+/// A shell's number for a process ended by SIGKILL, which the tree sends after its grace
+const KILLED: u8 = 137;
+
 /// What one ticket's test runs reach, and the lease they queue on
 #[derive(Debug)]
 pub struct Kit {
@@ -146,7 +152,9 @@ fn script(command: &str) -> String {
 /// What an [`Exit`] says of the test
 ///
 /// The lease's own numbers are no result of the test: a run that could not have the lease
-/// or start its command never ran, and one past its bound timed out. Any other number but 0
+/// or start its command never ran, and one past its bound timed out. A run ended by SIGTERM or
+/// SIGKILL is one kelpie's own stop ended (the tree sends those), so it never ran to a result
+/// and counts for nothing: a fix that may well pass is not ruled on it. Any other number but 0
 /// is the command failing, with the end of what it wrote.
 fn outcome_of(exit: &Exit) -> TestOutcome {
     let written = tail(&exit.output);
@@ -158,6 +166,9 @@ fn outcome_of(exit: &Exit) -> TestOutcome {
         },
         NOT_RUN => TestOutcome::NotRun {
             reason: format!("the command could not start: {written}"),
+        },
+        TERMINATED | KILLED => TestOutcome::NotRun {
+            reason: format!("kelpie stopped the test run: {written}"),
         },
         _ => TestOutcome::Failed { output: written },
     }
@@ -340,6 +351,34 @@ mod tests {
                 "exit {code} never ran the test"
             );
         }
+    }
+
+    #[test]
+    fn a_run_kelpie_stopped_is_not_a_failed_test() {
+        for code in [TERMINATED, KILLED] {
+            assert!(
+                matches!(outcome_of(&exit(code, "cut")), TestOutcome::NotRun { reason } if reason.contains("stopped")),
+                "exit {code} is the tree's stop, which rules nothing on the fix"
+            );
+        }
+        assert!(
+            matches!(outcome_of(&exit(139, "segv")), TestOutcome::Failed { .. }),
+            "a test that crashes itself is still a failure"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_ended_by_the_trees_signals_has_the_numbers_a_stop_is_read_by() {
+        let ended_by = |signal: &str| {
+            let status = std::process::Command::new("sh")
+                .args(["-c", &format!("kill -{signal} $$")])
+                .status()
+                .unwrap();
+            exit_number(status)
+        };
+        assert_eq!(ended_by("TERM"), TERMINATED);
+        assert_eq!(ended_by("KILL"), KILLED);
     }
 
     #[test]
