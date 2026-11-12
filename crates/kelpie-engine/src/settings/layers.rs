@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-use super::{BUILT_IN, Field, Resolved, SettingsError};
+use super::{BUILT_IN, Field, Resolved, Reviewers, SettingsError};
 
 /// One level a setting's value can come from
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -89,7 +89,11 @@ impl Field {
     /// machine's, or one project's, since how far back to look is a person's.
     /// Whether CI holds the merge, how many fix attempts red CI gets, how long
     /// it is waited on and when a pull request is caught up are the project's,
-    /// since the repo's CI and merge queue are.
+    /// since the repo's CI and merge queue are. So are its reviewers, its test
+    /// command and the reviewers' harness, model and effort: which agents read a
+    /// repo's pull requests and how its tests run are the repo's, and a
+    /// reviewer's own keys sit under the reviewers' rows as `worker.md`'s sit
+    /// under the worker's.
     #[must_use]
     pub fn layers(self) -> &'static [Layer] {
         const PROJECT: &[Layer] = &[Layer::Project];
@@ -115,7 +119,12 @@ impl Field {
             | Self::CiHoldsMerge
             | Self::FixAttempts
             | Self::CiWait
-            | Self::CatchUp => PROJECT,
+            | Self::CatchUp
+            | Self::Reviewers
+            | Self::TestCommand
+            | Self::ReviewerHarness
+            | Self::ReviewerModel
+            | Self::ReviewerEffort => PROJECT,
             // A lease is the machine's, so its capacity is one value for every
             // project, and so is the appearance of the window they share
             Self::BridgeUpdates | Self::LeaseCapacity | Self::Theme => GLOBAL,
@@ -214,6 +223,23 @@ pub(crate) fn resolve(global: &LayerDoc, project: &LayerDoc) -> Result<Resolved,
         fix_attempts: Field::FixAttempts.resolve(global, project, BUILT_IN.fix_attempts)?,
         ci_wait: Field::CiWait.resolve(global, project, BUILT_IN.ci_wait)?,
         catch_up: Field::CatchUp.resolve(global, project, BUILT_IN.catch_up)?,
+        reviewers: Field::Reviewers.resolve(global, project, Reviewers::built_in())?,
+        test_command: Field::TestCommand.resolve(global, project, None)?,
+        reviewer_harness: Field::ReviewerHarness.resolve(
+            global,
+            project,
+            BUILT_IN.reviewer_harness,
+        )?,
+        reviewer_model: Field::ReviewerModel.resolve(
+            global,
+            project,
+            BUILT_IN.reviewer_model.map(str::to_string),
+        )?,
+        reviewer_effort: Field::ReviewerEffort.resolve(
+            global,
+            project,
+            BUILT_IN.reviewer_effort.map(str::to_string),
+        )?,
     })
 }
 
