@@ -4,13 +4,14 @@
 //! the network, and the poller is stepped by calling [`Poller::read`] and
 //! [`Poller::place`] where a run would wait on a clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use kelpie_engine::ci::HeadStatus;
+use kelpie_engine::gate::Line;
 use kelpie_engine::github::{Clock, ForgeSlug, Timestamp};
 use kelpie_engine::run::RunId;
 use kelpie_engine::settings::PickUp;
@@ -21,7 +22,10 @@ use kelpie_engine::ticket::{
 use kelpie_engine::worker::{Record, Records, Status};
 
 use super::poll::{Cadence, Choices, Feed, Poller};
-use super::{BoardEvent, BoardHost, BoardView, Column, MoveView, TicketView, move_ticket};
+use super::{
+    BoardEvent, BoardHost, BoardView, Column, GateLine, MoveView, TicketView, move_ticket,
+};
+use crate::gate::NotReady;
 use crate::workers::{Feed as WorkerFeed, WorkerStarted};
 
 mod link;
@@ -229,6 +233,20 @@ fn listed(number: u64, title: &str, labels: &[&str], created: u64) -> Listed {
     }
 }
 
+/// The open draft pull request `number`, closing ticket `ticket`
+fn pull_of(ticket: u64, number: u64) -> OpenPull {
+    OpenPull {
+        number: std::num::NonZeroU64::new(number).unwrap(),
+        branch: format!("kelpie/{ticket}"),
+        draft: true,
+        closes: vec![id(ticket)],
+        head: "0".repeat(40),
+        base: "main".to_owned(),
+        labels: Vec::new(),
+        checks: HeadStatus::None,
+    }
+}
+
 /// The tickets of a board event, as (id, column)
 fn placed(event: &BoardEvent) -> Vec<(String, Column)> {
     let BoardEvent::Board(view) = event else {
@@ -255,16 +273,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
         listed(13, "Think about it", &[], 200),
         listed(14, "Reviewing", &[], 300),
     ]));
-    rig.source.tickets.script_pulls(Ok(vec![OpenPull {
-        number: std::num::NonZeroU64::new(99).unwrap(),
-        branch: "kelpie/14".to_owned(),
-        draft: true,
-        closes: vec![id(14)],
-        head: "0".repeat(40),
-        base: "main".to_owned(),
-        labels: Vec::new(),
-        checks: HeadStatus::None,
-    }]));
+    rig.source.tickets.script_pulls(Ok(vec![pull_of(14, 99)]));
 
     let event = rig.poller.read().unwrap();
 
@@ -280,6 +289,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     url: "https://github.com/shep-pm/kelpie/issues/13".to_owned(),
                     pull_url: None,
                     needs_you: Vec::new(),
+                    gate: None,
                 },
                 TicketView {
                     id: "12".to_owned(),
@@ -289,6 +299,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     url: "https://github.com/shep-pm/kelpie/issues/12".to_owned(),
                     pull_url: None,
                     needs_you: Vec::new(),
+                    gate: None,
                 },
                 TicketView {
                     id: "14".to_owned(),
@@ -298,6 +309,7 @@ fn a_read_becomes_a_board_view_with_each_tickets_url() {
                     url: "https://github.com/shep-pm/kelpie/issues/14".to_owned(),
                     pull_url: Some("https://github.com/shep-pm/kelpie/pull/99".to_owned()),
                     needs_you: Vec::new(),
+                    gate: None,
                 },
             ],
             held_until: None,
@@ -478,7 +490,9 @@ fn watching(rig: &Rig) -> BoardHost {
     rig.source.tickets.script_open(Ok(vec![
         listed(12, "Add the thing", &["ready-for-agent"], 100),
         listed(13, "Think about it", &[], 200),
+        listed(14, "Reviewing", &[], 300),
     ]));
+    rig.source.tickets.script_pulls(Ok(vec![pull_of(14, 99)]));
     let host = BoardHost::default();
     let (sent, first) = std::sync::mpsc::channel();
     host.watch(
@@ -495,6 +509,11 @@ fn watching(rig: &Rig) -> BoardHost {
     host
 }
 
+/// A gate that is asked nothing: a move that is no merge never reaches it
+fn no_yes(ticket: &str) -> Result<(), NotReady> {
+    panic!("the gate was asked for a yes on {ticket}")
+}
+
 #[test]
 fn a_move_from_ready_to_building_starts_the_worker_and_any_other_move_changes_nothing() {
     let rig = Rig::new(Source::new());
@@ -508,20 +527,20 @@ fn a_move_from_ready_to_building_starts_the_worker_and_any_other_move_changes_no
         })
     };
 
-    let moved = move_ticket(&host, "12", Column::Building, start);
+    let moved = move_ticket(&host, "12", Column::Building, start, no_yes);
     assert_eq!(moved, Ok(MoveView::Started { waiting: true }));
     assert_eq!(*started.lock().unwrap(), ["12"]);
 
-    let stay = move_ticket(&host, "12", Column::Ready, start);
+    let stay = move_ticket(&host, "12", Column::Ready, start, no_yes);
     assert_eq!(stay, Ok(MoveView::Stay));
 
-    let ready = move_ticket(&host, "13", Column::Ready, start);
+    let ready = move_ticket(&host, "13", Column::Ready, start, no_yes);
     let Ok(MoveView::SnapBack { line }) = ready else {
         panic!("expected a snap back, got {ready:?}");
     };
     assert!(line.contains("ready label"), "{line}");
 
-    let merge = move_ticket(&host, "12", Column::Done, start);
+    let merge = move_ticket(&host, "12", Column::Done, start, no_yes);
     assert!(matches!(merge, Ok(MoveView::SnapBack { .. })), "{merge:?}");
 
     assert_eq!(
@@ -536,9 +555,13 @@ fn a_move_of_a_ticket_not_on_the_board_is_refused() {
     let rig = Rig::new(Source::new());
     let host = watching(&rig);
 
-    let refused = move_ticket(&host, "99", Column::Building, |_| {
-        panic!("no worker should start")
-    });
+    let refused = move_ticket(
+        &host,
+        "99",
+        Column::Building,
+        |_| panic!("no worker should start"),
+        no_yes,
+    );
 
     let said = refused.unwrap_err();
     assert!(
@@ -558,4 +581,181 @@ fn a_stopped_host_no_longer_answers_for_the_board_it_watched() {
     // A drop must not be checked against the columns of a project left behind
     let said = host.column_of("12").unwrap_err();
     assert!(said.contains("not been read"), "{said}");
+}
+
+/// A rig whose board has tickets 14 to 16 in Review and 17 in Building, each with a pull request
+fn four_in_flight() -> Rig {
+    let mut rig = Rig::new(Source::new());
+    let open = (14..=17)
+        .map(|number| listed(number, "In flight", &[], number * 10))
+        .collect::<Vec<_>>();
+    rig.source.tickets.script_open(Ok(open));
+    rig.source
+        .tickets
+        .script_pulls(Ok((14..=16).map(|n| pull_of(n, n + 85)).collect()));
+    rig.poller.read().unwrap();
+    rig.work_on("17");
+    rig
+}
+
+fn gate_lines(rig: &mut Rig, lines: &[(&str, Line)], ready: &[&str]) -> BoardView {
+    let ready = ready
+        .iter()
+        .map(|ticket| (*ticket).to_owned())
+        .collect::<BTreeSet<_>>();
+    let lines = lines
+        .iter()
+        .map(|(ticket, line)| ((*ticket).to_owned(), line.clone()))
+        .collect::<BTreeMap<_, _>>();
+    rig.poller = std::mem::replace(
+        &mut rig.poller,
+        Rig::poller(&rig.source, &rig.records, &rig.feeds),
+    )
+    .with_ready(Box::new(move || ready.clone()))
+    .with_lines(Box::new(move || lines.clone()));
+    let Some(BoardEvent::Board(view)) = rig.poller.read() else {
+        panic!("expected a board");
+    };
+    view
+}
+
+#[test]
+fn a_merge_under_way_shows_its_line_without_merge() {
+    let mut rig = four_in_flight();
+    // The yes was carried out: the line still reads ready to merge, but the gate's ready
+    // mark is gone, so a press on Merge would find nothing to say yes to
+    let view = gate_lines(&mut rig, &[("15", Line::ReadyToMerge)], &[]);
+
+    let gate = view
+        .tickets
+        .iter()
+        .find(|ticket| ticket.id == "15")
+        .unwrap()
+        .gate
+        .clone();
+
+    assert_eq!(
+        gate,
+        Some(GateLine {
+            text: "Ready to merge".to_owned(),
+            url: None,
+            ready: false,
+        })
+    );
+}
+
+#[test]
+fn a_review_ticket_carries_its_gate_line_and_link() {
+    let mut rig = four_in_flight();
+    let run = "https://github.com/shep-pm/kelpie/actions/runs/7";
+    let view = gate_lines(
+        &mut rig,
+        &[
+            (
+                "14",
+                Line::Ruling {
+                    reason: "Still red: build".to_owned(),
+                    link: Some(run.to_owned()),
+                },
+            ),
+            ("15", Line::ReadyToMerge),
+            ("16", Line::WaitingForCi),
+            // A fix turn runs: the ticket is in Building and shows no line
+            ("17", Line::FixingRed { link: None }),
+        ],
+        &["15"],
+    );
+    let gate = |id: &str| {
+        view.tickets
+            .iter()
+            .find(|ticket| ticket.id == id)
+            .unwrap()
+            .gate
+            .clone()
+    };
+
+    assert_eq!(
+        gate("14"),
+        Some(GateLine {
+            text: "Still red: build".to_owned(),
+            url: Some(run.to_owned()),
+            ready: false,
+        })
+    );
+    assert_eq!(
+        gate("15"),
+        Some(GateLine {
+            text: "Ready to merge".to_owned(),
+            url: None,
+            ready: true,
+        })
+    );
+    assert_eq!(
+        gate("16"),
+        Some(GateLine {
+            text: "Waiting for CI".to_owned(),
+            url: None,
+            ready: false,
+        })
+    );
+    assert_eq!(gate("17"), None);
+}
+
+/// A host watching a board with ticket 14 in Review
+fn reviewing() -> (Rig, BoardHost) {
+    let rig = Rig::new(Source::new());
+    let host = watching(&rig);
+    assert_eq!(host.column_of("14"), Ok(Column::Review));
+    (rig, host)
+}
+
+#[test]
+fn a_drag_to_done_on_a_ticket_not_ready_snaps_back_with_the_gate_line() {
+    let (_rig, host) = reviewing();
+    let not_ready = |ticket: &str| {
+        Err(NotReady {
+            ticket: ticket.to_owned(),
+            line: Some(Line::WaitingForCi),
+        })
+    };
+
+    let moved = move_ticket(
+        &host,
+        "14",
+        Column::Done,
+        |_| panic!("no worker should start"),
+        not_ready,
+    );
+
+    assert_eq!(
+        moved,
+        Ok(MoveView::SnapBack {
+            line: "Waiting for CI".to_owned()
+        })
+    );
+}
+
+#[test]
+fn a_drag_to_done_on_a_ready_ticket_keeps_the_yes() {
+    let (_rig, host) = reviewing();
+    let said = Mutex::new(Vec::new());
+
+    let moved = move_ticket(
+        &host,
+        "14",
+        Column::Done,
+        |_| panic!("no worker should start"),
+        |ticket| {
+            said.lock().unwrap().push(ticket.to_owned());
+            Ok(())
+        },
+    );
+
+    assert_eq!(
+        moved,
+        Ok(MoveView::SnapBack {
+            line: "Merging once its checks settle".to_owned()
+        })
+    );
+    assert_eq!(*said.lock().unwrap(), ["14"]);
 }

@@ -21,6 +21,9 @@
 //! ```
 
 mod criteria;
+mod disputes;
+#[cfg(test)]
+mod disputes_tests;
 #[cfg(any(test, feature = "testing"))]
 pub mod fake;
 mod finding;
@@ -38,13 +41,14 @@ mod session;
 mod session_tests;
 
 pub use criteria::acceptance;
+pub use disputes::{Answers, Dispute, Settled, answers, comment, findings_of, mark_shown, record};
 pub use finding::{CLEAN, Finding, Severity, is_test_path, parse_findings, read_review};
 pub use findings_file::{
     Deferred, Disputed, FailingTest, Sent, TESTS_FOLDER, again_prompt, all_deferred, deferred,
     deferred_path, deferred_with_reasons, disputed, disputed_path, findings_path, fix_prompt,
     still_failing_prompt, tests_folder, write_findings_file,
 };
-pub use prompt::{Dispute, TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
+pub use prompt::{TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
 pub use reviewer::{Read, Reviewer, ReviewerError};
 pub use session::{
     Open, Opening, ReviewProject, SessionReviewer, diff_against, open_on, write_tool,

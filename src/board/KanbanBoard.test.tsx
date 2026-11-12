@@ -234,6 +234,37 @@ describe("<KanbanBoard>", () => {
     expect(cardTitles("In progress")).toEqual(["Ship it"]);
   });
 
+  it("a drop from Review on Done snaps back with the answer's line", async () => {
+    const onMove = vi.fn(
+      async (): Promise<MoveOutcome> => ({
+        kind: "snap_back",
+        line: "Merging once its checks settle",
+      }),
+    );
+    // The board is not tied to its tasks: a Review and a Done column are two more
+    stubBoardDragDom(["review", "done"]);
+    render(
+      <KanbanBoard
+        columns={[
+          { id: "review", label: "Review" },
+          { id: "done", label: "Done" },
+        ]}
+        tickets={[{ id: "7", title: "Merge it", column: "review" }]}
+        onMove={onMove}
+      />,
+    );
+
+    await dragTo("Merge it", "Done");
+
+    expect(onMove).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "7" }),
+      "done",
+    );
+    await statusLine("Merging once its checks settle");
+    await waitFor(() => expect(cardTitles("Review")).toEqual(["Merge it"]));
+    expect(cardTitles("Done")).toEqual([]);
+  });
+
   it("a rejected move puts the card back and shows the error's message", async () => {
     const onMove = vi.fn(async (): Promise<MoveOutcome> => {
       throw new Error("the window lost the engine");
