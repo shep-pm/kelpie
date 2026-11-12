@@ -278,3 +278,33 @@ fn a_step_that_failed_is_tried_on_the_next_read() {
     assert_eq!(closes(&rig), 2, "the second read tried again");
     assert!(!has_record(&rig));
 }
+
+#[test]
+fn an_issue_that_cannot_be_read_is_given_up_on_after_three_reads() {
+    let rig = rig();
+    let pull = reviewed(&rig, true);
+    merged_by_hand(&rig, &pull);
+    rig.tickets
+        .script_issue(issue(), Err(ForgeError::NoIssue { ticket: issue() }));
+
+    rig.read(&[]);
+    rig.clock.advance(FORGE_CLOSE_WAIT);
+    rig.read(&[]);
+    rig.read(&[]);
+    assert!(
+        has_record(&rig),
+        "two failed reads after the wait are not given up on"
+    );
+    rig.read(&[]);
+
+    assert_eq!(
+        writes(&rig),
+        [],
+        "nothing is written to an issue kelpie cannot read"
+    );
+    assert!(
+        !has_record(&rig),
+        "the ticket is cleaned up, not tried for ever"
+    );
+    assert!(rig.gate.kept(TICKET).is_none(), "and the gate's facts go");
+}

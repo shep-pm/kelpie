@@ -100,7 +100,8 @@ impl Gate {
 
     /// Comment once and close the issue where GitHub has not, once the wait is over
     ///
-    /// Settles `merged` when the issue is closed or the tries are used up.
+    /// Settles `merged` when the issue is closed or the tries are used up, whether they were
+    /// closes the forge refused or reads of the issue that failed.
     fn close_issue(&self, work: &Work, pull: Option<u64>, merged: &mut Merged, now: Timestamp) {
         let open = match self.tickets.issue(&work.id) {
             Ok(issue) => issue.open,
@@ -109,9 +110,17 @@ impl Gate {
                     "kelpie: issue {} was not read to close it: {why}",
                     work.ticket
                 );
+                if merged.read_failed(now) {
+                    eprintln!(
+                        "kelpie: issue {} could not be read after its tries, and is left as it is",
+                        work.ticket
+                    );
+                    merged.settle();
+                }
                 return;
             }
         };
+        merged.read();
         match closing(merged, open, now) {
             Close::Closed => merged.settle(),
             Close::Wait => {}

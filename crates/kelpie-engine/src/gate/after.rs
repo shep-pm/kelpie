@@ -34,6 +34,9 @@ pub struct Merged {
     /// The closes the forge refused or could not answer
     #[serde(default)]
     pub tries: u32,
+    /// The reads of the issue that failed one after another, since the last that went through
+    #[serde(default)]
+    pub unread: u32,
     /// Whether the issue is settled: closed, or given up on
     #[serde(default)]
     pub settled: bool,
@@ -53,6 +56,7 @@ impl Merged {
             names,
             commented: false,
             tries: 0,
+            unread: 0,
             settled: false,
             cleaned: false,
         }
@@ -66,6 +70,28 @@ impl Merged {
     /// Records a close the forge did not take
     pub const fn close_failed(&mut self) {
         self.tries = self.tries.saturating_add(1);
+    }
+
+    /// Whether GitHub is still given its time to close the issue
+    #[must_use]
+    pub fn waiting(&self, now: Timestamp) -> bool {
+        self.names && now.secs().saturating_sub(self.since.secs()) < FORGE_CLOSE_WAIT
+    }
+
+    /// Records a read of the issue that failed, and whether the reads are used up
+    ///
+    /// Inside the wait nothing is counted: nothing is to be done with the issue yet. A
+    /// read that went through starts the count again ([`Merged::read`]).
+    pub fn read_failed(&mut self, now: Timestamp) -> bool {
+        if !self.waiting(now) {
+            self.unread = self.unread.saturating_add(1);
+        }
+        self.unread >= TRIES
+    }
+
+    /// Records a read of the issue that went through
+    pub const fn read(&mut self) {
+        self.unread = 0;
     }
 
     /// Records the issue as closed, or given up on
@@ -101,7 +127,7 @@ pub fn closing(merged: &Merged, open: bool, now: Timestamp) -> Close {
     if !open {
         return Close::Closed;
     }
-    if merged.names && now.secs().saturating_sub(merged.since.secs()) < FORGE_CLOSE_WAIT {
+    if merged.waiting(now) {
         return Close::Wait;
     }
     if merged.tries >= TRIES {
@@ -172,6 +198,22 @@ mod tests {
         merged.close_failed();
 
         assert_eq!(closing(&merged, true, at(1)), Close::GiveUp);
+    }
+
+    #[test]
+    fn reads_that_fail_are_used_up_after_the_wait_and_start_again_on_one_that_goes_through() {
+        let mut merged = Merged::new(at(0), true);
+
+        assert!(!merged.read_failed(at(1)), "inside the wait nothing counts");
+        assert_eq!(merged.unread, 0);
+
+        let after = at(FORGE_CLOSE_WAIT);
+        assert!(!merged.read_failed(after));
+        assert!(!merged.read_failed(after));
+        merged.read();
+        assert!(!merged.read_failed(after));
+        assert!(!merged.read_failed(after));
+        assert!(merged.read_failed(after), "the third in a row gives up");
     }
 
     #[test]
