@@ -148,11 +148,31 @@ fn a_yes_after_ci_stopped_being_green_is_withdrawn() {
     let head = ready(&rig);
     rig.gate.yes(TICKET).unwrap();
 
-    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Pending(Vec::new()))]);
+    rig.read(&[rig.pull(TICKET, &head, red())]);
 
     assert!(merges(&rig).is_empty());
     assert_eq!(rig.gate.kept(TICKET).and_then(|kept| kept.yes), None);
     assert!(!rig.gate.ready().contains(TICKET));
+}
+
+#[test]
+fn a_run_still_going_past_the_settling_time_keeps_the_yes_and_merges_when_it_passes() {
+    let rig = rig();
+    let head = ready(&rig);
+    rig.gate.yes(TICKET).unwrap();
+
+    rig.clock.advance(SETTLE * 10);
+    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Pending(Vec::new()))]);
+
+    assert!(merges(&rig).is_empty());
+    assert_eq!(
+        rig.gate.kept(TICKET).and_then(|kept| kept.yes),
+        Some(head.clone()),
+        "the yes waits on the run"
+    );
+
+    rig.read(&[rig.pull(TICKET, &head, HeadStatus::Passed)]);
+    assert_eq!(merges(&rig), [head]);
 }
 
 #[test]
@@ -441,4 +461,55 @@ fn an_armed_auto_merge_on_a_head_gone_red_is_disarmed() {
     );
     let kept = rig.gate.kept(TICKET).unwrap();
     assert_eq!((kept.sent, kept.yes), (None, None));
+}
+
+#[test]
+fn a_merge_that_never_reached_the_forge_keeps_the_yes_and_is_no_refusal() {
+    let rig = rig();
+    let head = ready(&rig);
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.gate.yes(TICKET).unwrap();
+    for _ in 0..2 {
+        rig.pulls
+            .script_merge(Err(ForgeError::Spawn("gh is not installed".to_owned())));
+        rig.read(std::slice::from_ref(&pull));
+    }
+
+    let kept = rig.gate.kept(TICKET).unwrap();
+    assert_eq!(kept.merge_refusals, 0, "the forge refused nothing");
+    assert_eq!(kept.yes, Some(head.clone()), "the yes stands");
+    assert_eq!(kept.sent, None, "nothing was sent");
+    assert_ne!(rig.record(TICKET).status, Status::WaitingOnMaintainer);
+
+    rig.read(std::slice::from_ref(&pull));
+    assert_eq!(merges(&rig).len(), 3, "the next pass tried again");
+}
+
+#[test]
+fn an_armed_auto_merge_disarmed_by_hand_is_no_queue_removal() {
+    let rig = rig();
+    let head = ready(&rig);
+    let pull = rig.pull(TICKET, &head, HeadStatus::Passed);
+    rig.gate.yes(TICKET).unwrap();
+    rig.queue.script(
+        NUMBER,
+        Ok(QueueStanding {
+            armed: true,
+            ..QueueStanding::default()
+        }),
+    );
+    rig.read(std::slice::from_ref(&pull));
+    assert!(
+        merges(&rig).is_empty(),
+        "armed already, so not merged again"
+    );
+
+    rig.queue.script(NUMBER, Ok(QueueStanding::default()));
+    rig.clock.advance(SETTLE);
+    rig.read(std::slice::from_ref(&pull));
+
+    assert_eq!(prompt(&rig.agent, 0), None, "the worker is not sent back");
+    let kept = rig.gate.kept(TICKET).unwrap();
+    assert_eq!(kept.red, Vec::<String>::new());
+    assert_eq!(merges(&rig), [head], "the merge was sent again");
 }

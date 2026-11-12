@@ -284,9 +284,12 @@ impl Kept {
     }
 
     /// Records that the sent merge left the pull request open and waiting, seen at `now`
-    pub fn merge_waiting(&mut self, now: Timestamp) {
+    ///
+    /// `queued` is whether the merge queue holds it. An armed auto-merge only waits, and
+    /// one disarmed with no removal is not a queue's removal.
+    pub fn merge_waiting(&mut self, now: Timestamp, queued: bool) {
         if let Some(sent) = &mut self.sent {
-            sent.queued = true;
+            sent.queued |= queued;
             sent.since = now;
         }
     }

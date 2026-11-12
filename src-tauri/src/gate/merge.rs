@@ -24,7 +24,7 @@ use std::fmt;
 
 use kelpie_engine::gate::{self, Kept, Limits, Line, Look, Merge, Queue, Red, Refusal, Sent, Step};
 use kelpie_engine::github::Timestamp;
-use kelpie_engine::ticket::{OpenPull, PullState, QueueStanding, TicketId};
+use kelpie_engine::ticket::{ForgeError, OpenPull, PullState, QueueStanding, TicketId};
 
 use super::act::Carried;
 use super::{Gate, Work, lock};
@@ -61,6 +61,18 @@ pub(super) enum After {
     Carried(Carried),
     /// The yes is gone, or never held: the order runs
     Order,
+}
+
+/// Whether a failed merge call certainly made no merge, so nothing is left to watch
+fn never_sent(why: &ForgeError) -> bool {
+    matches!(
+        why,
+        ForgeError::Spawn(_)
+            | ForgeError::Held(_)
+            | ForgeError::Limited { .. }
+            | ForgeError::LocalPath
+            | ForgeError::NoIssue { .. }
+    )
 }
 
 /// The line of a ticket whose yes the pass carried out
@@ -177,7 +189,7 @@ impl Gate {
         kept.merge_sent(&pull.head, standing.removals, now);
         if standing.queued || standing.armed {
             // Already waiting to merge: a second call would only be refused
-            kept.merge_waiting(now);
+            kept.merge_waiting(now, standing.queued);
             return After::Carried(Carried::Keep);
         }
         self.keep_now(work, kept);
@@ -187,13 +199,25 @@ impl Gate {
                 if let Ok(after) = self.queue.standing(pull.number)
                     && (after.queued || after.armed)
                 {
-                    kept.merge_waiting(now);
+                    kept.merge_waiting(now, after.queued);
                 }
                 After::Carried(Carried::Keep)
             }
-            Err(why) => {
+            Err(ForgeError::Failed(said)) if !ForgeError::Failed(said.clone()).passes() => {
                 kept.merge_gone();
-                self.merge_refused(work, kept, &pull.head, &why.to_string())
+                self.merge_refused(work, kept, &pull.head, &said)
+            }
+            Err(why) => {
+                // Not the forge's refusal: the yes stands and the next pass tries again
+                eprintln!(
+                    "kelpie: the merge of pull request {} did not go through: {why}",
+                    pull.number
+                );
+                if never_sent(&why) {
+                    kept.merge_gone();
+                }
+                // Otherwise the call may have gone out, so `sent` stays for the next pass to watch
+                After::Carried(Carried::Keep)
             }
         }
     }
@@ -236,7 +260,7 @@ impl Gate {
         match gate::queue(sent, &standing, now) {
             Queue::Wait => {
                 if standing.queued {
-                    kept.merge_waiting(now);
+                    kept.merge_waiting(now, true);
                 }
                 Some(After::Carried(Carried::Keep))
             }
@@ -259,12 +283,12 @@ impl Gate {
                     }
                 }
                 None => {
-                    kept.merge_waiting(now);
+                    kept.merge_waiting(now, false);
                     Some(After::Carried(Carried::Keep))
                 }
             },
             Queue::Removed(reason) => {
-                let removed = standing.removals > sent.removals || sent.queued;
+                let removed = standing.removals > sent.removals;
                 if removed {
                     return Some(self.removed(work, kept, sent, &reason, &standing));
                 }

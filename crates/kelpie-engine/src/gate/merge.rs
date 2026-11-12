@@ -38,7 +38,7 @@ pub enum Merge {
 /// and it still has the latest base. A marked draft starts a fresh run, so the
 /// merge waits out [`CHECKS_SETTLE`](super::CHECKS_SETTLE) from the mark, which
 /// the caller starts with [`Kept::restart_wait`]. Red CI withdraws the yes at
-/// once. Under Only on conflict, a branch behind its base that merges cleanly
+/// once, and a pending run is waited out, as the order does. Under Only on conflict, a branch behind its base that merges cleanly
 /// still holds, as the order lets it through.
 pub fn yes(
     look: &Look,
@@ -58,8 +58,11 @@ pub fn yes(
         HeadStatus::Passed | HeadStatus::Skipped => true,
         // With no workflow on the base that runs on a pull request, no check will come
         HeadStatus::None if !look.base_runs_pull_workflow => true,
-        HeadStatus::None | HeadStatus::Pending(_) if settling => false,
-        HeadStatus::None | HeadStatus::Pending(_) | HeadStatus::Failed(_) => {
+        // A run the ready mark started may outlast the settling time: the order waits on a
+        // pending head too, so the yes does, and the order's own limits end a stuck run
+        HeadStatus::Pending(_) => false,
+        HeadStatus::None if settling => false,
+        HeadStatus::None | HeadStatus::Failed(_) => {
             return Merge::Withdraw("CI is no longer green".to_owned());
         }
     };
@@ -261,21 +264,27 @@ mod tests {
     }
 
     #[test]
-    fn a_check_gone_red_or_pending_withdraws_the_yes_once_settled() {
-        for checks in [
+    fn a_check_gone_red_withdraws_the_yes() {
+        let pull = pull(
+            HEAD,
             HeadStatus::Failed(vec![FailedCheck {
                 name: "test".to_owned(),
                 url: None,
             }]),
-            HeadStatus::Pending(vec![]),
-        ] {
-            let pull = pull(HEAD, checks);
-            assert_eq!(
-                decide(&pull, Base::Current, &mut said_yes(), CHECKS_SETTLE),
-                Merge::Withdraw("CI is no longer green".to_owned()),
-                "{pull:?}"
-            );
-        }
+        );
+        assert_eq!(
+            decide(&pull, Base::Current, &mut said_yes(), CHECKS_SETTLE),
+            Merge::Withdraw("CI is no longer green".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_run_still_going_after_the_settling_time_is_waited_for() {
+        let pending = pull(HEAD, HeadStatus::Pending(vec![]));
+        assert_eq!(
+            decide(&pending, Base::Current, &mut said_yes(), CHECKS_SETTLE * 10),
+            Merge::Wait
+        );
     }
 
     #[test]
