@@ -43,8 +43,9 @@ function Limit({ until }: { until: number }) {
  * GitHub and streamed by the engine.
  *
  * Ready tickets carry Start, and a drop from Ready on Building does the same.
- * Clicking a Building ticket calls `onOpenWorker`, as does a Start that took a
- * slot, and clicking any other opens its pull request in Review, else its
+ * Clicking a ticket whose worker is live calls `onOpenWorker`, as does a Start
+ * that took a slot: a Building ticket, and a Review ticket whose `needs_you`
+ * holds a line. Clicking any other opens its pull request in Review, else its
  * issue.
  */
 export function Board({
@@ -88,6 +89,10 @@ export function Board({
 
   async function open(ticket: TicketView) {
     if (ticket.column === "building")
+      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
+    if (ticket.column === "review" && ticket.needs_you.length > 0)
+      // The needs-you line asks the maintainer to answer that worker, so the
+      // card opens the tab where they can, even after the tab was closed.
       return onOpenWorker?.({ id: ticket.id, title: ticket.title });
     const url =
       ticket.column === "review" && ticket.pull_url
