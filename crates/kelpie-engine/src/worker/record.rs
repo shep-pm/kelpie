@@ -393,21 +393,32 @@ impl Records {
     /// which holds no slot and resumes only when the maintainer says so. A ticket
     /// that was waiting for a slot had nothing running and stays queued.
     ///
-    /// Returns the tickets paused, in the order they were started.
+    /// A [`Status::Reviewing`] record, holding a slot or waiting for one, becomes
+    /// [`Status::Ended`] and is never Paused: the read in flight is gone, and the
+    /// review pass's kept round starts it again.
+    ///
+    /// Returns the tickets paused, in the order they were started. A read that ended
+    /// is not among them: no turn of the worker was cut off.
     ///
     /// # Errors
     ///
     /// The file cannot be written.
     pub fn pause_mid_turn(&mut self) -> io::Result<Vec<String>> {
         let mut paused = Vec::new();
+        let mut changed = false;
         for record in &mut self.list {
             if record.status == Status::Running && record.seat == Seat::Held {
                 record.status = Status::Paused;
                 record.seat = Seat::Without;
                 paused.push(record.ticket.clone());
+                changed = true;
+            } else if record.status == Status::Reviewing {
+                record.status = Status::Ended;
+                record.seat = Seat::Without;
+                changed = true;
             }
         }
-        if paused.is_empty() {
+        if !changed {
             return Ok(paused);
         }
         write(&self.file, &self.list)?;
