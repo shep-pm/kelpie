@@ -15,14 +15,14 @@ use std::ffi::OsString;
 use std::path::{Component, MAIN_SEPARATOR_STR, Path, PathBuf};
 
 /// One environment variable, or `None` when it is unset
-pub(super) trait Env {
+pub(in crate::sandbox) trait Env {
     /// The variable `name`, or `None` when it is unset
     fn get(&self, name: &str) -> Option<String>;
 }
 
 /// The process's own environment, which is what each tool the call runs reads
 #[derive(Debug)]
-pub(super) struct ProcessEnv;
+pub(in crate::sandbox) struct ProcessEnv;
 
 impl Env for ProcessEnv {
     fn get(&self, name: &str) -> Option<String> {
