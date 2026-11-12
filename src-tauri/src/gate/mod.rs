@@ -51,8 +51,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 
 use kelpie_engine::ci::{Ci, HeadStatus};
-use kelpie_engine::gate::{self, Book, Limits, Line, Look, Pull};
-use kelpie_engine::github::Clock;
+use kelpie_engine::gate::{self, Book, Kept, Limits, Line, Look, Pull};
+use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::sandbox::fence;
 use kelpie_engine::settings::CatchUp;
 use kelpie_engine::ticket::{MergeQueue, OpenPull, PullState, Pulls, TicketId, Tickets};
@@ -60,6 +60,7 @@ use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::worker::{Paths, Record, Records, Status};
 use kelpie_engine::worktree::{self, Base, Remote};
 
+use crate::review::Review;
 use crate::workers::BASE;
 
 mod act;
@@ -67,10 +68,16 @@ mod after;
 mod merge;
 mod red;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Where a pass finds the project's limits, read from its settings each time
 pub type Choose = Box<dyn Fn() -> Result<Limits, String> + Send + Sync>;
+
+/// How many times one pass runs the order before it stops
+///
+/// Each step of the review pass makes progress the next one reads, so a pass that ran this
+/// many at once is going round and not getting on.
+const PASSES: usize = 12;
 
 /// Sends the worker on a ticket back with a prompt, as a turn of its own session
 ///
@@ -128,6 +135,9 @@ pub struct Parts {
 
     /// What stops a merged ticket's worker's session
     pub stop: Stop,
+
+    /// The project's review pass, which a green head goes to before the yes
+    pub review: Arc<Review>,
 }
 
 // The ports are trait objects, which no derive can print
@@ -154,6 +164,9 @@ pub struct Gate {
     limits: Choose,
     fix: Fix,
     stop: Stop,
+
+    /// The project's review pass, which a green head goes to before the yes
+    review: Arc<Review>,
 
     /// The line each ticket showed after its last pass, which a yes that is refused says
     lines: Mutex<BTreeMap<TicketId, Line>>,
@@ -282,6 +295,7 @@ impl Gate {
             limits: parts.limits,
             fix: parts.fix,
             stop: parts.stop,
+            review: parts.review,
             lines: Mutex::new(lines),
             book: Mutex::new(book),
             busy: Busy::default(),
@@ -390,7 +404,16 @@ impl Gate {
         lock(&self.busy).contains(ticket)
     }
 
+    /// The project's review pass, which a test scripts a reviewer for
+    #[cfg(test)]
+    pub(crate) fn review(&self) -> Arc<Review> {
+        Arc::clone(&self.review)
+    }
+
     /// The pass `record` calls for, `None` when it calls for none
+    ///
+    /// A worker whose read is in flight is stepped too, so the end of a read is not lost:
+    /// a relaunch clears it and the round reads again with the same reviewer.
     fn work_for(&self, record: &Record, pulls: &[OpenPull]) -> Option<Work> {
         let id: TicketId = record.ticket.parse().ok()?;
         let book = lock(&self.book);
@@ -400,7 +423,7 @@ impl Gate {
         // the maintainer for that, and is no business of the gate's.
         let ruled = record.status == Status::WaitingOnMaintainer
             && kept.is_some_and(|kept| kept.rules_with(record.reason.as_deref()));
-        if record.status != Status::Ended && !ruled {
+        if !matches!(record.status, Status::Ended | Status::Reviewing) && !ruled {
             return None;
         }
         let subject = match pulls.iter().find(|pull| pull.branch == record.branch) {
@@ -443,38 +466,18 @@ impl Gate {
                 return;
             }
         };
-        let Some(look) = self.look(work, &limits) else {
-            return;
-        };
         let now = self.clock.now();
         let mut kept = lock(&self.book).get(work.id).cloned().unwrap_or_default();
         let started_with_yes = kept.yes.is_some();
-        if let Pull::Open(pull) = &look.pull {
+        if let Subject::Open(pull) = &work.subject {
             kept.pull = Some(pull.number.get());
             kept.names = pull.closes.contains(&work.id);
         }
         kept.ready = None;
-        // A yes, or a merge already sent, is carried out before the order runs again
-        let after = match &look.pull {
-            Pull::Open(pull) if kept.yes.is_some() || kept.sent.is_some() => {
-                self.merge_pass(work, &look, pull, &mut kept, &limits, now)
-            }
-            _ => merge::After::Order,
-        };
-        let (carried, line) = match after {
-            merge::After::Carried(carried) => (carried, Some(merge::line_of(&kept))),
-            merge::After::Order => {
-                let step = gate::pass(&look, &mut kept, &limits, now);
-                let line = step.line();
-                (
-                    self.carry_out(work, &look, &mut kept, step, &limits, now),
-                    line,
-                )
-            }
-        };
+        let carried = self.order(work, &mut kept, &limits, now);
         let mut book = lock(&self.book);
         match carried {
-            act::Carried::Keep => {
+            act::Carried::Keep | act::Carried::Again => {
                 // The maintainer's yes can land while the pass is at work, on the head it found ready
                 if kept.yes.is_none()
                     && !started_with_yes
@@ -494,15 +497,70 @@ impl Gate {
             );
         }
         drop(book);
+        if carried == act::Carried::Forget {
+            // The ticket left the gate, so its card shows nothing of it
+            lock(&self.lines).remove(&work.id);
+        }
+    }
+
+    /// Put `line` on `ticket`'s card
+    ///
+    /// A pass writes it as each step begins, so a read in flight shows while it is at work
+    /// and not only once the pass has ended (`docs/design/review.md`, The Review card).
+    fn said(&self, id: TicketId, line: Option<Line>) {
         let mut lines = lock(&self.lines);
-        match (carried, line) {
-            (act::Carried::Keep, Some(line)) => {
-                lines.insert(work.id, line);
+        match line {
+            Some(line) => {
+                lines.insert(id, line);
             }
-            _ => {
-                lines.remove(&work.id);
+            None => {
+                lines.remove(&id);
             }
         }
+    }
+
+    /// The order, run again after each review step that leaves nothing to wait on
+    ///
+    /// The gate and the review pass step each other (`docs/design/review.md`, The pass): a
+    /// read that ends, a test that was recorded, or a pass that ended hands the ticket back
+    /// to the gate, which reads the world again and answers again, so CI is read at each
+    /// head the pass moves to. A step that sends the worker a turn, rules, or waits for a
+    /// slot ends the pass, and so does [`PASSES`], which no pass should reach.
+    fn order(&self, work: &Work, kept: &mut Kept, limits: &Limits, now: Timestamp) -> act::Carried {
+        let mut last = act::Carried::Keep;
+        for _ in 0..PASSES {
+            let Some(look) = self.look(work, limits) else {
+                return last;
+            };
+            // A yes, or a merge already sent, is carried out before the order runs again
+            let after = match &look.pull {
+                Pull::Open(pull) if kept.yes.is_some() || kept.sent.is_some() => {
+                    self.merge_pass(work, &look, pull, kept, limits, now)
+                }
+                _ => merge::After::Order,
+            };
+            last = match after {
+                merge::After::Carried(carried) => {
+                    self.said(work.id, Some(merge::line_of(kept)));
+                    carried
+                }
+                merge::After::Order => {
+                    let step = gate::pass(&look, kept, limits, now);
+                    // The line goes on before the step runs, so a read in flight is on the
+                    // card while it is at work
+                    self.said(work.id, step.line());
+                    self.carry_out(work, &look, kept, step, limits, now)
+                }
+            };
+            if last != act::Carried::Again {
+                return last;
+            }
+        }
+        eprintln!(
+            "kelpie: ticket {}'s pass ran {PASSES} steps at once and stopped",
+            work.ticket
+        );
+        last
     }
 
     /// What the pass reads of GitHub and of git, `None` when it cannot be read
@@ -533,6 +591,7 @@ impl Gate {
             agents_files: Vec::new(),
             merges_clean: false,
             base_runs_pull_workflow: false,
+            review: gate::Reviewed::default(),
         })
     }
 
@@ -564,6 +623,12 @@ impl Gate {
             );
         let base_runs_pull_workflow = pull.checks == HeadStatus::None
             && worktree::runs_on_pull_requests(tree, repo, BASE).unwrap_or(false);
+        // The files the diff changes, which each reviewer's `paths` are matched against
+        let changed = read_of(
+            &work.ticket,
+            "its changed files",
+            worktree::changed::changed_files(tree, repo, &pull.head, BASE),
+        )?;
         Some(Look {
             pull: Pull::Open(pull.clone()),
             base,
@@ -571,6 +636,7 @@ impl Gate {
             agents_files,
             merges_clean,
             base_runs_pull_workflow,
+            review: self.review.looked(&work.ticket, &pull.head, &changed),
         })
     }
 

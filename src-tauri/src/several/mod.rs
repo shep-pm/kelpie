@@ -24,6 +24,8 @@ use kelpie_engine::ci::fake::FakeCi;
 use kelpie_engine::ci::{Ci, FailedCheck, FailedLog, HeadStatus};
 use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::login::Store;
+use kelpie_engine::review::Reviewer;
+use kelpie_engine::review::fake::FakeReviewer;
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
@@ -38,6 +40,7 @@ use serde_json::json;
 use crate::board::poll::{Choices, Poller, Retry};
 use crate::board::{BoardEvent, Column};
 use crate::gate::Gate;
+use crate::review::Make;
 use crate::state::AppState;
 use crate::workers::{
     Forge, Hands, NoteOutcome, Open, WorkerStarted, note_through, plan, stop_and_tell_on,
@@ -134,6 +137,9 @@ struct Rig {
     /// The agent each ticket's worker runs on
     agents: Arc<Mutex<BTreeMap<u64, FakeAgent>>>,
 
+    /// The reviewer each ticket's pass reads with, scripted per ticket
+    reviewers: Arc<Mutex<BTreeMap<u64, Arc<FakeReviewer>>>>,
+
     /// What each ticket's worker's feed carried
     heard: Mutex<BTreeMap<u64, Heard>>,
 }
@@ -198,8 +204,20 @@ impl Rig {
             ci,
             clock: Ticks::default(),
             agents: Arc::default(),
+            reviewers: Arc::default(),
             heard: Mutex::default(),
         }
+    }
+
+    /// The reviewer ticket `number`'s pass reads with, which a case scripts before a read
+    fn reviewer(&self, number: u64) -> Arc<FakeReviewer> {
+        let mut reviewers = lock(&self.reviewers);
+        Arc::clone(reviewers.entry(number).or_default())
+    }
+
+    /// The prompt of each read ticket `number`'s pass ran, in the order they read
+    fn read_prompts(&self, number: u64) -> Vec<String> {
+        self.reviewer(number).prompts()
     }
 
     /// Put issue `number` on the board as Ready, with `agent` as its worker's harness
@@ -492,6 +510,16 @@ impl Rig {
                 opening.choice.clone(),
             ))
         });
+        // Each ticket's pass reads with a reviewer of its own, which a case scripts
+        let reviewers = Arc::clone(&self.reviewers);
+        let make: Arc<Make> = Arc::new(move |ticket, _binding, _plan| {
+            let number: u64 = ticket.parse().map_err(|_| "the ticket names no issue")?;
+            let reviewer = {
+                let mut reviewers = lock(&reviewers);
+                Arc::clone(reviewers.entry(number).or_default())
+            };
+            Ok(reviewer as Arc<dyn Reviewer>)
+        });
         self.state
             .workers_arc()
             .gate(
@@ -500,6 +528,7 @@ impl Rig {
                 None,
                 Arc::new(self.clock.clone()),
                 open,
+                Some(make),
             )
             .expect("the project's gate")
     }

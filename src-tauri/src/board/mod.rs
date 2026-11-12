@@ -427,6 +427,7 @@ fn poller_of(
         state.tools_arc(),
         Arc::clone(&clock),
         workers::app_open(),
+        None,
     )?;
     let ready = Arc::clone(&gate);
     let lines = Arc::clone(&gate);

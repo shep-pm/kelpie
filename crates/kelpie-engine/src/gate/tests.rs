@@ -45,7 +45,20 @@ fn look(checks: HeadStatus) -> Look {
         agents_files: vec![],
         merges_clean: false,
         base_runs_pull_workflow: true,
+        review: Reviewed::default(),
     }
+}
+
+// A green head the review pass still owes a read
+fn unread_review(checks: HeadStatus) -> Look {
+    let mut look = look(checks);
+    look.review = Reviewed {
+        vouches: false,
+        can_run: true,
+        read: 1,
+        of: 2,
+    };
+    look
 }
 
 // A kept ticket whose wait on `HEAD` began at `since`, with the labels and draft state seen
@@ -904,4 +917,60 @@ fn the_limits_come_from_the_settings() {
     assert_eq!(limits.fix_attempts, None);
     assert_eq!(limits.ci_wait.duration().as_secs(), 3600);
     assert_eq!(limits.catch_up, CatchUp::Always);
+}
+
+#[test]
+fn a_green_head_the_pass_has_not_read_goes_to_the_review_pass() {
+    let look = unread_review(HeadStatus::Passed);
+    let step = pass(&look, &mut waiting(0), &limits(), at(5000));
+    assert_eq!(step, Step::Review { read: 1, of: 2 });
+    assert_eq!(step.line().unwrap().text(), "Reviewing, read 1 of 2");
+}
+
+#[test]
+fn a_head_the_review_vouches_for_is_the_yes() {
+    let mut look = unread_review(HeadStatus::Passed);
+    look.review.vouches = true;
+    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), Step::Yes);
+}
+
+#[test]
+fn a_green_head_with_no_reviewer_left_is_the_yes() {
+    let mut look = unread_review(HeadStatus::Passed);
+    look.review.can_run = false;
+    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), Step::Yes);
+}
+
+#[test]
+fn a_head_with_no_checks_and_no_workflow_still_wants_its_read() {
+    let mut look = unread_review(HeadStatus::None);
+    look.base_runs_pull_workflow = false;
+    assert_eq!(
+        pass(&look, &mut waiting(0), &limits(), at(5000)),
+        Step::Review { read: 1, of: 2 }
+    );
+}
+
+#[test]
+fn a_red_head_is_red_before_any_read() {
+    let look = unread_review(HeadStatus::Failed(vec![failed("test")]));
+    assert_eq!(
+        pass(&look, &mut waiting(0), &limits(), at(5000)),
+        Step::Red(vec![failed("test")])
+    );
+}
+
+#[test]
+fn the_line_of_a_review_ruling_is_the_same_reason() {
+    let ruling = crate::review::Ruling::FixNotPushed { round: 2 };
+    let step = Step::Rule(Ruling::Review(ruling.clone()));
+    assert_eq!(
+        step.line().unwrap().text(),
+        Ruling::Review(ruling).reason(),
+        "the line is the review ruling's own reason"
+    );
+    assert!(
+        step.line().unwrap().text().contains("round 2"),
+        "and it names the round it was for"
+    );
 }

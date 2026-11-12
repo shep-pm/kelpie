@@ -5,7 +5,9 @@
 //! methods, once it has been done:
 //!
 //! - [`Step::CatchUp`] rebases the branch onto the latest base and pushes it. The head it
-//!   pushed is kelpie's own, so the head moving to it is no foreign change. A conflict is
+//!   pushed is kelpie's own, so the head moving to it is no foreign change, and a head the
+//!   review pass read or vouched for vouches for the one it pushed, as SK's `send_unread`
+//!   does, so a caught-up head needs no new read. A conflict is
 //!   the worker's next turn, with the merge left in progress in its worktree for it to
 //!   resolve, until the turns are used up and the merge is given up.
 //! - [`Step::Rerun`] starts the stuck run again, once per head.
@@ -13,17 +15,22 @@
 //!   hand-over's ruling does, and the gate passes it no more until its head moves.
 //! - [`Step::Yes`] keeps the head ready to merge, which the ticket's needs-you line says.
 //!   The maintainer's yes merges it, which `merge` carries out on the ticket's next pass.
+//! - [`Step::Review`] runs one step of the project's review pass (`crate::review`). A step
+//!   that ends its part hands the ticket back, so the order runs again on the head the pass
+//!   moved to; one that sent the worker a turn or found no slot free ends the pass; and a
+//!   ruling is recorded as the gate's own are, so its reason is the ticket's line.
 //! - [`Step::Red`] is red CI, which `red` settles: a rerun of a run likely not the worker's,
 //!   a ruling, or the worker's next turn with the failing logs.
 //! - [`Step::Done`] is a merge, by the maintainer's yes or by hand: the ticket's issue is closed
 //!   and the worker cleaned up (`after`), and it leaves the gate once that holds.
 
-use kelpie_engine::gate::{Kept, Limits, Look, Pull, Ruling, Step, conflicted};
+use kelpie_engine::gate::{Kept, Limits, Line, Look, Pull, Ruling, Step, conflicted};
 use kelpie_engine::github::Timestamp;
 use kelpie_engine::worker::Status;
 use kelpie_engine::worktree::{self, Rebase, Remote};
 
 use super::{Gate, Work, lock};
+use crate::review::{At, Ran};
 use crate::workers::BASE;
 
 /// What the book does with a ticket after its pass
@@ -31,6 +38,8 @@ use crate::workers::BASE;
 pub(super) enum Carried {
     /// Keep what the pass left
     Keep,
+    /// Keep what the pass left, and run the order again for the ticket
+    Again,
     /// The ticket left the gate
     Forget,
 }
@@ -56,6 +65,7 @@ impl Gate {
             Step::Rule(ruling) => {
                 self.rule(work, kept, &ruling, head);
             }
+            Step::Review { .. } => return self.review_pass(work, kept, look, head),
             other => {
                 let ruled = match other {
                     Step::CatchUp => self.catch_up(work, kept, head),
@@ -85,6 +95,37 @@ impl Gate {
         Carried::Keep
     }
 
+    /// Run one step of the ticket's review pass, and what it leaves the gate
+    ///
+    /// A step that ends its part hands the ticket back, so the order reads CI again at the
+    /// head the pass moved to. One that sent the worker a turn, or found no slot free for a
+    /// read, ends the pass. A ruling is recorded as the gate's own are, so its reason is the
+    /// ticket's line and the ticket gets no pass until its head moves.
+    fn review_pass(&self, work: &Work, kept: &mut Kept, look: &Look, head: &str) -> Carried {
+        let Pull::Open(pull) = &look.pull else {
+            // A pull request that is not open has no head for a reviewer to read
+            return Carried::Keep;
+        };
+        let at = At {
+            ticket: &work.ticket,
+            number: pull.number.get(),
+            head,
+        };
+        match self.review.step(&at) {
+            Ran::Again => Carried::Again,
+            // A step that waited, or one that never ran and left the pass where it was,
+            // is the same to the gate: the ticket is held until the next read of GitHub
+            Ran::Held | Ran::Undone => Carried::Keep,
+            Ran::Ruled(ruling) => {
+                let ruling = Ruling::Review(ruling);
+                let reason = ruling.reason();
+                kept.ruled_at(head, &reason, ruling.link());
+                self.said(work.id, Some(Line::of(&ruling)));
+                Carried::Keep
+            }
+        }
+    }
+
     /// Rebase the branch onto the latest base and push it, and say what the push left
     ///
     /// `true` when the catch-up came to a ruling.
@@ -103,7 +144,10 @@ impl Gate {
         );
         drop(checkout);
         match caught {
-            Ok(Rebase::Pushed(pushed)) => kept.pushed(&pushed),
+            Ok(Rebase::Pushed(pushed)) => {
+                kept.pushed(&pushed);
+                self.review.vouched(&work.ticket, head, &pushed);
+            }
             Ok(Rebase::Conflicts { base, files }) => match conflicted(kept, head, &base, &files) {
                 Step::Conflict(prompt) => self.send_conflict(work, kept, head, &base, &prompt),
                 Step::Rule(ruling) => {

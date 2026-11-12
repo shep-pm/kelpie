@@ -336,7 +336,7 @@ impl Folders {
 ///
 /// Asked of git through the process tree, which is where the engine asks it for
 /// the clone.
-fn git_common_dir(tree: &ProcessTree, folder: &Path) -> Result<PathBuf, String> {
+pub(crate) fn git_common_dir(tree: &ProcessTree, folder: &Path) -> Result<PathBuf, String> {
     let mut git = Command::new("git");
     git.current_dir(folder)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);

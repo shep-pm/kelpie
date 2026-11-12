@@ -6,6 +6,10 @@
 //! here, so every board read of a project runs the same one and its one-pass-per-ticket
 //! rule holds across reads.
 //!
+//! A green head goes to the project's review pass before the merge yes, so the gate is
+//! built beside one [`Review`] of the same project ([`crate::review`]), which holds
+//! `review.json` beside `gate.json`. Both are cached with the gate.
+//!
 //! The gate is cached in [`Workers`], so it holds [`Workers`] only weakly: a strong
 //! hold would be a ring nothing drops.
 
@@ -15,12 +19,13 @@ use std::sync::{Arc, Weak};
 use kelpie_engine::github::Clock;
 use kelpie_engine::session::Session;
 use kelpie_engine::settings::Settings;
-use kelpie_engine::ticket::Tickets;
+use kelpie_engine::ticket::{GithubTickets, Tickets};
 use kelpie_engine::tools::Tools;
 use kelpie_engine::worker::{Opening, Paths};
 
 use super::{OpenOn, Workers, lock};
 use crate::gate::{Choose, Fix, Gate, Parts, Stop};
+use crate::review::{self, Make, Review, ReviewOpen};
 
 /// Builds the session of a worker that has none live, as a fix turn needs
 ///
@@ -43,13 +48,15 @@ impl Workers {
 
     /// The gate of the project `project_id`, whose checkout is `folder`, built on the first ask
     ///
-    /// `tools` and `open` are what a fix turn starts a worker's session with, and `clock`
-    /// is where a pass reads the present moment from.
+    /// `tools` and `open` are what a fix turn starts a worker's session with, `clock`
+    /// is where a pass reads the present moment from, and `reviewers` is what builds a
+    /// reviewer for a read, `None` for kelpie's own, which starts a session of the
+    /// reviewer the pass chose.
     ///
     /// # Errors
     ///
     /// The project has no forge to read (see `Workers::forge`), its records cannot be
-    /// read, or `gate.json` cannot.
+    /// read, `gate.json` cannot, or `review.json` cannot.
     pub fn gate(
         self: &Arc<Self>,
         project_id: &str,
@@ -57,6 +64,7 @@ impl Workers {
         tools: Option<Arc<Tools>>,
         clock: Arc<dyn Clock>,
         open: Arc<Open>,
+        reviewers: Option<Arc<Make>>,
     ) -> Result<Arc<Gate>, String> {
         if let Some(gate) = lock(&self.gates).get(project_id) {
             return Ok(Arc::clone(gate));
@@ -72,10 +80,16 @@ impl Workers {
                 Ok((&settings).into())
             })
         };
-        let fix: Fix = {
+        // The gate and its review pass send a worker back the same way, each holding its own
+        // copy of the hand
+        let sent = || -> Fix {
             let workers = Arc::downgrade(self);
             let (project, folder) = (project_id.to_owned(), folder.to_owned());
-            let tickets = Arc::clone(forge.tickets());
+            let (tickets, tools, open) = (
+                Arc::clone(forge.tickets()),
+                tools.clone(),
+                Arc::clone(&open),
+            );
             Box::new(move |ticket, prompt| {
                 send_back(
                     &workers,
@@ -97,6 +111,26 @@ impl Workers {
                 }
             })
         };
+        let make = reviewers.unwrap_or_else(|| {
+            review::app_make(
+                &ReviewOpen::new(&self.data_dir, &self.logins),
+                &paths,
+                folder,
+                &self.tree,
+            )
+        });
+        let review = Arc::new(Review::new(review::Parts {
+            project_id: project_id.to_owned(),
+            folder: folder.to_owned(),
+            paths: paths.clone(),
+            tree: Arc::clone(&self.tree),
+            records: Arc::downgrade(&records),
+            tickets: Arc::clone(forge.tickets()) as Arc<dyn Tickets>,
+            config: self.config.clone(),
+            clock: Arc::clone(&clock),
+            fix: sent(),
+            make,
+        })?);
         let gate = Arc::new(Gate::new(Parts {
             project_id: project_id.to_owned(),
             folder: folder.to_owned(),
@@ -109,8 +143,9 @@ impl Workers {
             queue: Arc::clone(forge.queue()),
             clock,
             limits,
-            fix,
+            fix: sent(),
             stop,
+            review,
         })?);
         // Two reads can race to build one: the first to insert is the project's
         let mut kept = lock(&self.gates);
@@ -130,7 +165,7 @@ fn send_back(
     project: &str,
     folder: &Path,
     tools: Option<&Tools>,
-    tickets: &Arc<dyn kelpie_engine::ticket::GithubTickets>,
+    tickets: &Arc<dyn GithubTickets>,
     open: &Arc<Open>,
     ticket: &str,
     prompt: &str,

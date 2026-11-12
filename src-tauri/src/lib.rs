@@ -31,6 +31,7 @@ pub mod bridges;
 pub mod gate;
 pub mod github;
 pub mod pm;
+pub mod review;
 pub mod sandbox_setup;
 pub mod settings;
 #[cfg(test)]

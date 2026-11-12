@@ -102,6 +102,17 @@ impl Lineup {
         self.listed.iter().find(|r| r.name == name)
     }
 
+    /// The agent file a listed name stands for, which [`Agents::reviewer`] and
+    /// [`Agents::reviewer_binding`] resolve
+    ///
+    /// A [`Listed`] keeps the name as the project lists it, which is what a pass writes into
+    /// `ran`. What an agent file is read for is the name without kelpie's own prefix:
+    /// `kelpie:reviewer` and `reviewer` are one agent.
+    #[must_use]
+    pub fn file(name: &str) -> &str {
+        file_of(name)
+    }
+
     /// The names that cannot run, with why
     #[must_use]
     pub fn left_out(&self) -> &[LeftOut] {
