@@ -19,12 +19,13 @@
 
 use std::collections::HashSet;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crabpot::{Config, ConfigError};
 use serde_json::json;
 
-use self::toolchain::{Env, ProcessEnv, cargo_credentials, toolchain_homes};
+pub(super) use self::toolchain::{Env, ProcessEnv};
+use self::toolchain::{cargo_credentials, toolchain_homes};
 use super::fence;
 use super::policy::{
     KEYCHAIN_SERVICES, Project, Reads, TOOL_LOGS, denied, home, hosts, reads, text,
@@ -111,17 +112,13 @@ fn compose(
     home: Option<&Path>,
     env: &dyn Env,
 ) -> Result<Config, ConfigError> {
-    let tools = home.map_or_else(Vec::new, |home| toolchain_homes(home, env));
-    let folders = [worker.worktree, worker.git_dir, worker.git_common_dir];
-    let rules = read_rules(
-        harness,
-        project,
-        &folders,
-        worker.state_dir,
-        worker.kelpie_home,
-        home,
-        Some(&tools),
-    );
+    let read = [worker.worktree, worker.git_dir, worker.git_common_dir];
+    let folders = Folders {
+        read: &read,
+        state_dir: worker.state_dir,
+        kelpie_home: worker.kelpie_home,
+    };
+    let rules = read_rules(harness, project, &folders, home, env, true);
     let (deny_read, allow_read) = (rules.deny, rules.allow);
 
     // Inside the writes: the clone's own git dir less what runs code, each
@@ -198,6 +195,16 @@ fn compose(
     Config::from_json(&settings.to_string())
 }
 
+/// The folders a session works in, which `read_rules` allows back
+pub(super) struct Folders<'a> {
+    /// What it reads: its worktree and git dirs
+    pub(super) read: &'a [&'a Path],
+    /// What it writes, which holds its harness's config folder
+    pub(super) state_dir: &'a Path,
+    /// Kelpie's data folder, closed but for the folders above
+    pub(super) kelpie_home: &'a Path,
+}
+
 /// What a session denies and allows reading, as a worker's policy and a
 /// reviewer's both name it
 pub(super) struct ReadRules {
@@ -205,21 +212,20 @@ pub(super) struct ReadRules {
     pub(super) allow: Vec<String>,
 }
 
-/// The reads of a session on `harness` in `project`, which may read `folders`
-/// (its worktree and git dirs) and writes `state_dir`
+/// The reads of a session on `harness` in `project`, working in `folders`
 ///
-/// `tools` is the toolchain homes of a session that runs commands, which also
-/// reads kelpie's own binary and them. `None` is a session that runs none, which
-/// reads neither.
+/// The toolchain homes under `home`, as `env` names them, are denied their cargo
+/// credentials whether or not the session runs commands. `builds` is a session that
+/// runs commands, which also reads kelpie's own binary and those homes back.
 pub(super) fn read_rules(
     harness: &Harness,
     project: &Project<'_>,
-    folders: &[&Path],
-    state_dir: &Path,
-    kelpie_home: &Path,
+    folders: &Folders<'_>,
     home: Option<&Path>,
-    tools: Option<&[PathBuf]>,
+    env: &dyn Env,
+    builds: bool,
 ) -> ReadRules {
+    let tools = home.map_or_else(Vec::new, |home| toolchain_homes(home, env));
     let closed = project.reads == Reads::Project;
     // Kelpie's data folder holds every project's state and settings, and the
     // sessions' folder every session's login, so both are closed whatever the
@@ -233,20 +239,20 @@ pub(super) fn read_rules(
         // A tool home is read back whole, so each cargo home's own credential files
         // are named with it: `SECRETS` spells the default home alone, and `CARGO_HOME`
         // may point anywhere the maintainer keeps it.
-        .chain(cargo_credentials(tools.unwrap_or_default()))
+        .chain(cargo_credentials(&tools))
         .chain(home_denials(
             closed_home
                 .into_iter()
-                .chain([kelpie_home, project.sessions_root]),
+                .chain([folders.kelpie_home, project.sessions_root]),
         ))
         .collect();
     if closed && home.is_none() {
         // crabpot refuses `~` where no home folder is set, rather than leave it open
         deny.push("~".to_owned());
     }
-    let mut allow: Vec<String> = folders.iter().copied().map(text).collect();
-    allow.extend(reads(harness, project, state_dir));
-    if closed && let Some(tools) = tools {
+    let mut allow: Vec<String> = folders.read.iter().copied().map(text).collect();
+    allow.extend(reads(harness, project, folders.state_dir));
+    if closed && builds {
         allow.extend(env::current_exe().ok().map(|kelpie| text(&kelpie)));
         allow.extend(tools.iter().map(|tool| text(tool)));
     }

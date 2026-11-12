@@ -7,7 +7,8 @@
 //!   the tests folder when the project has a Test command. Nothing else: the
 //!   worktree, its clone's git dir and the checkout's git dir are read only.
 //! - **Reads:** the worker's, less kelpie's own binary and the toolchain homes,
-//!   which only a command runs from, plus the tests folder.
+//!   which only a command runs from, plus the tests folder. A toolchain home's
+//!   cargo credentials stay denied, as for the worker.
 //! - **Network:** the harness's own hosts and the project's allowlist. GitHub is
 //!   not named, since a reviewer pushes nothing and asks the forge nothing.
 //! - **Sockets:** none. A reviewer has no tools door and no lease socket.
@@ -22,7 +23,7 @@ use crabpot::{Config, ConfigError};
 use serde_json::json;
 
 use super::policy::{KEYCHAIN_SERVICES, Project, TOOL_LOGS, home, hosts, text};
-use super::worker::read_rules;
+use super::worker::{Env, Folders, ProcessEnv, read_rules};
 use crate::session::Harness;
 use crate::worktree::clone::git_dir_of;
 
@@ -58,32 +59,30 @@ pub fn policy(
     project: &Project<'_>,
     reviewer: &Reviewer<'_>,
 ) -> Result<Config, ConfigError> {
-    compose(harness, project, reviewer, home().as_deref())
+    compose(harness, project, reviewer, home().as_deref(), &ProcessEnv)
 }
 
-/// [`policy`] for a person whose home folder is `home`
+/// [`policy`] for a person whose home folder is `home` and whose tools read `env`
 fn compose(
     harness: &Harness,
     project: &Project<'_>,
     reviewer: &Reviewer<'_>,
     home: Option<&Path>,
+    env: &dyn Env,
 ) -> Result<Config, ConfigError> {
     let clone_git_dir = git_dir_of(reviewer.worktree);
-    let mut folders = vec![
+    let mut read = vec![
         reviewer.worktree,
         clone_git_dir.as_path(),
         reviewer.git_common_dir,
     ];
-    folders.extend(reviewer.tests);
-    let rules = read_rules(
-        harness,
-        project,
-        &folders,
-        reviewer.state_dir,
-        reviewer.kelpie_home,
-        home,
-        None,
-    );
+    read.extend(reviewer.tests);
+    let folders = Folders {
+        read: &read,
+        state_dir: reviewer.state_dir,
+        kelpie_home: reviewer.kelpie_home,
+    };
+    let rules = read_rules(harness, project, &folders, home, env, false);
 
     let mut network = json!({
         "allowedDomains": hosts(harness, project),

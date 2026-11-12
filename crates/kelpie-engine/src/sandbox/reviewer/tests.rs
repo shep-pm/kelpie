@@ -156,6 +156,7 @@ fn kelpies_data_folder_is_closed_but_for_the_state_folder() {
             &project(&[], read_anywhere),
             &reviewer(None),
             Some(home),
+            &std::collections::BTreeMap::new(),
         )
         .unwrap();
 
@@ -170,6 +171,43 @@ fn kelpies_data_folder_is_closed_but_for_the_state_folder() {
         assert!(
             config.filesystem.allow_read.unwrap().contains(&state[0]),
             "the state folder is not read with read_anywhere {read_anywhere}"
+        );
+    }
+}
+
+#[test]
+fn a_moved_cargo_homes_credentials_are_denied_though_no_toolchain_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let moved = home.join("builds/cargo");
+    std::fs::create_dir_all(&moved).unwrap();
+    let moved = moved.to_string_lossy().into_owned();
+    let vars = std::collections::BTreeMap::from([("CARGO_HOME", moved.clone())]);
+
+    for read_anywhere in [false, true] {
+        let config = compose(
+            &on(&[]),
+            &project(&[], read_anywhere),
+            &reviewer(None),
+            Some(home),
+            &vars,
+        )
+        .unwrap();
+
+        let credentials = entries(&[
+            &format!("{moved}/credentials"),
+            &format!("{moved}/credentials.toml"),
+        ]);
+        for entry in &credentials.filesystem.deny_read {
+            assert!(
+                config.filesystem.deny_read.contains(entry),
+                "{entry:?} is readable with read_anywhere {read_anywhere}"
+            );
+        }
+        let tool = entries(&[&moved]).filesystem.allow_read.unwrap();
+        assert!(
+            !config.filesystem.allow_read.unwrap().contains(&tool[0]),
+            "the cargo home is read back though a reviewer runs no command, with read_anywhere {read_anywhere}"
         );
     }
 }
