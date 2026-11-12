@@ -21,7 +21,9 @@ use kelpie_engine::run::RunId;
 use kelpie_engine::session::fake::FakeAgent;
 use kelpie_engine::settings::{CatchUp, ConfigDir, Field, LayerFile, Settings};
 use kelpie_engine::ticket::fake::{FakePulls, FakeTickets};
-use kelpie_engine::ticket::{ForgeError, GithubTickets, Issue, OpenPull, Pulls, TicketId};
+use kelpie_engine::ticket::{
+    FakeQueue, ForgeError, GithubTickets, Issue, MergeQueue, OpenPull, Pulls, TicketId,
+};
 use kelpie_engine::worker::{Paths, Record, Status};
 use kelpie_engine::worktree::{self, Remote, Start};
 use serde_json::{Value, json};
@@ -130,6 +132,7 @@ pub(super) struct Rig {
     pub(super) project: String,
     pub(super) pulls: Arc<FakePulls>,
     pub(super) ci: Arc<Held>,
+    pub(super) queue: Arc<FakeQueue>,
     pub(super) agent: FakeAgent,
     pub(super) clock: Ticks,
     pub(super) gate: Arc<Gate>,
@@ -163,6 +166,7 @@ impl Rig {
         let project = state.project_id(None).unwrap();
         let pulls = Arc::new(FakePulls::default());
         let ci = Arc::new(Held::default());
+        let queue = Arc::new(FakeQueue::new());
         let tickets = Arc::new(FakeTickets::new());
         for number in [7, 8] {
             tickets.script_issue(
@@ -181,6 +185,7 @@ impl Rig {
                 tickets as Arc<dyn GithubTickets>,
                 Arc::clone(&pulls) as Arc<dyn Pulls>,
                 Arc::clone(&ci) as Arc<dyn Ci>,
+                Arc::clone(&queue) as Arc<dyn MergeQueue>,
             )),
         );
         let clock = Ticks(Arc::new(AtomicU64::new(START)));
@@ -204,6 +209,7 @@ impl Rig {
             project,
             pulls,
             ci,
+            queue,
             agent,
             clock,
             gate,

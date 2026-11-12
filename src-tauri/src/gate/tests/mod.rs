@@ -7,6 +7,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod merge;
 mod red;
 mod rig;
 

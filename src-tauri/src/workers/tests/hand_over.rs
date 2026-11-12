@@ -30,7 +30,8 @@ use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::settings::PickUp;
 use kelpie_engine::ticket::fake::{FakePulls, FakeTickets, PullCall};
 use kelpie_engine::ticket::{
-    ForgeError, GithubTickets, Issue, Listed, OpenPull, PullState, Pulls, TicketId, Tickets,
+    FakeQueue, ForgeError, GithubTickets, Issue, Listed, MergeQueue, OpenPull, PullState, Pulls,
+    TicketId, Tickets,
 };
 use kelpie_engine::worker::{Opening, Paths, Record, Seat, Status, Ticket, owes_a_draft};
 use kelpie_protocol::SessionEvent;
@@ -355,6 +356,7 @@ impl Rig {
                 Arc::clone(tickets) as Arc<dyn GithubTickets>,
                 Arc::clone(pulls) as Arc<dyn Pulls>,
                 Arc::new(FakeCi::new()) as Arc<dyn Ci>,
+                Arc::new(FakeQueue::new()) as Arc<dyn MergeQueue>,
             )),
         );
     }

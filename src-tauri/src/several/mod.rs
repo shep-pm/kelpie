@@ -28,7 +28,9 @@ use kelpie_engine::run::RunId;
 use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
 use kelpie_engine::settings::{ConfigDir, Field, LayerFile, PickUp, Settings};
-use kelpie_engine::ticket::{GithubTickets, OpenPull, Pulls, TicketId, Tickets};
+use kelpie_engine::ticket::{
+    FakeQueue, GithubTickets, MergeQueue, OpenPull, PullState, Pulls, TicketId, Tickets,
+};
 use kelpie_engine::worker::{Opening, Paths, Record, Status, Ticket};
 use kelpie_protocol::SessionEvent;
 use serde_json::json;
@@ -178,12 +180,14 @@ impl Rig {
         .unwrap();
         let github = Arc::new(Github::new());
         let ci = Arc::new(FakeCi::new());
+        let queue = Arc::new(FakeQueue::new());
         state.workers().stand_in_forge(
             &project,
             Arc::new(Forge::new(
                 Arc::clone(&github) as Arc<dyn GithubTickets>,
                 Arc::clone(&github) as Arc<dyn Pulls>,
                 Arc::clone(&ci) as Arc<dyn Ci>,
+                Arc::clone(&queue) as Arc<dyn MergeQueue>,
             )),
         );
         Self {
@@ -338,6 +342,14 @@ impl Rig {
             &["commit", "--quiet", "-m", &format!("main adds {file}")],
         );
         git(&other, &["push", "--quiet", "origin", "main"]);
+    }
+
+    /// Whether the pull request from `branch` has been merged on GitHub
+    fn merged(&self, branch: &str) -> bool {
+        self.github
+            .pulls()
+            .iter()
+            .any(|pull| pull.branch == branch && pull.state == PullState::Merged)
     }
 
     /// What the origin holds at `branch`
