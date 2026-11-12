@@ -5,6 +5,9 @@ use super::*;
 use crate::run::RunId;
 use crate::settings::{LayerFile, Settings};
 
+mod pm_key;
+mod worker;
+
 const PARENT: &str = "---\nrole: pm\nharness: claude-code\nmodel: claude-opus-5-5\n\
                       effort: high\n---\nParent body.\n";
 
@@ -226,7 +229,7 @@ fn an_unknown_shipped_name_is_refused_naming_the_shipped_agents() {
         err.contains("`extends: kelpie:nope` names no shipped agent"),
         "{err}"
     );
-    assert!(err.ends_with("kelpie ships: pm, worker"), "{err}");
+    assert!(err.ends_with("kelpie ships: pm, worker, reviewer"), "{err}");
 }
 
 #[test]
@@ -793,102 +796,126 @@ fn a_pm_file_that_is_not_utf8_stops_the_binding_naming_the_file() {
     assert!(err.contains("pm.md"), "{err}");
 }
 
+const REVIEWER_FILE: &str = "---\nrole: reviewer\nsecond_look: true\npaths:\n  - \"src/**/*.rs\"\n  - docs/*.md\n---\nRead it.\n";
+
 #[test]
-fn setting_a_pm_key_creates_the_global_pm_file_over_kelpie_pm() {
-    let dir = Dir::new();
+fn a_reviewer_file_parses_with_its_paths_and_second_look() {
+    let agents = load(&[("rust-eyes.md", REVIEWER_FILE)]);
+    assert_eq!(
+        agents.problems().count(),
+        0,
+        "{:?}",
+        agents.problems().next()
+    );
 
-    Agents::set_pm_key(&dir.config(), PmKey::Model, Some("small")).unwrap();
+    let reviewer = agents.reviewer("rust-eyes").unwrap();
 
-    let pm = dir.load().pm().unwrap();
-    assert_eq!(model(&pm), Some("small"));
-    assert_eq!(pm.model.from, Origin::File("pm".to_owned()));
-    assert_eq!(body(&pm), Some(shipped_body().as_str()));
+    assert_eq!(reviewer.role.value, Role::Reviewer);
+    assert_eq!(reviewer.paths.value, ["src/**/*.rs", "docs/*.md"]);
+    assert_eq!(reviewer.paths.from, Origin::File("rust-eyes".to_owned()));
+    assert!(reviewer.second_look.value);
+    assert_eq!(
+        reviewer.second_look.from,
+        Origin::File("rust-eyes".to_owned())
+    );
+    assert_eq!(body(&reviewer), Some("Read it."));
 }
 
 #[test]
-fn setting_a_pm_key_changes_that_line_and_keeps_the_rest_of_the_file() {
-    let dir = Dir::new();
-    let file = "---\n# my PM\nrole: pm\nmodel: old\neffort: low\nbody: append\n---\nAlso this.\n";
-    dir.put("pm.md", file);
+fn a_reviewer_file_with_neither_key_reads_every_diff_with_no_second_look() {
+    let agents = load(&[("plain.md", "---\nrole: reviewer\n---\nRead it.\n")]);
 
-    Agents::set_pm_key(&dir.config(), PmKey::Model, Some("new")).unwrap();
-    Agents::set_pm_key(&dir.config(), PmKey::Harness, Some("goose")).unwrap();
+    let reviewer = agents.reviewer("plain").unwrap();
 
-    let text = fs::read_to_string(dir.0.join(FOLDER).join("pm.md")).unwrap();
-    assert!(text.contains("# my PM\n"), "{text}");
-    assert!(text.contains("effort: low\n"), "{text}");
-    assert!(text.ends_with("---\nAlso this.\n"), "{text}");
-    let pm = dir.load().pm().unwrap();
-    assert_eq!(model(&pm), Some("new"));
-    assert_eq!(pm.harness.value, Some(Harness::Goose));
-    assert_eq!(effort(&pm), Some("low"));
+    assert!(reviewer.paths.value.is_empty());
+    assert!(!reviewer.second_look.value);
+    assert_eq!(reviewer.second_look.from, Origin::BuiltIn);
 }
 
 #[test]
-fn clearing_a_pm_key_removes_its_line_so_the_layer_below_shows() {
-    let dir = Dir::new();
-    dir.put("pm.md", "---\nmodel: mine\neffort: low\n---\n");
+fn a_blank_glob_in_paths_is_refused_with_its_line() {
+    let err = refused(&[(
+        "mine.md",
+        "---\nrole: reviewer\npaths: [\"src/*\", \" \"]\n---\nBody.\n",
+    )]);
 
-    Agents::set_pm_key(&dir.config(), PmKey::Model, None).unwrap();
-    Agents::set_pm_key(&dir.config(), PmKey::Harness, None).unwrap();
-
-    let pm = dir.load().pm().unwrap();
-    assert_eq!(model(&pm), None);
-    assert_eq!(pm.model.from, Origin::BuiltIn);
-    assert_eq!(effort(&pm), Some("low"));
+    assert!(err.contains("mine.md"), "{err}");
+    assert!(err.contains("`paths`"), "{err}");
+    assert!(err.contains("at line 3"), "{err}");
 }
 
 #[test]
-fn a_pm_key_the_agent_cannot_use_is_refused_and_the_file_stays_as_it_was() {
-    let dir = Dir::new();
-    let before = "---\nmodel: mine\n---\n";
-    dir.put("pm.md", before);
+fn paths_on_a_worker_file_is_refused_by_name() {
+    let err = refused(&[(
+        "mine.md",
+        "---\nrole: worker\npaths: [\"src/*\"]\n---\nBody.\n",
+    )]);
 
-    let err = Agents::set_pm_key(&dir.config(), PmKey::Harness, Some("nope")).unwrap_err();
-
-    assert!(err.to_string().contains("harness"), "{err}");
-    let text = fs::read_to_string(dir.0.join(FOLDER).join("pm.md")).unwrap();
-    assert_eq!(text, before);
+    assert!(err.contains("mine.md"), "{err}");
+    assert!(err.contains("`paths`"), "{err}");
+    assert!(err.contains("reviewer"), "{err}");
+    assert!(err.contains("at line 3"), "{err}");
 }
 
 #[test]
-fn a_model_with_yaml_in_it_is_kept_as_one_string() {
-    let dir = Dir::new();
+fn second_look_on_a_pm_file_is_refused_by_name() {
+    let err = refused(&[("mine.md", "---\nrole: pm\nsecond_look: true\n---\nBody.\n")]);
 
-    Agents::set_pm_key(&dir.config(), PmKey::Model, Some("a: b # c")).unwrap();
-
-    assert_eq!(model(&dir.load().pm().unwrap()), Some("a: b # c"));
+    assert!(err.contains("mine.md"), "{err}");
+    assert!(err.contains("`second_look`"), "{err}");
+    assert!(err.contains("reviewer"), "{err}");
+    assert!(err.contains("at line 3"), "{err}");
 }
 
 #[test]
-fn the_built_in_worker_resolves_with_no_file_of_the_maintainers() {
+fn kelpie_reviewer_is_built_in_with_second_look_on_and_no_harness_or_model() {
     let dir = Dir::new();
 
-    let worker = dir.load().worker().unwrap();
+    let reviewer = dir.load().reviewer("reviewer").unwrap();
 
-    assert_eq!(worker.role.value, Role::Worker);
-    assert_eq!(worker.role.from, Origin::Shipped("worker".to_owned()));
+    assert_eq!(reviewer.role.value, Role::Reviewer);
+    assert_eq!(reviewer.role.from, Origin::Shipped("reviewer".to_owned()));
     // Kelpie names no harness and no model (ADR 0006)
-    assert_eq!(worker.harness.value, None);
-    assert_eq!(worker.model.value, None);
-    assert_eq!(worker.effort.value, None);
-    let text = worker.body.value.unwrap();
-    assert!(text.contains("Working as a kelpie worker"), "{text}");
-    assert!(text.contains("{kelpie} lease run cargo-test"), "{text}");
-    assert_eq!(worker.body.from, Origin::Shipped("worker".to_owned()));
+    assert_eq!(reviewer.harness.value, None);
+    assert_eq!(reviewer.model.value, None);
+    assert_eq!(reviewer.effort.value, None);
+    assert!(reviewer.second_look.value);
+    assert_eq!(
+        reviewer.second_look.from,
+        Origin::Shipped("reviewer".to_owned())
+    );
+    assert!(reviewer.paths.value.is_empty());
+    let text = reviewer.body.value.unwrap();
+    assert!(text.contains("{{BASE}}"), "{text}");
+    assert!(text.contains("{{DIFF}}"), "{text}");
     assert_eq!(dir.load().problems().count(), 0);
 }
 
 #[test]
-fn a_project_worker_file_extends_kelpie_worker() {
+fn a_global_reviewer_file_layers_over_kelpie_reviewer() {
+    let dir = Dir::new();
+    dir.put("reviewer.md", "---\nmodel: global-model\n---\n");
+
+    let reviewer = dir.load().reviewer("reviewer").unwrap();
+
+    assert_eq!(model(&reviewer), Some("global-model"));
+    assert!(reviewer.second_look.value);
+    assert_eq!(
+        body(&reviewer),
+        Agents::built_in("reviewer").unwrap().body.value.as_deref()
+    );
+}
+
+#[test]
+fn a_file_extending_kelpie_reviewer_keeps_its_paths() {
     let dir = Dir::new();
     dir.put(
-        "strict-worker.md",
-        "---\nextends: kelpie:worker\nmodel: small\neffort: low\n---\nAlways run the linter.\n",
+        "rust-eyes.md",
+        "---\nextends: kelpie:reviewer\npaths:\n  - \"src/**/*.rs\"\n---\n",
     );
     dir.put(
-        "quiet-worker.md",
-        "---\nextends: kelpie:worker\nbody: append\n---\nAsk before any push.\n",
+        "narrow.md",
+        "---\nextends: rust-eyes\nsecond_look: false\n---\n",
     );
     let agents = dir.load();
     assert_eq!(
@@ -898,28 +925,37 @@ fn a_project_worker_file_extends_kelpie_worker() {
         agents.problems().next()
     );
 
-    let strict = agents.get("strict-worker").unwrap();
-    assert_eq!(strict.role.value, Role::Worker);
-    assert_eq!(strict.role.from, Origin::Shipped("worker".to_owned()));
-    assert_eq!(model(strict), Some("small"));
-    assert_eq!(strict.model.from, Origin::File("strict-worker".to_owned()));
-    assert_eq!(effort(strict), Some("low"));
-    // Its own body replaces kelpie's
-    assert_eq!(body(strict), Some("Always run the linter."));
-
-    // `body: append` keeps kelpie's and adds the file's
-    let quiet = agents.get("quiet-worker").unwrap();
-    let text = body(quiet).unwrap();
-    assert!(text.starts_with("# Working as a kelpie worker"), "{text}");
-    assert!(text.ends_with("Ask before any push."), "{text}");
-    assert_eq!(model(quiet), None);
-
-    // A global `worker.md` that extends nothing builds on kelpie's too
-    dir.put("worker.md", "---\nmodel: global-model\n---\n");
-    let global = dir.load().worker().unwrap();
-    assert_eq!(model(&global), Some("global-model"));
+    let rust = agents.reviewer("rust-eyes").unwrap();
+    assert_eq!(rust.paths.value, ["src/**/*.rs"]);
+    assert_eq!(rust.paths.from, Origin::File("rust-eyes".to_owned()));
+    // The rest comes from kelpie's own
+    assert!(rust.second_look.value);
     assert_eq!(
-        body(&global),
-        Agents::built_in("worker").unwrap().body.value.as_deref()
+        rust.second_look.from,
+        Origin::Shipped("reviewer".to_owned())
     );
+
+    // A file that extends it inherits both and replaces one
+    let narrow = agents.reviewer("narrow").unwrap();
+    assert_eq!(narrow.paths.value, ["src/**/*.rs"]);
+    assert_eq!(narrow.paths.from, Origin::File("rust-eyes".to_owned()));
+    assert!(!narrow.second_look.value);
+    assert_eq!(narrow.second_look.from, Origin::File("narrow".to_owned()));
+}
+
+#[test]
+fn a_named_file_that_is_not_a_reviewer_is_refused_as_one() {
+    let agents = load(&[
+        ("strict-worker.md", "---\nextends: kelpie:worker\n---\n"),
+        ("broken.md", "---\nrole: reviewer\ncolour: red\n---\n"),
+    ]);
+
+    let not_reviewer = agents.reviewer("strict-worker").unwrap_err().to_string();
+    let missing = agents.reviewer("nothing").unwrap_err().to_string();
+    let broken = agents.reviewer("broken").unwrap_err().to_string();
+
+    assert!(not_reviewer.contains("strict-worker.md"), "{not_reviewer}");
+    assert!(not_reviewer.contains("not a reviewer"), "{not_reviewer}");
+    assert!(missing.contains("nothing.md"), "{missing}");
+    assert!(broken.contains("`colour`"), "{broken}");
 }
