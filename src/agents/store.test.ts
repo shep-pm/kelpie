@@ -21,6 +21,8 @@ const view = (name: string): AgentView => ({
     model: null,
     effort: null,
     body: null,
+    paths: null,
+    second_look: null,
   },
   body: `${name}'s body`,
   problem: null,
