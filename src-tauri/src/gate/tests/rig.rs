@@ -5,7 +5,7 @@
 //! a [`FakeAgent`], and the clock stands where a test puts it, so no test needs `gh`, a
 //! model, the network or a wait.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 use kelpie_engine::ci::fake::FakeCi;
 use kelpie_engine::ci::{Ci, FailedLog, HeadStatus};
 use kelpie_engine::github::{Clock, Timestamp};
+use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
 use kelpie_engine::review::fake::FakeReviewer;
-use kelpie_engine::review::{Finding, Read, Reviewer, ReviewerError};
+use kelpie_engine::review::{Finding, Read, Reviewer, ReviewerError, TestRun};
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::fake::FakeAgent;
 use kelpie_engine::settings::{CatchUp, ConfigDir, Field, LayerFile, Settings};
@@ -33,6 +34,7 @@ use kelpie_engine::worktree::{self, Remote, Start};
 use serde_json::{Value, json};
 
 use crate::gate::Gate;
+use crate::review::{Exit, Kit, Launch, SandboxedTests, Testing};
 use crate::state::AppState;
 use crate::workers::{Forge, Open};
 
@@ -144,6 +146,18 @@ pub(crate) struct Rig {
 
     /// Each ticket's reviewer, which a test scripts the answers of
     reviewers: Arc<Mutex<BTreeMap<String, Arc<Reader>>>>,
+
+    /// Where each test run was launched, and what it exited with
+    pub(crate) launches: Arc<Launches>,
+
+    /// The door of each lease a test run was given, in the order they were made
+    pub(crate) doors: Arc<Mutex<Vec<String>>>,
+
+    /// Why the next test run's settings cannot be made, when a test says they cannot
+    unreachable: Arc<Mutex<Option<String>>>,
+
+    /// Holds the leases the runs queue on
+    _leases: Arc<Leases>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -157,6 +171,10 @@ pub(crate) struct Reader {
     fake: FakeReviewer,
     holding: AtomicBool,
     asked: AtomicBool,
+
+    /// The files the next read writes into its tests folder, as a reviewer that attaches a
+    /// failing test to a finding does
+    attach: Mutex<Vec<(String, String)>>,
 }
 
 impl Reader {
@@ -183,6 +201,11 @@ impl Reader {
     pub(crate) fn prompts(&self) -> Vec<String> {
         self.fake.prompts()
     }
+
+    /// The next read writes `text` at `path` in its tests folder, if it is given one
+    pub(crate) fn attach(&self, path: &str, text: &str) {
+        lock(&self.attach).push((path.to_owned(), text.to_owned()));
+    }
 }
 
 impl Reviewer for Reader {
@@ -192,7 +215,88 @@ impl Reviewer for Reader {
         while self.holding.load(Ordering::SeqCst) && since.elapsed() < Duration::from_secs(10) {
             thread::sleep(Duration::from_millis(10));
         }
+        let attached: Vec<_> = lock(&self.attach).drain(..).collect();
+        if let Some(folder) = read.tests {
+            for (path, text) in attached {
+                let at = folder.join(path);
+                fs::create_dir_all(at.parent().unwrap()).unwrap();
+                fs::write(at, text).unwrap();
+            }
+        }
         self.fake.read(read)
+    }
+}
+
+/// One test run the rig's sandbox stand-in was asked for
+#[derive(Debug, Clone)]
+pub(crate) struct Launched {
+    /// The folder it ran in
+    pub(crate) cwd: PathBuf,
+
+    /// What the shell was given
+    pub(crate) script: String,
+
+    /// The door of the lease it queued on
+    pub(crate) door: String,
+
+    /// How long it could run once it held the lease
+    pub(crate) ceiling: Duration,
+
+    /// The watched paths the folder held as it ran
+    pub(crate) held: Vec<PathBuf>,
+}
+
+/// What a test run is launched through in the rig: no sandbox and no `kelpie lease run`, which
+/// a unit test cannot start, only the exit each run is scripted to have
+#[derive(Debug, Default)]
+pub(crate) struct Launches {
+    exits: Mutex<VecDeque<Exit>>,
+    watched: Mutex<Vec<PathBuf>>,
+    ran: Mutex<Vec<Launched>>,
+}
+
+impl Launches {
+    /// What the next runs exit with, one each. A run with none left exits 0.
+    pub(crate) fn script(&self, exits: impl IntoIterator<Item = Exit>) {
+        lock(&self.exits).extend(exits);
+    }
+
+    /// Notes, for every later run, whether its folder holds `path`
+    pub(crate) fn watch(&self, path: &str) {
+        lock(&self.watched).push(PathBuf::from(path));
+    }
+
+    /// Every run asked for, oldest first
+    pub(crate) fn ran(&self) -> Vec<Launched> {
+        lock(&self.ran).clone()
+    }
+}
+
+/// The launch of a rig's sandbox stand-in, scripted through its [`Launches`]
+pub(crate) struct Through(pub(crate) Arc<Launches>);
+
+impl Launch for Through {
+    fn launch(
+        &self,
+        run: &TestRun,
+        door: &kelpie_engine::tools::Door,
+        script: &str,
+    ) -> Result<Exit, String> {
+        let held = (lock(&self.0.watched).iter())
+            .filter(|path| run.cwd.join(path).exists())
+            .cloned()
+            .collect();
+        lock(&self.0.ran).push(Launched {
+            cwd: run.cwd.clone(),
+            script: script.to_owned(),
+            door: door.to_string(),
+            ceiling: run.ceiling,
+            held,
+        });
+        Ok(lock(&self.0.exits).pop_front().unwrap_or(Exit {
+            code: 0,
+            output: Vec::new(),
+        }))
     }
 }
 
@@ -270,6 +374,41 @@ impl Rig {
             })
         };
         let reviewers: Arc<Mutex<BTreeMap<String, Arc<Reader>>>> = Arc::default();
+        let launches = Arc::new(Launches::default());
+        let doors: Arc<Mutex<Vec<String>>> = Arc::default();
+        let unreachable: Arc<Mutex<Option<String>>> = Arc::default();
+        let leases = Arc::new(Leases::new(
+            &Settings::load(state.config(), &project).unwrap(),
+        ));
+        state.workers().stand_in_testing(
+            &project,
+            Testing {
+                runner: Arc::new(SandboxedTests::through(Box::new(Through(Arc::clone(
+                    &launches,
+                ))))),
+                gear: Arc::new({
+                    let (leases, doors, unreachable) = (
+                        Arc::clone(&leases),
+                        Arc::clone(&doors),
+                        Arc::clone(&unreachable),
+                    );
+                    let sockets = root.join("leases");
+                    move |ticket, _plan| {
+                        if let Some(why) = lock(&unreachable).clone() {
+                            return Err(why);
+                        }
+                        let folder = sockets.join(ticket);
+                        fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+                        let lease = leases.session(&folder).map_err(|e| e.to_string())?;
+                        lock(&doors).push(lease.door().to_string());
+                        Ok(Kit {
+                            reach: crabpot::Config::default(),
+                            lease: Some(lease),
+                        })
+                    }
+                }),
+            },
+        );
         let gate = state
             .workers_arc()
             .gate(
@@ -293,7 +432,21 @@ impl Rig {
             clock,
             gate,
             reviewers,
+            launches,
+            doors,
+            unreachable,
+            _leases: leases,
         }
+    }
+
+    /// The project's Test command is `command`, so reviewers are asked for tests
+    pub(crate) fn test_command(&self, command: &str) {
+        self.set(Field::TestCommand, &json!(command));
+    }
+
+    /// The next test runs cannot have settings of their own, for `why`
+    pub(crate) fn runs_unreachable(&self, why: &str) {
+        *lock(&self.unreachable) = Some(why.to_owned());
     }
 
     /// The reviewer ticket `ticket`'s pass reads with, which a test scripts before a read

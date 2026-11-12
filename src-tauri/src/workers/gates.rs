@@ -40,6 +40,16 @@ pub fn app_open() -> Arc<Open> {
 }
 
 impl Workers {
+    /// Run the reviewer tests of the project `project_id` with `testing`, in place of a sandbox
+    ///
+    /// kelpie runs a test in the worker's sandbox under the `cargo-test` lease, which a unit
+    /// test has no bwrap or Seatbelt to start. A test stands in a runner and the settings it
+    /// runs under before the project's gate is built.
+    #[cfg(test)]
+    pub fn stand_in_testing(&self, project_id: &str, testing: crate::review::Testing) {
+        lock(&self.testings).insert(project_id.to_owned(), testing);
+    }
+
     /// The gate of the project `project_id` if one has been built, `None` before its board is watched
     #[must_use]
     pub fn gate_of(&self, project_id: &str) -> Option<Arc<Gate>> {
@@ -119,6 +129,18 @@ impl Workers {
                 &self.tree,
             )
         });
+        let testing = lock(&self.testings)
+            .get(project_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                let (workers, project) = (Arc::downgrade(self), project_id.to_owned());
+                review::app_testing(&self.tree, &paths, &self.data_dir, folder, move || {
+                    let workers = workers
+                        .upgrade()
+                        .ok_or_else(|| "kelpie is shutting down".to_owned())?;
+                    workers.leases(&project).map(Arc::clone)
+                })
+            });
         let review = Arc::new(Review::new(review::Parts {
             project_id: project_id.to_owned(),
             folder: folder.to_owned(),
@@ -130,6 +152,7 @@ impl Workers {
             clock: Arc::clone(&clock),
             fix: sent(),
             make,
+            testing,
         })?);
         let gate = Arc::new(Gate::new(Parts {
             project_id: project_id.to_owned(),

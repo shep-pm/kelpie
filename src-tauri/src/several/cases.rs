@@ -13,6 +13,7 @@ use kelpie_engine::worker::Status;
 
 use super::{Rig, SETTLE, git, lock};
 use crate::board::Column;
+use crate::review::Exit;
 use crate::workers::{NoteOutcome, WorkerStarted};
 
 /// A reviewer's finding of `file:line`, for scripting one ticket's reader
@@ -589,5 +590,77 @@ fn a_review_ruling_on_one_ticket_leaves_the_other_to_the_merge_yes() {
         rig.gate().ready().into_iter().collect::<Vec<_>>(),
         ["13".to_owned()],
         "the other ticket is still the one put up to merge",
+    );
+}
+
+#[test]
+fn a_reviewers_failing_test_on_one_ticket_runs_only_in_that_worktree() {
+    let rig = Rig::new(2);
+    rig.test_command("cargo test --test {name}");
+    let (one, two) = (worker_that_fixes(), worker_that_fixes());
+    rig.ticket(12, "Add the thing", "It does one.", &one);
+    rig.ticket(13, "Fix the other", "It does two.", &two);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.push_work(12, "one.txt");
+    rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    // Only the first ticket's reviewer writes a test; the second's finding comes with none
+    rig.attach(
+        12,
+        "tests/flag.rs",
+        "#[test]\nfn flag() { assert!(false); }\n",
+    );
+    rig.reviewer(12).script_read(Ok(vec![
+        finding("one.txt", 2, "the first ticket reads a file it never opens")
+            .with_test("tests/flag.rs"),
+    ]));
+    rig.reviewer(13).script_read(Ok(vec![finding(
+        "two.txt",
+        3,
+        "the second ticket drops what it wrote",
+    )]));
+    rig.launches.script([Exit {
+        code: 101,
+        output: b"the flag is not read".to_vec(),
+    }]);
+
+    // The first read has each head wait for its checks to register, and the next reads them
+    rig.columns();
+    rig.until_passed();
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2 && rig.prompts(&two).len() == 2
+    });
+
+    let ran = rig.launches.ran();
+    assert_eq!(
+        ran.len(),
+        1,
+        "one test was written, so one was run: {ran:?}"
+    );
+    assert_eq!(
+        ran[0].cwd,
+        rig.paths().worktree("12"),
+        "and it ran in the worktree of the ticket whose reviewer wrote it"
+    );
+    assert!(
+        !ran[0].cwd.starts_with(rig.paths().worktree("13")),
+        "never in the other ticket's"
+    );
+    assert!(
+        rig.prompts(&one)[1].contains("tests/flag.rs"),
+        "the first worker was sent its finding with its test: {}",
+        rig.prompts(&one)[1]
+    );
+    assert!(
+        !rig.prompts(&two)[1].contains("tests/flag.rs"),
+        "the second worker was sent no test"
     );
 }

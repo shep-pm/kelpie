@@ -27,6 +27,10 @@
 //! read holds a slot and the ticket stays in Review. With none free the read waits for the
 //! next GitHub read, which steps a Reviewing ticket too (`gate`).
 //!
+//! A reviewer's failing test is run by `act` through [`Testing`]: [`SandboxedTests`] runs each
+//! as `kelpie lease run cargo-test` in the worker's own sandbox policy, so it waits its turn
+//! behind the project's other test runs (`tests_run`).
+//!
 //! A head a catch-up pushed is vouched for when the head it replaced was read or vouched
 //! for ([`Review::vouched`]), as SK's `send_unread` does, so a caught-up head needs no new
 //! read.
@@ -53,8 +57,17 @@ mod act;
 mod open;
 #[cfg(test)]
 mod tests;
+mod tests_run;
 
 pub use open::{ReviewOpen, app_make, reviewer_open};
+pub use tests_run::{Exit, Gear, Kit, Launch, SandboxedTests, Testing, app_testing};
+
+/// The folder of the project's, beside its worker and review folders, that holds the kept
+/// copies of the reviewers' tests, the record of a test in a worktree and nothing else
+///
+/// The worker's policy writes its own state folder and no other, and a reviewer writes its
+/// build folder's tests folder, so neither can change what a later run reads.
+pub(crate) const KEPT: &str = "kept-tests";
 
 /// Builds one ticket's reviewer of one listed reviewer's own
 ///
@@ -97,6 +110,9 @@ pub struct Parts {
 
     /// What builds one ticket's reviewer
     pub make: Arc<Make>,
+
+    /// What runs a reviewer's test, and what it reaches
+    pub testing: Testing,
 }
 
 // The ports are closures and trait objects, which no derive can print
@@ -120,6 +136,7 @@ pub struct Review {
     clock: Arc<dyn Clock>,
     fix: Fix,
     make: Arc<Make>,
+    testing: Testing,
 
     /// What each ticket's pass keeps, and `review.json`, which holds it
     book: Mutex<Book>,
@@ -228,6 +245,7 @@ impl Review {
             clock: parts.clock,
             fix: parts.fix,
             make: parts.make,
+            testing: parts.testing,
             book: Mutex::new(book),
         })
     }

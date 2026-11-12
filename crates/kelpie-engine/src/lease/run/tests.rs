@@ -33,6 +33,25 @@ fn a_run_that_names_no_command_is_usage() {
     }
 }
 
+#[test]
+fn the_bound_is_what_the_environment_names_and_never_more_than_the_run_limit() {
+    let var = |text: &str| Some(OsString::from(text));
+    assert_eq!(limit_from(None), RUN_LIMIT);
+    assert_eq!(limit_from(var("30").as_deref()), Duration::from_secs(30));
+    assert_eq!(
+        limit_from(var("999999").as_deref()),
+        RUN_LIMIT,
+        "a command cannot ask for a longer hold than the run's own limit"
+    );
+    for unreadable in ["", "soon", "-5", "0"] {
+        assert_eq!(
+            limit_from(var(unreadable).as_deref()),
+            RUN_LIMIT,
+            "{unreadable:?}"
+        );
+    }
+}
+
 fn os(words: &[&str]) -> Vec<OsString> {
     words.iter().map(|word| OsString::from(*word)).collect()
 }
