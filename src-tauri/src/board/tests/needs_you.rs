@@ -2,10 +2,11 @@
 
 use std::collections::BTreeSet;
 
+use kelpie_engine::gate::Line;
 use kelpie_engine::worker::Status;
 use kelpie_protocol::{SessionEvent, StopReason};
 
-use super::{BoardEvent, BoardView, Rig, Source, TicketView, listed};
+use super::{BoardEvent, BoardView, Rig, Source, TicketView, gate_lines, listed};
 
 /// A rig whose board lists tickets 12 and 13, both with workers on them
 fn two_tickets() -> Rig {
@@ -181,4 +182,28 @@ fn a_ticket_the_gate_found_ready_to_merge_says_so_beside_its_other_lines() {
     );
     assert!(ticket(&board, "13").needs_you.is_empty());
     assert_eq!(board.needs_you, 2);
+}
+
+#[test]
+fn a_ready_ticket_with_an_unread_head_names_it_on_the_line() {
+    let mut rig = two_tickets();
+    // The gate worked out the warning on its way to the yes, and the yes is asked from here
+    let warning = "ccccccc was pushed after the last review read, which was of aaaaaaa.";
+    let board = gate_lines(
+        &mut rig,
+        &[(
+            "12",
+            Line::ReadyToMerge {
+                warning: Some(warning.to_owned()),
+            },
+        )],
+        &["12"],
+    );
+
+    assert_eq!(
+        ticket(&board, "12").needs_you,
+        [format!("Ready to merge, unread: {warning}")]
+    );
+    assert!(ticket(&board, "13").needs_you.is_empty());
+    assert_eq!(board.needs_you, 1);
 }

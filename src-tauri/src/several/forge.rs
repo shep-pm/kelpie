@@ -67,6 +67,9 @@ struct State {
     issues: BTreeMap<TicketId, Stored>,
     pulls: Vec<Pull>,
 
+    /// Each comment left on an issue or a pull request, oldest first, as GitHub keeps them
+    comments: Vec<(TicketId, String)>,
+
     /// The commit each branch holds on the forge, which is what a push leaves there
     heads: BTreeMap<String, String>,
 
@@ -142,6 +145,11 @@ impl Github {
         self.state().pulls.clone()
     }
 
+    /// Each comment left on the forge, oldest first, by what it was left on
+    pub(super) fn comments(&self) -> Vec<(TicketId, String)> {
+        self.state().comments.clone()
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -180,13 +188,19 @@ impl Tickets for Github {
             .collect())
     }
 
-    // Nothing reads a comment back yet, so the stand-in checks the issue is there
-    fn comment(&self, id: &TicketId, _body: &str) -> Result<(), ForgeError> {
-        self.state()
-            .issues
-            .contains_key(id)
-            .then_some(())
-            .ok_or(ForgeError::NoIssue { ticket: *id })
+    // A comment goes on an issue or, as GitHub reads a pull request as an issue, on a pull
+    // request, and is kept for a case to read back
+    fn comment(&self, id: &TicketId, body: &str) -> Result<(), ForgeError> {
+        let mut state = self.state();
+        let on = state.issues.contains_key(id)
+            || id
+                .github()
+                .is_some_and(|number| state.pulls.iter().any(|pull| pull.number.get() == number));
+        if !on {
+            return Err(ForgeError::NoIssue { ticket: *id });
+        }
+        state.comments.push((*id, body.to_owned()));
+        Ok(())
     }
 
     fn close(&self, id: &TicketId) -> Result<(), ForgeError> {

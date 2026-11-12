@@ -119,6 +119,14 @@ pub enum Ruling {
         /// What is off, as [`off_text`] says it
         what: String,
     },
+    /// The comment of the disputes no reader was shown names this machine, so it cannot be
+    /// posted, and they stay unshown
+    DisputesLocal {
+        /// How many the comment holds
+        count: usize,
+        /// What names this machine, as [`crate::local_paths::Leak`] says it
+        what: String,
+    },
 }
 
 impl Ruling {
@@ -152,6 +160,13 @@ impl Ruling {
             Self::NotPushed { what } => format!(
                 "The worker's worktree is still not the pushed head after its turn to push: \
                  {what}. The review waits for it."
+            ),
+            Self::DisputesLocal { count, what } => format!(
+                "The worker disputed {} that no reviewer read again, and kelpie cannot post \
+                 them on the pull request: {what}. A Note tells the worker to write its reason \
+                 again in {}, without naming a path on this machine.",
+                findings_of(*count),
+                super::findings_file::DISPUTED_FILE
             ),
         }
     }

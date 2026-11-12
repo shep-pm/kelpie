@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::findings_file::{Sent, deferred_with_reasons, disputed};
+use super::findings_file::{Disputed, Sent, deferred_with_reasons, disputed};
 use super::{Finding, severity_tag};
 
 /// A finding the worker disputed in a round, and the worker's reason
@@ -157,6 +157,36 @@ pub fn mark_shown(disputes: &mut [Dispute]) {
     for dispute in disputes {
         dispute.shown = true;
     }
+}
+
+/// Each kept dispute with the reason the round's file holds now, and whether any changed
+///
+/// A worker told to give its reason again writes it in the disputed findings file, so the
+/// next yes posts what it wrote and not the reason that was refused. A kept dispute whose
+/// file reason differs takes the file's and is no longer shown, so the rewritten reason goes
+/// to the next reader or onto the pull request. A file that says the same as what is kept
+/// changes nothing, so a dispute a reader was shown, or one already posted, is not raised
+/// again. A finding the file no longer names keeps what is kept.
+pub fn refresh(disputes: &mut [Dispute], from_file: &[Disputed]) -> bool {
+    let mut changed = false;
+    for dispute in disputes {
+        let Some(read) = from_file
+            .iter()
+            .find(|read| read.finding.is_same_as(&dispute.finding))
+        else {
+            continue;
+        };
+        let Some(reason) = &read.reason else {
+            continue;
+        };
+        if reason == &dispute.reason {
+            continue;
+        }
+        dispute.reason = reason.clone();
+        dispute.shown = false;
+        changed = true;
+    }
+    changed
 }
 
 /// The comment that tells the maintainer of the disputes no reader was shown,
