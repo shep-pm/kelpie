@@ -5,10 +5,11 @@
 //! and asserts only what a person could see: the board's columns, the pull requests
 //! opened, and the prompts each worker got. No case needs `gh`, the network or a model.
 
+use kelpie_engine::ci::HeadStatus;
 use kelpie_engine::session::fake::{FakeAgent, Turn};
 use kelpie_engine::worker::Status;
 
-use super::Rig;
+use super::{Rig, SETTLE};
 use crate::board::Column;
 use crate::workers::{NoteOutcome, WorkerStarted};
 
@@ -251,5 +252,59 @@ fn a_push_to_the_base_catches_up_both_review_tickets() {
         rig.columns(),
         [("12".into(), Column::Review), ("13".into(), Column::Review)],
         "both tickets stay in Review",
+    );
+}
+
+#[test]
+fn a_red_run_on_one_ticket_sends_only_that_worker_a_fix_turn() {
+    let rig = Rig::new(2);
+    // The first ticket's fix turn keeps working, so its ticket is in Building to be seen
+    let one = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("fixing").until_cancelled());
+    let two = FakeAgent::new();
+    rig.ticket(12, "Add the thing", "It does one.", &one);
+    rig.ticket(13, "Fix the other", "It does two.", &two);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    let first = rig.push_work(12, "one.txt");
+    let second = rig.push_work(13, "two.txt");
+    // CI fails one ticket in a file it changed, and passes the other
+    rig.fails(12, &first, "test", "assertion failed at one.txt:4");
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    assert_eq!(
+        second,
+        rig.origin("kelpie/13"),
+        "the other ticket is pushed"
+    );
+
+    // The first read has each head wait for its checks to register, and the next reads them.
+    // A pass that could not read git waits for the next read, so the read is asked again.
+    rig.columns();
+    rig.until_passed();
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2
+    });
+    let prompt = &rig.prompts(&one)[1];
+    assert!(prompt.contains("test"), "{prompt}");
+    assert!(prompt.contains("assertion failed at one.txt:4"), "{prompt}");
+    assert_eq!(
+        rig.prompts(&two).len(),
+        1,
+        "the passing ticket's worker got nothing after its first turn"
+    );
+    assert_eq!(
+        rig.columns(),
+        [
+            ("12".into(), Column::Building),
+            ("13".into(), Column::Review)
+        ],
+        "the fix turn moves its ticket back to Building and the other stays in Review",
     );
 }

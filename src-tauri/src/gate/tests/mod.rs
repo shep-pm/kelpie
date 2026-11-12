@@ -7,6 +7,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod red;
 mod rig;
 
 use kelpie_engine::ci::{HeadStatus, Queued};
