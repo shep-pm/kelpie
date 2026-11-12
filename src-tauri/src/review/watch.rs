@@ -11,6 +11,12 @@
 //! order the reads began with a line naming each read after the first. That line is the
 //! divider the tab shows between two reads.
 //!
+//! A read is named by the look seated on its own round ([`Reads::seated`]), the round being
+//! the first with no log yet, which is the one its session opens its log on. A read that
+//! never started leaves its round free, so the line above a log always names the read that
+//! wrote it, and a feed made after a relaunch names the reads it was told about by the logs
+//! they left rather than by their order in the feed.
+//!
 //! The counting is the worker feed's ([`crate::workers::Feed`]): a session writes an event
 //! to its log before it reaches the read's sink, so an event can be in a log and not yet
 //! forwarded when a watcher reads it. The feed counts the events it has forwarded and the
@@ -48,7 +54,7 @@ struct Watcher {
     skip: usize,
 }
 
-/// One read that streamed into a feed
+/// One read the feed was told about, held by the round it was seated on
 #[derive(Debug, Clone)]
 struct Look {
     /// The reviewer, as the project lists it
@@ -62,8 +68,11 @@ struct Look {
 struct Inner {
     watchers: Vec<Watcher>,
 
-    /// Each read that streamed into this feed, oldest first
-    looks: Vec<Look>,
+    /// Each read the feed was told about, by the round it was seated on
+    ///
+    /// A round is a read's own number, the log it writes. A read seated on one and never run
+    /// leaves it free, and the read that takes the round takes its look with it.
+    looks: BTreeMap<u32, Look>,
 
     /// The events the read logs held when the feed began, plus the ones forwarded since
     seen: usize,
@@ -96,8 +105,8 @@ fn events_in(entries: &[LogEntry]) -> usize {
 
 /// What the line above a read says
 ///
-/// A read that streamed into the feed before this feed existed has no name kept here, so
-/// its line counts it instead of naming it.
+/// A read that ran before this feed existed has no look seated on its round, so its line
+/// counts it instead of naming it.
 fn named(look: Option<&Look>, round: u32) -> String {
     match look {
         Some(look) if look.second => format!("{} reads again", look.name),
@@ -115,7 +124,7 @@ impl Feed {
         Self {
             inner: Mutex::new(Inner {
                 watchers: Vec::new(),
-                looks: Vec::new(),
+                looks: BTreeMap::new(),
                 seen: logged,
             }),
         }
@@ -146,24 +155,34 @@ impl Feed {
         });
     }
 
-    /// A read by `name` began, so its events go to this feed
+    /// A read by `name` is seated on the round `round`, whose log it writes
     ///
-    /// `second` is a second look, which the line above it says.
-    pub fn began(&self, name: &str, second: bool) {
-        self.lock().looks.push(Look {
-            name: name.to_owned(),
-            second,
-        });
+    /// `second` is a second look, which the line above it says. A read seated here and never
+    /// run leaves its look on its round, and the read that takes that round takes its look,
+    /// so the line naming a read always says who wrote its log.
+    pub fn began(&self, round: u32, name: &str, second: bool) {
+        let mut inner = self.lock();
+        inner.looks.insert(
+            round,
+            Look {
+                name: name.to_owned(),
+                second,
+            },
+        );
     }
 
-    /// The reviewer of the last read that streamed in, `None` before the first
+    /// The reviewer of the highest round seated here, `None` before the first
     #[must_use]
     pub fn reading(&self) -> Option<String> {
-        self.lock().looks.last().map(|look| look.name.clone())
+        self.lock()
+            .looks
+            .values()
+            .next_back()
+            .map(|look| look.name.clone())
     }
 
-    /// Each read this feed has had, oldest first, for the line naming a replayed read
-    fn looks(&self) -> Vec<Look> {
+    /// Each read seated here, by round, for the line naming a replayed read
+    fn looks(&self) -> BTreeMap<u32, Look> {
         self.lock().looks.clone()
     }
 
@@ -250,15 +269,40 @@ impl Reads {
         log::read(self.log_file(ticket, round)).unwrap_or_default()
     }
 
+    /// The round read `ticket` is about to run writes, the first with no log yet
+    ///
+    /// This is the round its session opens its log on
+    /// (`kelpie_engine::review::session::SessionReviewer::next_log`), which is why seating a
+    /// read here names the log it leaves.
+    fn next_round(&self, ticket: &str) -> u32 {
+        (1..)
+            .find(|round| !self.log_file(ticket, *round).exists())
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Seat the read `ticket` is about to run, by `name`, on the round its log will be, and
+    /// answer the feed its events go to
+    ///
+    /// A read is seated before its session opens, which is before its log exists, so a read
+    /// that never started leaves its round free for the one that runs next, and that one
+    /// takes the look with it.
+    pub fn seated(&self, ticket: &str, name: &str, second: bool) -> Arc<Feed> {
+        let feed = self.feed(ticket);
+        let round = self.next_round(ticket);
+        feed.began(round, name, second);
+        feed
+    }
+
     /// Every read `ticket` has had, oldest first, with the line naming each one after the first
     ///
-    /// `looks` is each read the feed had when the channel attached, so a read it saw is
-    /// named and one it did not is counted.
+    /// `looks` is each read the feed had when the channel attached, by round, so a read it
+    /// was told about is named by the look seated on its own round, and one it was not is
+    /// counted.
     ///
     /// # Errors
     ///
     /// A read's log cannot be read, or holds a line that is not an entry.
-    fn past(&self, ticket: &str, looks: &[Look]) -> Result<Vec<LogEntry>, String> {
+    fn past(&self, ticket: &str, looks: &BTreeMap<u32, Look>) -> Result<Vec<LogEntry>, String> {
         let mut entries = Vec::new();
         for round in 1.. {
             let file = self.log_file(ticket, round);
@@ -270,7 +314,7 @@ impl Reads {
             })?;
             if round > 1 {
                 entries.push(LogEntry::Divider {
-                    text: named(looks.get((round - 1) as usize), round),
+                    text: named(looks.get(&round), round),
                 });
             }
             entries.extend(log);
@@ -311,12 +355,13 @@ impl Reads {
 }
 
 impl Review {
-    /// The channels watching `ticket`'s reads, made on the first ask
+    /// Seat the read `ticket` is about to run, by `name`, on the round its log will be, and
+    /// answer the feed its events go to
     ///
-    /// A read's sink forwards its events here, so a tab open while it runs follows it.
-    #[must_use]
-    pub(crate) fn feed(&self, ticket: &str) -> Arc<Feed> {
-        self.feeds.feed(ticket)
+    /// `second` is a second look, which the line above it says. Seat the read before its
+    /// session opens, which is before its log exists.
+    pub(crate) fn seated(&self, ticket: &str, name: &str, second: bool) -> Arc<Feed> {
+        self.feeds.seated(ticket, name, second)
     }
 
     /// The logs of `ticket`'s reads, and `send` attached to follow the read in flight live

@@ -102,10 +102,10 @@ impl Review {
             .test_command
             .is_some()
             .then(|| review::tests_folder(&look.build));
-        // The read's events go to its ticket's feed, so a tab open on the card follows it
-        // (`docs/design/review.md`, What the maintainer sees)
-        let feed = self.feed(at.ticket);
-        feed.began(name, first.is_some());
+        // The read's events go to its ticket's feed, so a tab open on the card follows it,
+        // and the read is seated on the round its log will be, which is the line naming it
+        // there (`docs/design/review.md`, What the maintainer sees)
+        let feed = self.seated(at.ticket, name, first.is_some());
         let sink = |event: SessionEvent| feed.forward(event);
         let outcome = reviewer.read(&review::Read {
             prompt: &prompt,

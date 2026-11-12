@@ -71,13 +71,23 @@ fn divider(text: &str) -> LogEntry {
     }
 }
 
-/// Read `round` as its session begins it: the read is seated, its log opened, and its
-/// prompt written
-fn began(reads: &Reads, paths: &Paths, round: u32, second: bool, said: &str) -> Log {
-    reads.feed(TICKET).began(REVIEWER, second);
+/// Read `round` by `name` as its session begins it: the read is seated on its round, its
+/// log opened, and its prompt written
+fn read_by(reads: &Reads, paths: &Paths, round: u32, name: &str, second: bool, said: &str) -> Log {
+    reads.seated(TICKET, name, second);
     let log = Log::open(paths.review_log_file(TICKET, round)).unwrap();
     log.append(&prompt(said)).unwrap();
     log
+}
+
+/// Read `round` by the project's one reviewer, as its session begins it
+fn began(reads: &Reads, paths: &Paths, round: u32, second: bool, said: &str) -> Log {
+    read_by(reads, paths, round, REVIEWER, second, said)
+}
+
+/// A read that was seated and never ran: no session, so no log
+fn never_ran(reads: &Reads, name: &str, second: bool) {
+    reads.seated(TICKET, name, second);
 }
 
 /// One event of a running read, in the order the session sends it: written to its log, then
@@ -87,9 +97,17 @@ fn streamed(reads: &Reads, log: &Log, event: SessionEvent) {
     reads.feed(TICKET).forward(event);
 }
 
-/// A read that ended its turn, as the pass ran it whole before the tab opened
-fn read_ended(reads: &Reads, paths: &Paths, round: u32, second: bool, said: &str, delta: &str) {
-    let log = began(reads, paths, round, second, said);
+/// A read by `name` that ended its turn, as the pass ran it whole before the tab opened
+fn read_ended(
+    reads: &Reads,
+    paths: &Paths,
+    round: u32,
+    name: &str,
+    second: bool,
+    said: &str,
+    delta: &str,
+) {
+    let log = read_by(reads, paths, round, name, second, said);
     streamed(reads, &log, text(delta));
     streamed(
         reads,
@@ -99,6 +117,17 @@ fn read_ended(reads: &Reads, paths: &Paths, round: u32, second: bool, said: &str
             usage: None,
         },
     );
+}
+
+/// The lines a replay put between its reads, in order
+fn dividers(entries: &[LogEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LogEntry::Divider { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -168,7 +197,15 @@ fn an_unwatch_stops_the_stream_and_the_read_goes_on() {
 #[test]
 fn a_second_look_streams_into_the_same_feed_after_a_divider() {
     let (paths, reads) = reads();
-    read_ended(&reads, &paths, 1, false, "Read the diff", "a finding");
+    read_ended(
+        &reads,
+        &paths,
+        1,
+        REVIEWER,
+        false,
+        "Read the diff",
+        "a finding",
+    );
     let first = reads.feed(TICKET);
     let log = began(&reads, &paths, 2, true, "Read it again");
 
@@ -201,5 +238,84 @@ fn a_second_look_streams_into_the_same_feed_after_a_divider() {
         kept(&ch),
         [text("and one more")],
         "and the read in flight streams onto the channel the tab is watching"
+    );
+}
+
+#[test]
+fn a_read_that_never_ran_leaves_its_round_to_the_read_that_wrote_the_log() {
+    let (paths, reads) = reads();
+    // The read's harness or sandbox refused to start, so it left no log behind it
+    never_ran(&reads, "first:reviewer", false);
+    // The pass stepped the ticket again, and this read ran on the same round
+    read_ended(
+        &reads,
+        &paths,
+        1,
+        "second:reviewer",
+        false,
+        "Read the diff",
+        "a finding",
+    );
+    read_ended(
+        &reads,
+        &paths,
+        2,
+        "third:reviewer",
+        true,
+        "Read it again",
+        "one more",
+    );
+
+    let (_ch, send) = taken();
+    let past = reads.watch(TICKET, 1, send).unwrap();
+
+    assert_eq!(
+        dividers(&past),
+        ["third:reviewer reads again"],
+        "the line above a log names the read that wrote it, not the one that never ran"
+    );
+}
+
+#[test]
+fn a_feed_made_after_a_relaunch_names_each_read_by_the_log_it_left() {
+    let (paths, before) = reads();
+    read_ended(
+        &before,
+        &paths,
+        1,
+        REVIEWER,
+        false,
+        "Read the diff",
+        "a finding",
+    );
+
+    // kelpie quit and started again: the feeds are new, the logs are not
+    let reads = Reads::new(&paths);
+    read_ended(
+        &reads,
+        &paths,
+        2,
+        REVIEWER,
+        true,
+        "Read it again",
+        "one more",
+    );
+    read_ended(
+        &reads,
+        &paths,
+        3,
+        "other:reviewer",
+        false,
+        "One more read",
+        "nothing more",
+    );
+
+    let (_ch, send) = taken();
+    let past = reads.watch(TICKET, 1, send).unwrap();
+
+    assert_eq!(
+        dividers(&past),
+        ["kelpie:reviewer reads again", "other:reviewer reads",],
+        "each read is named by the look seated on its own round, not by its place in the feed"
     );
 }
