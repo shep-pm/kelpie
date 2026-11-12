@@ -8,8 +8,13 @@
 //! ACP session of the reviewer, in its sandbox, with no command
 //! (`session`). Nothing calls it yet: the pass does.
 //!
-//! `fake::FakeReviewer` (under the `testing` feature) answers each read from a
-//! script for the code that reads the port.
+//! A reviewer's failing test (`docs/design/review.md`, A reviewer's failing test)
+//! is kept by [`checked_tests`], run through [`TestRunner`] by [`tests_before`]
+//! and [`tests_after`], and read as a [`Reading`]. Nothing here runs a test: the
+//! pass does.
+//!
+//! `fake::FakeReviewer` and `fake::FakeTestRunner` (under the `testing` feature)
+//! answer each read and each run from a script for the code that reads the ports.
 //!
 //! # Quick start
 //!
@@ -20,6 +25,10 @@
 //! assert_eq!(found[0].severity, Severity::High);
 //! ```
 
+mod attached;
+mod checks;
+#[cfg(test)]
+mod checks_tests;
 mod criteria;
 mod disputes;
 #[cfg(test)]
@@ -39,7 +48,13 @@ mod reviewer;
 mod session;
 #[cfg(test)]
 mod session_tests;
+mod test_runner;
 
+pub use attached::{Folders, checked_tests, kept_folder};
+pub use checks::{
+    Failing, Next, Reading, Setup, TestCheck, after_the_fix, clear_stranded, round_checks,
+    still_failing, tests_after, tests_before, was_sent_back,
+};
 pub use criteria::acceptance;
 pub use disputes::{Answers, Dispute, Settled, answers, comment, findings_of, mark_shown, record};
 pub use finding::{CLEAN, Finding, Severity, is_test_path, parse_findings, read_review};
@@ -53,3 +68,4 @@ pub use reviewer::{Read, Reviewer, ReviewerError};
 pub use session::{
     Open, Opening, ReviewProject, SessionReviewer, diff_against, open_on, write_tool,
 };
+pub use test_runner::{CEILING, OUTPUT_KEPT, TestOutcome, TestRun, TestRunner, tail};
