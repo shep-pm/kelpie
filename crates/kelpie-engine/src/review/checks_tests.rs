@@ -699,3 +699,59 @@ fn a_round_not_asked_for_tests_reads_the_fifth_field_as_part_of_why() {
     assert_eq!(found[0].why, "a caller sees nothing|tests/flag.rs");
     assert!(rig.said().is_empty());
 }
+
+#[test]
+fn a_name_a_command_would_read_as_an_option_is_recorded_not_run() {
+    let rig = Rig::new();
+    let found = rig.attached("tests/--help.rs", TEST_TEXT);
+
+    let checks = rig.before(&found);
+
+    let NotRun { reason } = &checks[0].before else {
+        panic!("{:?}", checks[0]);
+    };
+    assert!(reason.contains("tests/--help.rs"), "{reason}");
+    assert!(rig.tests.ran().is_empty(), "no command was built from it");
+}
+
+#[test]
+fn a_test_that_passed_before_the_fix_and_fails_after_it_blocks_nothing() {
+    for before in [
+        Passed,
+        NotRun {
+            reason: "the worktree is not at the head the reviewer read".into(),
+        },
+    ] {
+        let rig = Rig::new();
+        rig.tests.script([failed("after")]);
+        let found = rig.attached(TEST_FILE, TEST_TEXT);
+        let mut checks = vec![the_flag_check(before, None)];
+
+        let (_, first) = rig.after(&mut checks, &found);
+        let (_, second) = rig.after(&mut checks, &found);
+
+        assert_eq!(first, Next::Done);
+        assert_eq!(second, Next::Done);
+        assert!(!checks[0].sent_back);
+        assert!(still_failing(&checks, 2, &found).is_empty());
+    }
+}
+
+#[test]
+fn a_record_that_names_no_path_inside_the_worktree_is_reported_once_and_removed() {
+    for text in ["../x\n", "\n"] {
+        let rig = Rig::new();
+        std::fs::write(rig.record(), text).unwrap();
+        // No test to run, so nothing overwrites the record.
+        rig.before(&[finding()]);
+        rig.before(&[finding()]);
+
+        assert!(!rig.record().exists(), "the bad record is taken out");
+        let notes = rig.said();
+        assert_eq!(
+            notes.iter().filter(|n| n.contains("test-placed-7")).count(),
+            1,
+            "{notes:?}"
+        );
+    }
+}

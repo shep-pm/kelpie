@@ -224,8 +224,9 @@ pub fn after_the_fix(checks: &mut [TestCheck], round: u32, found: &[Finding]) ->
     Next::SendBack(tests)
 }
 
-/// The tests of `found` whose latest run after the fix failed, with the finding
-/// each is for and whether the worker was sent back to it
+/// The tests of `found` that failed before the fix and whose latest run after it
+/// failed too ([`Reading::StillFailing`]), with the finding each is for and
+/// whether the worker was sent back to it
 #[must_use]
 pub fn still_failing(checks: &[TestCheck], round: u32, found: &[Finding]) -> Vec<Failing> {
     found
@@ -233,6 +234,10 @@ pub fn still_failing(checks: &[TestCheck], round: u32, found: &[Finding]) -> Vec
         .filter_map(|finding| {
             let test = finding.test.clone()?;
             let check = &checks[latest(checks, round, finding)?];
+            // A test that did not fail before the fix never reproduced the finding.
+            if check.reading() != Reading::StillFailing {
+                return None;
+            }
             let Some(TestOutcome::Failed { output }) = &check.after else {
                 return None;
             };
@@ -325,7 +330,16 @@ pub fn clear_stranded(setup: &Setup<'_>, notes: &mut Vec<String>) {
             );
             left
         }
-        None => vec![format!("{name}: it names no path inside the worktree")],
+        // Nothing of the worktree's to take out, and the record would be read again.
+        None => match std::fs::remove_file(&record) {
+            Ok(()) => {
+                notes.push(format!(
+                    "ticket {ticket}: kelpie was stopped during a test run, and {name} named no path inside the worktree, so it was removed"
+                ));
+                return;
+            }
+            Err(e) => vec![format!("{name}: it names no path inside the worktree: {e}")],
+        },
     };
     notes.push(match left.is_empty() {
         true => format!(
@@ -409,6 +423,13 @@ fn fill(template: &str, test: &str) -> Result<String, String> {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or_else(|| format!("the path {test} has no file name"))?;
+    // `{name}` is the stem, and a stem can read as an option where the path cannot:
+    // `tests/--help.rs` is a plain path.
+    if name.starts_with('-') {
+        return Err(format!(
+            "the path {test} has a file name a command would read as an option, so no command is built from it"
+        ));
+    }
     let command = template.replace("{test}", test).replace("{name}", name);
     // An empty command is a shell that exits 0 having run nothing.
     match command.trim().is_empty() {
