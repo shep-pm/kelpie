@@ -4,8 +4,10 @@
 //! Findings and Reviewers). [`Finding`] is one of them, [`parse_findings`] and
 //! [`read_review`] turn a reply's text into the list, and [`Reviewer`] is the port
 //! a read runs through, so the pass asks one thing whatever stands behind it.
-//! Nothing here starts a session: a session that reads stands behind [`Reviewer`]
-//! in its own slice.
+//! [`Review`] is where one pass stands, and [`Lineup`] says which reviewer reads
+//! next and when the pass has its reads. Nothing here starts a session: a session
+//! that reads stands behind [`Reviewer`] in its own slice, and the step that runs
+//! a pass is another.
 //!
 //! A reviewer's failing test (`docs/design/review.md`, A reviewer's failing test)
 //! is kept by [`checked_tests`], run through [`TestRunner`] by [`tests_before`]
@@ -40,6 +42,12 @@ mod finding_tests;
 mod findings_file;
 #[cfg(test)]
 mod findings_file_tests;
+mod lineup;
+#[cfg(test)]
+mod lineup_tests;
+mod pass;
+#[cfg(test)]
+mod pass_tests;
 mod prompt;
 #[cfg(test)]
 mod prompt_tests;
@@ -59,6 +67,8 @@ pub use findings_file::{
     deferred_path, deferred_with_reasons, disputed, disputed_path, findings_path, fix_prompt,
     still_failing_prompt, tests_folder, write_findings_file,
 };
+pub use lineup::{LeftOut, Lineup, Listed, RULE_READS, touches};
+pub use pass::{ROUND_FAILURES, Review, ReviewStage, both_looks};
 pub use prompt::{TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
 pub use reviewer::{Read, Reviewer, ReviewerError};
 pub use test_runner::{CEILING, OUTPUT_KEPT, TestOutcome, TestRun, TestRunner, tail};
