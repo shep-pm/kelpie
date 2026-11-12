@@ -177,7 +177,7 @@ pub struct Agent {
 
 /// What an agent runs as: kelpie's own, the global file of its name, then the project's setting
 ///
-/// [`Agents::pm_binding`] and [`Agents::worker_binding`] make one.
+/// [`Agents::pm_binding`], [`Agents::worker_binding`] and [`Agents::reviewer_binding`] make one.
 ///
 /// Each value is the nearest of the three layers that sets it, with that layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,6 +488,28 @@ impl Agents {
             model: project_over(worker.model, &settings.worker_model),
             effort: project_over(worker.effort, &settings.worker_effort),
             body: worker.body,
+        })
+    }
+
+    /// What the reviewer of file `name` runs as for a project: its `extends` chain, then the project's Reviewer harness, model and effort rows
+    ///
+    /// The project's rows are the fields `settings` holds for it. Where it sets
+    /// none, the agent file's own keys stand, and `kelpie:reviewer` names none.
+    ///
+    /// # Errors
+    ///
+    /// As [`Agents::reviewer`].
+    pub fn reviewer_binding(
+        &self,
+        name: &str,
+        settings: &Resolved,
+    ) -> Result<Binding, AgentsError> {
+        let reviewer = self.reviewer(name)?;
+        Ok(Binding {
+            harness: project_over(reviewer.harness, &settings.reviewer_harness),
+            model: project_over(reviewer.model, &settings.reviewer_model),
+            effort: project_over(reviewer.effort, &settings.reviewer_effort),
+            body: reviewer.body,
         })
     }
 }

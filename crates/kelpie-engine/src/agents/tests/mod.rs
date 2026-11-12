@@ -959,3 +959,62 @@ fn a_named_file_that_is_not_a_reviewer_is_refused_as_one() {
     assert!(missing.contains("nothing.md"), "{missing}");
     assert!(broken.contains("`colour`"), "{broken}");
 }
+
+#[test]
+fn the_reviewer_binding_takes_the_project_rows_over_the_agent_files_keys() {
+    let dir = Dir::new();
+    dir.put(
+        "strict.md",
+        "---\nrole: reviewer\nharness: goose\nmodel: file-model\neffort: low\n---\nRead hard.\n",
+    );
+    dir.put("quiet.md", "---\nrole: reviewer\nmodel: file-model\n---\n");
+    crate::settings::Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        crate::settings::Field::ReviewerModel,
+        &serde_json::json!("project-model"),
+    )
+    .unwrap();
+    crate::settings::Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        crate::settings::Field::ReviewerHarness,
+        &serde_json::json!("claude-code"),
+    )
+    .unwrap();
+    let agents = dir.load();
+    let web = Settings::load(&dir.config(), "web").unwrap();
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+
+    // The project's rows win over the file's keys, where the project sets one
+    let strict = agents.reviewer_binding("strict", &web).unwrap();
+    assert_eq!(strict.harness.value, Some(Harness::ClaudeCode));
+    assert_eq!(strict.harness.from, Origin::Project);
+    assert_eq!(strict.model.value.as_deref(), Some("project-model"));
+    assert_eq!(strict.model.from, Origin::Project);
+    // A row the project leaves unset keeps the file's key
+    assert_eq!(strict.effort.value.as_deref(), Some("low"));
+    assert_eq!(strict.effort.from, Origin::File("strict".to_owned()));
+    assert_eq!(strict.body.value.as_deref(), Some("Read hard."));
+
+    // A project that sets none sees the file's keys alone
+    let strict = agents.reviewer_binding("strict", &other).unwrap();
+    assert_eq!(strict.harness.value, Some(Harness::Goose));
+    assert_eq!(strict.model.value.as_deref(), Some("file-model"));
+
+    // kelpie:reviewer names no harness, so a project's row is the only one
+    let shipped = agents.reviewer_binding("reviewer", &other).unwrap();
+    assert_eq!(shipped.harness.value, None);
+    assert_eq!(
+        agents
+            .reviewer_binding("quiet", &web)
+            .unwrap()
+            .model
+            .value
+            .as_deref(),
+        Some("project-model")
+    );
+
+    // A name that is no reviewer is refused as `Agents::reviewer` refuses it
+    assert!(agents.reviewer_binding("nobody", &web).is_err());
+}
