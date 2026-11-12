@@ -9,19 +9,10 @@
 
 use std::path::Path;
 
-use super::{CLEAN, Finding, Severity};
+use super::{CLEAN, Dispute, Finding, Severity};
 
 /// The most of a pull request's body a reader is given, in bytes, the end of it
 const MOST_BODY: usize = 4000;
-
-/// A finding the worker disputed, and the worker's reason
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Dispute {
-    /// The finding, as an earlier reader raised it
-    pub finding: Finding,
-    /// Why the worker says it is wrong
-    pub reason: String,
-}
 
 /// What a reviewer is asked of tests on a project with a test command
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
