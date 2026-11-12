@@ -35,6 +35,12 @@ pub fn app_open() -> Arc<Open> {
 }
 
 impl Workers {
+    /// The gate of the project `project_id` if one has been built, `None` before its board is watched
+    #[must_use]
+    pub fn gate_of(&self, project_id: &str) -> Option<Arc<Gate>> {
+        lock(&self.gates).get(project_id).cloned()
+    }
+
     /// The gate of the project `project_id`, whose checkout is `folder`, built on the first ask
     ///
     /// `tools` and `open` are what a fix turn starts a worker's session with, and `clock`

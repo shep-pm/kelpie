@@ -134,6 +134,7 @@ function onBoard(needsYou: string[]) {
         url: "https://github.com/o/r/issues/13",
         pull_url: null,
         needs_you: needsYou,
+        gate: null,
       },
     ],
   };

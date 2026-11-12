@@ -776,7 +776,7 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
     kept.merge_refused();
     kept.removals_seen(2);
     kept.pull = Some(12);
-    kept.ruled_at(OTHER, REASON);
+    kept.ruled_at(OTHER, REASON, None);
     kept.ready_at(HEAD);
     book.entry(local).pushed(OTHER);
     book.save().unwrap();
@@ -805,7 +805,7 @@ fn the_kept_facts_survive_a_reload_of_gate_json() {
 fn a_ruling_withdraws_ready_and_a_new_pass_gives_the_ruling_up() {
     let mut kept = Kept::default();
     kept.ready_at(HEAD);
-    kept.ruled_at(HEAD, REASON);
+    kept.ruled_at(HEAD, REASON, None);
     assert_eq!(kept.ready, None);
     assert!(kept.rules_with(Some(REASON)));
     kept.unruled();
@@ -814,9 +814,40 @@ fn a_ruling_withdraws_ready_and_a_new_pass_gives_the_ruling_up() {
 }
 
 #[test]
+fn a_ruling_kept_in_the_book_is_the_line_a_relaunch_shows_with_its_link() {
+    let run = "https://github.com/o/r/actions/runs/7";
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(FILE);
+    let ticket: TicketId = "7".parse().unwrap();
+    let mut book = Book::load(file.clone()).unwrap();
+    book.entry(ticket).ruled_at(HEAD, REASON, Some(run));
+    book.save().unwrap();
+
+    let line = Book::load(file).unwrap().get(ticket).unwrap().ruled_line();
+
+    assert_eq!(
+        line,
+        Some(Line::Ruling {
+            reason: REASON.to_owned(),
+            link: Some(run.to_owned()),
+        })
+    );
+}
+
+#[test]
+fn a_ticket_with_no_ruling_or_a_ruling_given_up_has_no_kept_line() {
+    let mut kept = Kept::default();
+    assert_eq!(kept.ruled_line(), None);
+    kept.ruled_at(HEAD, REASON, Some("https://github.com/o/r/actions/runs/7"));
+    kept.unruled();
+    assert_eq!(kept.ruled_line(), None);
+    assert_eq!(kept.ruled_link, None);
+}
+
+#[test]
 fn a_wait_for_another_reason_is_not_the_gates_ruling() {
     let mut kept = Kept::default();
-    kept.ruled_at(HEAD, REASON);
+    kept.ruled_at(HEAD, REASON, None);
     assert!(!kept.rules_with(Some("A question: which way?")));
     assert!(!kept.rules_with(None));
 }
