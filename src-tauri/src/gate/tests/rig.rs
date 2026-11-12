@@ -325,10 +325,19 @@ impl Rig {
         let folder = self.state.config().path().join("agents");
         fs::create_dir_all(&folder).unwrap();
         fs::write(
-            folder.join(format!("{name}.md")),
+            self.agent_file(name),
             format!("---\nrole: reviewer{extra}\n---\n\nRead the diff and say what is wrong.\n"),
         )
         .unwrap();
+    }
+
+    /// The agent file `name` is read from, which a test can write what it likes into
+    pub(crate) fn agent_file(&self, name: &str) -> PathBuf {
+        self.state
+            .config()
+            .path()
+            .join("agents")
+            .join(format!("{name}.md"))
     }
 
     pub(crate) fn checkout(&self) -> PathBuf {

@@ -27,6 +27,9 @@ use crate::gate::tests::rig::Rig;
 /// The ticket the tests work on
 const TICKET: &str = "7";
 
+/// A ticket the rig's forge has no issue for, so its worker has no ticket text to start from
+const NO_ISSUE: &str = "9";
+
 /// How long the gate waits for CI's checks to register
 const SETTLE: u64 = 120;
 
@@ -100,7 +103,12 @@ fn until(mut ask: impl FnMut() -> bool) {
 /// A head is read twice: the first read starts the wait for its checks, and the second,
 /// [`SETTLE`] later, is the one the pass runs on.
 fn read_green(rig: &Rig, head: &str) {
-    let pull = rig.pull(TICKET, head, HeadStatus::Passed);
+    read_green_on(rig, TICKET, head);
+}
+
+/// [`read_green`] on `ticket`
+fn read_green_on(rig: &Rig, ticket: &str, head: &str) {
+    let pull = rig.pull(ticket, head, HeadStatus::Passed);
     rig.read(std::slice::from_ref(&pull));
     rig.clock.advance(SETTLE);
     rig.read(std::slice::from_ref(&pull));
@@ -115,8 +123,13 @@ fn green(rig: &Rig, file: &str) -> String {
 
 /// What the pass keeps of ticket 7
 fn kept(rig: &Rig) -> review::Kept {
+    kept_on(rig, TICKET)
+}
+
+/// What the pass keeps of `ticket`
+fn kept_on(rig: &Rig, ticket: &str) -> review::Kept {
     rig.review()
-        .kept(TICKET)
+        .kept(ticket)
         .expect("the pass keeps its facts of the ticket")
 }
 
@@ -431,7 +444,11 @@ fn a_fix_that_pushes_nothing_rules_fix_not_pushed_on_the_card() {
         "it is wrong, and it is in scope",
     )]));
     let head = green(&rig, "work.txt");
-    assert!(prompt(&rig, 0).is_some(), "the worker was sent the finding");
+    let sent = until_some(|| prompt(&rig, 0));
+    assert!(
+        sent.contains("it is wrong, and it is in scope"),
+        "the worker was sent the finding: {sent}"
+    );
 
     // Its turn ended with nothing pushed and nothing said of the finding
     ended(&rig);
@@ -583,4 +600,171 @@ fn a_pass_hands_the_ticket_back_to_the_gate_that_holds_it() {
         rig.gate.ready().contains(TICKET),
         "which is what lets the gate give the yes"
     );
+}
+
+/// A rig whose worker's turns end on their own, so a pass can send it a second fix turn
+fn rig_that_fixes() -> Rig {
+    let rig = Rig::new(
+        FakeAgent::new()
+            .turn(Turn::new().text("fixed"))
+            .turn(Turn::new().text("fixed again").until_cancelled()),
+    );
+    rig.reviewer_agent("reviewer", "\nsecond_look: false");
+    rig
+}
+
+/// Each round's test gets its run after its own fix, and an earlier round's run is not set again
+#[test]
+fn a_later_rounds_test_gets_its_run_after_its_own_fix() {
+    let rig = rig_that_fixes();
+    two_reviewers(&rig);
+    let reader = rig.reader(TICKET);
+    reader.script_read(Ok(vec![
+        finding(Severity::High, "work.txt", 2, "it is wrong").with_test("tests/first.rs"),
+    ]));
+    reader.script_read(Ok(vec![
+        finding(Severity::High, "fixed.txt", 3, "and so is this").with_test("tests/second.rs"),
+    ]));
+    green(&rig, "work.txt");
+
+    // The worker fixes round 1, and the second reviewer reads the head it pushed
+    ended(&rig);
+    let fixed = rig.commit(TICKET, "fixed.txt", "fixed\n");
+    read_green(&rig, &fixed);
+
+    // The worker fixes round 2, whose test has its run at the head that fix moved
+    ended(&rig);
+    let last = rig.commit(TICKET, "last.txt", "last\n");
+    read_green(&rig, &last);
+
+    let runs = kept(&rig)
+        .checks
+        .iter()
+        .map(|check| (check.round, check.after.is_some()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        runs,
+        [(1, true), (2, true)],
+        "each round's test has its run before the fix and after its own fix"
+    );
+    assert!(
+        rig.gate.ready().contains(TICKET),
+        "and the pass reached the merge yes instead of spinning on a run it never recorded"
+    );
+}
+
+/// A fix turn the worker was never sent leaves the pass at its findings, not at a fix to rule on
+#[test]
+fn a_fix_turn_that_cannot_start_leaves_the_findings_for_the_next_read() {
+    let rig = rig();
+    let reader = rig.reader(NO_ISSUE);
+    reader.script_read(Ok(vec![finding(
+        Severity::High,
+        "work.txt",
+        2,
+        "it is wrong, and it is in scope",
+    )]));
+    // The project has no issue 9, so its worker has no ticket text to start a turn from
+    let head = rig.worker_on(NO_ISSUE, "work.txt", "mine\n");
+    read_green_on(&rig, NO_ISSUE, &head);
+
+    let pass = kept_on(&rig, NO_ISSUE).review.expect("the pass");
+    assert!(
+        matches!(pass.stage, review::ReviewStage::Found { .. }),
+        "the pass is kept at the findings it could not send, not at the fix turn it never sent"
+    );
+    let record = rig.record(NO_ISSUE);
+    assert_eq!(record.status, Status::Ended, "the worker was never sent");
+    assert!(record.reason.is_none(), "and nothing is held against it");
+
+    // The next read runs the same step again rather than ruling a fix that pushed nothing
+    rig.clock.advance(SETTLE);
+    rig.read(&[rig.pull(NO_ISSUE, &head, HeadStatus::Passed)]);
+
+    let record = rig.record(NO_ISSUE);
+    assert_ne!(
+        record.status,
+        Status::WaitingOnMaintainer,
+        "no ruling of a fix that pushed nothing: {:?}",
+        record.reason
+    );
+    assert_eq!(
+        reader.prompts().len(),
+        1,
+        "and the reviewer read once, rather than being sent back to read again"
+    );
+}
+
+/// A pass whose reviewers cannot be read holds the ticket off the merge yes
+#[test]
+fn a_worker_plan_that_cannot_be_read_holds_the_ticket_off_the_merge_yes() {
+    let rig = rig();
+    // The project's own worker.md cannot be used, so the pass cannot read its reviewers
+    fs::write(
+        rig.agent_file("worker"),
+        "A worker with no frontmatter at all.\n",
+    )
+    .unwrap();
+    let head = green(&rig, "work.txt");
+
+    assert!(
+        rig.review()
+            .looked(TICKET, &head, &["work.txt".to_owned()])
+            .can_run,
+        "a pass that cannot read its reviewers still owes its reads"
+    );
+    assert!(
+        !rig.gate.ready().contains(TICKET),
+        "so the gate does not put up a head no reviewer read"
+    );
+    assert_eq!(
+        line(&rig),
+        Some("Reviewing, read 1 of 2".to_owned()),
+        "and its card says the pass is at work, not ready to merge"
+    );
+    assert!(
+        rig.reader(TICKET).prompts().is_empty(),
+        "and no reviewer read it"
+    );
+}
+
+/// A read in flight holds no lock another ticket's pass needs
+#[test]
+fn a_read_in_flight_leaves_another_tickets_pass_free() {
+    let rig = rig();
+    let held = rig.reader(TICKET);
+    held.hold();
+    held.script_read(Ok(Vec::new()));
+    let seven = rig.worker_on(TICKET, "work.txt", "mine\n");
+    let eight = rig.worker_on("8", "other.txt", "theirs\n");
+
+    // Ticket 7's pass reaches its read and is held there. Its first read only starts the
+    // wait for its checks, and the pass must be done before the second one is asked for
+    rig.gate.after_read(
+        &rig.records(),
+        &[rig.pull(TICKET, &seven, HeadStatus::Passed)],
+    );
+    rig.gate.idle();
+    rig.clock.advance(SETTLE);
+    rig.gate.after_read(
+        &rig.records(),
+        &[rig.pull(TICKET, &seven, HeadStatus::Passed)],
+    );
+    until(|| held.asked());
+
+    // Ticket 8's pass runs while 7's read is still in flight
+    rig.gate
+        .after_read(&rig.records(), &[rig.pull("8", &eight, HeadStatus::Passed)]);
+    let since = Instant::now();
+    while !rig.lines().contains_key("8") {
+        assert!(
+            since.elapsed() < Duration::from_secs(5),
+            "ticket 8's pass is held behind ticket 7's read"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    held.release();
+    rig.gate.idle();
+    assert_eq!(held.prompts().len(), 1, "and ticket 7's read ran on");
 }

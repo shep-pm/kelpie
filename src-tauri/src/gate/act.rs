@@ -113,7 +113,9 @@ impl Gate {
         };
         match self.review.step(&at) {
             Ran::Again => Carried::Again,
-            Ran::Held => Carried::Keep,
+            // A step that waited, or one that never ran and left the pass where it was,
+            // is the same to the gate: the ticket is held until the next read of GitHub
+            Ran::Held | Ran::Undone => Carried::Keep,
             Ran::Ruled(ruling) => {
                 let ruling = Ruling::Review(ruling);
                 let reason = ruling.reason();

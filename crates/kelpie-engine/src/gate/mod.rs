@@ -106,7 +106,9 @@ pub struct Look {
 /// vouches for is one its own fix turn pushed, which the pass has already read for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Reviewed {
-    /// A fix turn of the pass pushed this head, so the pass vouches for it and it needs no new read
+    /// A fix turn of the pass pushed this head, so the pass vouches for it and it needs no new read.
+    /// A pass still at work on the head is stepped whatever it vouches for, so a caller reports
+    /// this only when it has nothing pending on it.
     pub vouches: bool,
     /// The pass has a read left to run: it owes its reads and has a reviewer whose paths the diff touches
     pub can_run: bool,

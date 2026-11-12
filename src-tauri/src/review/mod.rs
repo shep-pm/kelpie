@@ -16,7 +16,10 @@
 //! the pass has not read ([`Review::looked`]), [`Review::step`] runs one step, and a step
 //! that leaves nothing to wait on hands the ticket back to the gate, which runs its order
 //! again. A step that sends the worker a turn, rules, or finds no slot free holds the
-//! ticket until the next read of GitHub.
+//! ticket until the next read of GitHub, and one that never ran at all, a fix turn the
+//! worker was never sent, leaves the pass exactly where it was, so the next read runs the
+//! same step instead of ruling on a turn that never happened. A read never holds the book
+//! of the project's passes, which every other ticket's pass reads while it is at work.
 //!
 //! A read takes a slot like any turn (`docs/design/workers.md`, Slots): the record is set
 //! [`kelpie_engine::worker::Status::Reviewing`] before the read and back to
@@ -156,6 +159,14 @@ pub enum Ran {
     /// The pass ruled, so the ticket's line is the ruling's reason and the gate holds it
     /// off its passes until its head moves
     Ruled(review::Ruling),
+
+    /// The step never ran, so the pass is kept where it was and the next read of GitHub
+    /// runs the same step again
+    ///
+    /// A turn the worker was never sent is the case this is for: the pass is kept at the
+    /// findings it could not send, rather than at the fix turn it is waiting on, which
+    /// would be ruled a fix that pushed nothing.
+    Undone,
 }
 
 /// What one step reads of the settings and the agent files
@@ -169,6 +180,21 @@ pub(super) struct Standing {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How many reads `pass` has had, which is what its line counts the next one from
+///
+/// The same rule as [`Lineup::reads`]: a reviewer the pass passed over counts for nothing.
+/// It is read here as well as through the lineup because a pass whose settings cannot be
+/// read still has to say where it stands.
+fn reads_had(pass: &Pass, passed_over: &[String]) -> u32 {
+    u32::try_from(
+        pass.ran
+            .iter()
+            .filter(|name| !passed_over.contains(name))
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 /// What a read came to, saying so when it failed
@@ -213,17 +239,30 @@ impl Review {
     /// turn of the pass pushed, goes to the pass before the merge yes.
     #[must_use]
     pub fn looked(&self, ticket: &str, head: &str, changed: &[String]) -> Reviewed {
-        let Some(standing) = self.standing(ticket) else {
-            return Reviewed::default();
-        };
         let book = lock(&self.book);
-        let kept = ticket.parse::<TicketId>().ok();
-        let kept = kept.and_then(|id| book.get(id));
+        let kept = ticket
+            .parse::<TicketId>()
+            .ok()
+            .and_then(|id| book.get(id).cloned());
+        drop(book);
+        let kept = kept.as_ref();
         let pass = kept
             .and_then(|kept| kept.review.clone())
             .unwrap_or_else(Pass::first);
-        let passed_over = kept.map_or(&[] as &[String], |kept| &kept.passed_over);
+        let passed_over: &[String] = kept.map_or(&[], |kept| &kept.passed_over);
         let heads = kept.map_or_else(review::Heads::default, |kept| kept.heads.clone());
+        let had = reads_had(&pass, passed_over);
+        let Some(standing) = self.standing(ticket) else {
+            // The reviewers cannot be read at all, which is no proof the pass has had its
+            // reads. The gate holds the ticket off the merge yes rather than saying
+            // "Ready to merge" of a head no reviewer read
+            return Reviewed {
+                vouches: heads.vouches_for(head),
+                can_run: true,
+                read: had + 1,
+                of: RULE_READS,
+            };
+        };
         // A round that has started, or a turn the pass is waiting on, has a step to run
         // whatever the lineup still owes: settling the worker's fix turn is a step, and a
         // pass that skipped it would give the yes on a round that never finished.
@@ -231,9 +270,13 @@ impl Review {
         let owed = !review::pass_ended(&pass, passed_over, &standing.lineup, changed);
         let can_run = started || owed;
         Reviewed {
-            vouches: heads.vouches_for(head),
+            // A head the pass pushed for is one it has read for, so it needs no new pass.
+            // A round of the pass that is still at work on that head is stepped all the
+            // same: its fix turn and its tests are the pass's own business, and a pass
+            // left off mid-round would end at the merge yes with its findings unsent.
+            vouches: heads.vouches_for(head) && !started,
             can_run,
-            read: standing.lineup.reads(&pass, passed_over) + u32::from(can_run),
+            read: had + u32::from(can_run),
             of: RULE_READS,
         }
     }
@@ -249,14 +292,26 @@ impl Review {
         let Some(look) = self.look(at) else {
             return Ran::Held;
         };
-        let mut book = lock(&self.book);
-        let id = at.ticket.parse();
-        let Ok(id) = id else {
+        let Ok(id) = at.ticket.parse::<TicketId>() else {
             return Ran::Held;
         };
-        let kept = book.entry(id);
-        let step = review::step(&look, kept, &standing.lineup, self.clock.now());
-        let ran = self.carry_out(at, &look, kept, &standing, step);
+        // The book is held only to read the ticket's facts and to write them back, never
+        // across the step: a read is a model session that can run for minutes, and the book
+        // is one per project, which every other ticket's pass reads to look at its own head.
+        // One pass per ticket at a time is the gate's own rule (`gate::Gate::take`), so
+        // nothing else is writing this ticket's facts while the step runs.
+        let before = lock(&self.book).get(id).cloned().unwrap_or_default();
+        let mut kept = before.clone();
+        let step = review::step(&look, &mut kept, &standing.lineup, self.clock.now());
+        let ran = self.carry_out(at, &look, &mut kept, &standing, step);
+        let kept = match ran {
+            // The step never ran, so the pass is kept where it was and the next read of
+            // GitHub runs the same step, rather than a ruling on a turn that was never sent
+            Ran::Undone => before,
+            _ => kept,
+        };
+        let mut book = lock(&self.book);
+        *book.entry(id) = kept;
         if let Err(why) = book.save() {
             eprintln!(
                 "kelpie: the review's facts of ticket {} did not keep: {why}",

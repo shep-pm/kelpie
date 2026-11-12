@@ -124,7 +124,9 @@ impl Review {
     /// Send the worker on `ticket` this turn: the round's findings, or the push it owes
     ///
     /// The findings file is written first, so the prompt the turn carries names a file that
-    /// is already there.
+    /// is already there. A turn that could not be sent at all is [`Ran::Undone`], which
+    /// leaves the pass at the findings it could not send rather than at the fix turn it is
+    /// waiting on: the worker is not blamed for a turn it never got (`Review::step`).
     fn sent(&self, at: &At<'_>, kept: &mut Kept, prompt: &str, findings: &[Finding]) -> Ran {
         if !findings.is_empty() {
             let round = kept.review.as_ref().map_or(1, |r| r.round);
@@ -134,7 +136,7 @@ impl Review {
                     "kelpie: ticket {}'s findings were not written: {why}",
                     at.ticket
                 );
-                return Ran::Held;
+                return Ran::Undone;
             }
         }
         match (self.fix)(at.ticket, prompt) {
@@ -144,7 +146,7 @@ impl Review {
                     "kelpie: ticket {}'s worker was not sent its review turn: {why}",
                     at.ticket
                 );
-                Ran::Held
+                Ran::Undone
             }
         }
     }
@@ -170,7 +172,10 @@ impl Review {
             let not_run = || TestOutcome::NotRun {
                 reason: NOT_RUN.to_owned(),
             };
-            match (kept.checks.iter().rev()).rposition(|c| c.is_for(round, finding)) {
+            // `rposition` is the last match, counted where the checks stand: an earlier
+            // round's check is a different finding's, and setting its run again would leave
+            // this round's waiting forever
+            match (kept.checks.iter()).rposition(|c| c.is_for(round, finding)) {
                 None => kept.checks.push(TestCheck {
                     file: finding.file.clone(),
                     line: finding.line,
