@@ -196,6 +196,32 @@ fn a_session_is_given_up_once_its_worker_cannot_be_told() {
 }
 
 #[test]
+fn a_reviewing_worker_keeps_its_session() {
+    let rig = Rig::new();
+    let session = Arc::new(Session::new(
+        rig.state.tree(),
+        SessionHarness::new("true"),
+        rig.dir.join("checkout"),
+        None,
+        Choice::default(),
+    ));
+    {
+        let records = rig.state.workers().records(&rig.project).unwrap();
+        let mut records = records.lock().unwrap();
+        let mut reading = Record::new("12", "kelpie/12");
+        reading.status = Status::Reviewing;
+        records.keep(reading).unwrap();
+        records.seat(1).unwrap();
+    }
+    rig.state.workers().keep(&rig.project, "12", session);
+
+    assert!(
+        rig.state.workers().session(&rig.project, "12").is_some(),
+        "a worker whose pull request is being read keeps its session, so the fix turn is the same conversation",
+    );
+}
+
+#[test]
 fn a_closed_issue_starts_nothing_and_says_so() {
     let rig = Rig::new();
     let tickets = FakeTickets::new();

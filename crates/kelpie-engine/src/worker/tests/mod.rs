@@ -519,6 +519,90 @@ fn a_worker_mid_turn_at_quit_is_paused_on_the_next_launch() {
     );
 }
 
+/// A project's records holding `list` as (ticket, status, seat), seated under `max`
+fn seated(rig: &Rig, list: &[(&str, Status, Seat)], max: usize) -> Records {
+    let mut records = Records::load(rig.paths.records()).unwrap();
+    for (ticket, status, seat) in list {
+        let mut record = Record::new(*ticket, format!("kelpie/{ticket}"));
+        (record.status, record.seat) = (*status, *seat);
+        records.keep(record).unwrap();
+    }
+    records.seat(max).unwrap();
+    records
+}
+
+fn standing_of(records: &Records, ticket: &str) -> (Status, Seat) {
+    let record = records.get(ticket).unwrap();
+    (record.status, record.seat)
+}
+
+#[test]
+fn a_reviewing_worker_needs_a_slot() {
+    let rig = Rig::new("reviewing needs");
+
+    let records = seated(&rig, &[("74", Status::Reviewing, Seat::Without)], 2);
+
+    assert!(Status::Reviewing.needs_slot());
+    assert_eq!(standing_of(&records, "74"), (Status::Reviewing, Seat::Held));
+}
+
+#[test]
+fn a_reviewing_worker_waits_in_line_when_no_slot_is_free() {
+    let rig = Rig::new("reviewing waits");
+    let mut records = seated(
+        &rig,
+        &[
+            ("1", Status::Running, Seat::Held),
+            ("2", Status::Reviewing, Seat::Without),
+        ],
+        1,
+    );
+    assert_eq!(
+        standing_of(&records, "2").1,
+        Seat::Waiting,
+        "no slot is free"
+    );
+
+    records.set_status("1", Status::Ended).unwrap();
+    records.seat(1).unwrap();
+
+    assert_eq!(
+        standing_of(&records, "2").1,
+        Seat::Held,
+        "the freed slot goes to the read"
+    );
+}
+
+#[test]
+fn a_reviewing_record_is_ended_at_relaunch_and_never_paused() {
+    let rig = Rig::new("reviewing relaunch");
+    let mut records = seated(
+        &rig,
+        &[
+            ("1", Status::Reviewing, Seat::Held),
+            ("2", Status::Reviewing, Seat::Waiting),
+            ("3", Status::Running, Seat::Held),
+        ],
+        2,
+    );
+
+    let paused = records.pause_mid_turn().unwrap();
+
+    assert_eq!(paused, ["3"], "only the cut-off turn is paused");
+    for ticket in ["1", "2"] {
+        assert_eq!(
+            standing_of(&records, ticket),
+            (Status::Ended, Seat::Without),
+            "the read in flight is gone, and the pass starts it again: ticket {ticket}"
+        );
+    }
+    assert_eq!(
+        Records::load(rig.paths.records()).unwrap().list(),
+        records.list(),
+        "the end is kept for the launch after that"
+    );
+}
+
 #[test]
 fn a_start_that_never_begins_gives_its_slot_back() {
     let rig = Rig::new("slot back");
@@ -696,40 +780,6 @@ fn the_record_sits_outside_every_folder_the_worker_writes() {
     assert!(
         !allowed.iter().any(|entry| held.contains(entry)),
         "no folder the worker may read holds the record: {allowed:?}"
-    );
-}
-
-#[test]
-fn the_instructions_carry_the_base_branch_and_the_hand_over_file() {
-    let rig = Rig::new("instructions");
-    let binding = binding_on("Run `{kelpie}` on `origin/{base}` and write {pull_request}.");
-    let agent = FakeAgent::new().turn(Turn::new().text("done"));
-    let open = |opening: &Opening<'_>| -> Result<Session, String> { Ok(on(&agent, opening)) };
-    let (sink, heard) = events();
-
-    let started = start(
-        &rig.project(&binding, &open, 2),
-        &ticket("74", "Build the thing"),
-        sink,
-    )
-    .unwrap();
-    assert!(matches!(started, Started::Running { .. }), "{started:?}");
-    until_turn_ends(&heard);
-
-    let prompt = agent.params("session/prompt")[0]["prompt"][0]["text"]
-        .as_str()
-        .expect("the prompt holds no text")
-        .to_owned();
-    assert!(prompt.contains("origin/main"), "{prompt:?}");
-    assert!(
-        prompt.contains(&rig.paths.pull_request_file("74").display().to_string()),
-        "{prompt:?}"
-    );
-    assert!(
-        !prompt.contains("{base}")
-            && !prompt.contains("{kelpie}")
-            && !prompt.contains("{pull_request}"),
-        "no placeholder reaches the worker: {prompt:?}"
     );
 }
 
@@ -936,6 +986,7 @@ fn entries(paths: &[&str]) -> Config {
 
 mod credential;
 mod hand_over;
+mod instructions;
 mod lease;
 mod needs_you;
 mod refused_sandbox;

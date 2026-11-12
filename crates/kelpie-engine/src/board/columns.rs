@@ -123,9 +123,13 @@ fn placed(entry: &Entry<'_>, workers: &[Record], pulls: &[OpenPull]) -> Placed {
         .min();
     // A worker waiting on the maintainer runs nothing and holds no slot, so with its
     // pull request open it is not live: its ticket stays in Review, where the wait
-    // shows as its needs-you line (`docs/design/gate-and-merge.md`, The Review column)
+    // shows as its needs-you line (`docs/design/gate-and-merge.md`, The Review column).
+    // A worker whose pull request is being read holds a slot, and its ticket stays in
+    // Review for the read (`docs/design/review.md`, What the maintainer sees)
     let live = |status: Status| {
-        status != Status::Ended && (pull.is_none() || status != Status::WaitingOnMaintainer)
+        status != Status::Ended
+            && (pull.is_none()
+                || !matches!(status, Status::WaitingOnMaintainer | Status::Reviewing))
     };
     let building = workers
         .iter()

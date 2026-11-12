@@ -148,6 +148,27 @@ fn a_worker_waiting_on_the_maintainer_with_an_open_pull_is_in_review() {
     assert_eq!(ids(&board, Column::Ready), [2]);
 }
 
+/// A reviewer reading a pull request holds the ticket's slot, but the ticket is
+/// past building: it stays in Review while the read runs
+#[test]
+fn a_reviewing_worker_with_an_open_pull_is_in_review() {
+    let read = Read {
+        open: vec![issue(1, "rin", &[]), issue(2, "rin", &[])],
+        pulls: vec![pull(9, "kelpie/1", &[])],
+        ..Read::default()
+    };
+    let workers = [worker(1, Status::Reviewing), worker(2, Status::Reviewing)];
+
+    let board = place(&read, &workers, &me());
+
+    assert_eq!(ids(&board, Column::Review), [1]);
+    assert_eq!(
+        ids(&board, Column::Building),
+        [2],
+        "a read with no pull request is no review: the ticket is still being built"
+    );
+}
+
 /// A waiting ticket with no pull request yet, such as one whose draft could not
 /// open, is still the ticket its worker was started on
 #[test]
