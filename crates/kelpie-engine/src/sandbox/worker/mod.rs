@@ -24,7 +24,8 @@ use std::path::Path;
 use crabpot::{Config, ConfigError};
 use serde_json::json;
 
-use self::toolchain::{Env, ProcessEnv, cargo_credentials, toolchain_homes};
+pub(super) use self::toolchain::{Env, ProcessEnv};
+use self::toolchain::{cargo_credentials, toolchain_homes};
 use super::fence;
 use super::policy::{
     KEYCHAIN_SERVICES, Project, Reads, TOOL_LOGS, denied, home, hosts, reads, text,
@@ -111,42 +112,14 @@ fn compose(
     home: Option<&Path>,
     env: &dyn Env,
 ) -> Result<Config, ConfigError> {
-    // A tool home is read back whole, so each cargo home's own credential files
-    // are named with it: `SECRETS` spells the default home alone, and `CARGO_HOME`
-    // may point anywhere the maintainer keeps it.
-    let tools = home.map_or_else(Vec::new, |home| toolchain_homes(home, env));
-    let closed = project.reads == Reads::Project;
-    // Kelpie's data folder holds every project's state and settings, and the
-    // sessions' folder every session's login, so both are closed whatever the
-    // project reads, and the home folder with them unless the project reads
-    // anywhere. What the worker works in is allowed back below.
-    let closed_home = home.filter(|_| closed);
-    let mut deny_read: Vec<String> = denied()
-        .into_iter()
-        .chain(SK_FILES)
-        .map(str::to_owned)
-        .chain(cargo_credentials(&tools))
-        .chain(home_denials(
-            closed_home
-                .into_iter()
-                .chain([worker.kelpie_home, project.sessions_root]),
-        ))
-        .collect();
-    if closed && home.is_none() {
-        // crabpot refuses `~` where no home folder is set, rather than leave it open
-        deny_read.push("~".to_owned());
-    }
-    let mut allow_read: Vec<String> = [worker.worktree, worker.git_dir, worker.git_common_dir]
-        .into_iter()
-        .map(text)
-        .collect();
-    allow_read.extend(reads(harness, project, worker.state_dir));
-    if closed {
-        allow_read.extend(env::current_exe().ok().map(|kelpie| text(&kelpie)));
-        allow_read.extend(tools.iter().map(|tool| text(tool)));
-    }
-    let mut seen = HashSet::new();
-    allow_read.retain(|folder| seen.insert(folder.clone()));
+    let read = [worker.worktree, worker.git_dir, worker.git_common_dir];
+    let folders = Folders {
+        read: &read,
+        state_dir: worker.state_dir,
+        kelpie_home: worker.kelpie_home,
+    };
+    let rules = read_rules(harness, project, &folders, home, env, true);
+    let (deny_read, allow_read) = (rules.deny, rules.allow);
 
     // Inside the writes: the clone's own git dir less what runs code, each
     // harness's files in the worktree, and each entry linked in from the person's
@@ -220,6 +193,72 @@ fn compose(
         },
     });
     Config::from_json(&settings.to_string())
+}
+
+/// The folders a session works in, which `read_rules` allows back
+pub(super) struct Folders<'a> {
+    /// What it reads: its worktree and git dirs
+    pub(super) read: &'a [&'a Path],
+    /// What it writes, which holds its harness's config folder
+    pub(super) state_dir: &'a Path,
+    /// Kelpie's data folder, closed but for the folders above
+    pub(super) kelpie_home: &'a Path,
+}
+
+/// What a session denies and allows reading, as a worker's policy and a
+/// reviewer's both name it
+pub(super) struct ReadRules {
+    pub(super) deny: Vec<String>,
+    pub(super) allow: Vec<String>,
+}
+
+/// The reads of a session on `harness` in `project`, working in `folders`
+///
+/// The toolchain homes under `home`, as `env` names them, are denied their cargo
+/// credentials whether or not the session runs commands. `builds` is a session that
+/// runs commands, which also reads kelpie's own binary and those homes back.
+pub(super) fn read_rules(
+    harness: &Harness,
+    project: &Project<'_>,
+    folders: &Folders<'_>,
+    home: Option<&Path>,
+    env: &dyn Env,
+    builds: bool,
+) -> ReadRules {
+    let tools = home.map_or_else(Vec::new, |home| toolchain_homes(home, env));
+    let closed = project.reads == Reads::Project;
+    // Kelpie's data folder holds every project's state and settings, and the
+    // sessions' folder every session's login, so both are closed whatever the
+    // project reads, and the home folder with them unless the project reads
+    // anywhere. What the session works in is allowed back below.
+    let closed_home = home.filter(|_| closed);
+    let mut deny: Vec<String> = denied()
+        .into_iter()
+        .chain(SK_FILES)
+        .map(str::to_owned)
+        // A tool home is read back whole, so each cargo home's own credential files
+        // are named with it: `SECRETS` spells the default home alone, and `CARGO_HOME`
+        // may point anywhere the maintainer keeps it.
+        .chain(cargo_credentials(&tools))
+        .chain(home_denials(
+            closed_home
+                .into_iter()
+                .chain([folders.kelpie_home, project.sessions_root]),
+        ))
+        .collect();
+    if closed && home.is_none() {
+        // crabpot refuses `~` where no home folder is set, rather than leave it open
+        deny.push("~".to_owned());
+    }
+    let mut allow: Vec<String> = folders.read.iter().copied().map(text).collect();
+    allow.extend(reads(harness, project, folders.state_dir));
+    if closed && builds {
+        allow.extend(env::current_exe().ok().map(|kelpie| text(&kelpie)));
+        allow.extend(tools.iter().map(|tool| text(tool)));
+    }
+    let mut seen = HashSet::new();
+    allow.retain(|folder| seen.insert(folder.clone()));
+    ReadRules { deny, allow }
 }
 
 /// Each of `homes` as a deny over the folder whole, less one another already

@@ -2,15 +2,16 @@
 //!
 //! Every agent session kelpie starts runs inside crabpot (shep-pm/crabpot), the
 //! PM and its workers alike. [`Sandbox::start`] builds the session's
-//! [`policy`] (a worker's is [`worker::policy`], through [`Sandbox::start_worker`])
+//! [`policy`] (a worker's is [`worker::policy`], through [`Sandbox::start_worker`], and a
+//! reviewer's is [`reviewer::policy`], through [`Sandbox::start_reviewer`])
 //! and starts crabpot's sandbox from it, and [`Sandbox::command`] wraps the
 //! harness's command into one that runs inside it. The process tree
 //! spawns the wrapped command as it spawns anything else, so the run's mark
 //! reaches it and the sweep finds it (ADR 0001). A project whose folder is the
 //! home folder or a folder above it, or is at or inside a login or a secret
-//! folder, by name or through a link, is refused at [`Sandbox::start`] and at
-//! [`Sandbox::start_worker`], since such a folder holds the logins and secrets
-//! the policy denies.
+//! folder, by name or through a link, is refused at [`Sandbox::start`], at
+//! [`Sandbox::start_worker`] and at [`Sandbox::start_reviewer`], since such a
+//! folder holds the logins and secrets the policy denies.
 //!
 //! [`Sandbox::ready`] runs `sh -c true` in a sandbox and tells bwrap's two
 //! refusals apart by its own words ([`Refusal`]), and [`check_project`] asks
@@ -65,11 +66,13 @@ pub mod fence;
 mod hop;
 mod policy;
 pub mod refusal;
+pub mod reviewer;
 pub mod worker;
 
 pub use hop::profile_loaded;
 pub use policy::{Project, Reads, denied, policy, policy_with_door};
 pub use refusal::Refusal;
+pub use reviewer::Reviewer;
 pub use worker::Worker;
 
 /// Takes over the process when crabpot ran it again as its helper
@@ -279,6 +282,30 @@ impl Sandbox {
         Self::from_config(config)
     }
 
+    /// Start the sandbox of a reviewer on `harness`, in `project`
+    ///
+    /// Makes the reviewer's state folder when it is missing, since the sandbox may
+    /// write there and in its tests folder, and nowhere else. The tests folder is
+    /// the caller's to make. See [`reviewer::policy`] for what the reviewer may
+    /// reach. The project folder is refused as it is at [`Sandbox::start`], before
+    /// the settings are built or the state folder made.
+    ///
+    /// # Errors
+    ///
+    /// [`SandboxError`]: the project folder holds the home folder or sits inside
+    /// a denied one, the settings are refused, the state folder cannot be made,
+    /// or crabpot cannot start.
+    pub fn start_reviewer(
+        harness: &Harness,
+        project: &Project<'_>,
+        reviewer: &Reviewer<'_>,
+    ) -> Result<Self, SandboxError> {
+        check_project(project)?;
+        let config = reviewer::policy(harness, project, reviewer).map_err(SandboxError::Policy)?;
+        fs::create_dir_all(reviewer.state_dir).map_err(SandboxError::StateDir)?;
+        Self::from_config(config)
+    }
+
     /// `command`, wrapped to run inside this sandbox
     ///
     /// Keeps its program, arguments, working directory and environment changes,
@@ -326,7 +353,7 @@ impl Sandbox {
 /// folder at or inside one of them is that folder to its own sandbox, since the
 /// folder beside it is opened back for the project.
 ///
-/// [`Sandbox::start`] and [`Sandbox::start_worker`] call it first, so a caller
+/// [`Sandbox::start`], [`Sandbox::start_worker`] and [`Sandbox::start_reviewer`] call it first, so a caller
 /// can ask the same question without starting a sandbox.
 ///
 /// # Errors
