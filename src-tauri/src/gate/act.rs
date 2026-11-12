@@ -12,7 +12,7 @@
 //! - [`Step::Rule`] parks the worker waiting on the maintainer with the ruling's reason, as a
 //!   hand-over's ruling does, and the gate passes it no more until its head moves.
 //! - [`Step::Yes`] keeps the head ready to merge, which the ticket's needs-you line says.
-//!   The merge itself comes later.
+//!   The maintainer's yes merges it, which `merge` carries out on the ticket's next pass.
 //! - [`Step::Red`] is red CI, which `red` settles: a rerun of a run likely not the worker's,
 //!   a ruling, or the worker's next turn with the failing logs.
 //! - [`Step::Done`] ends the ticket's time in the gate. Cleaning up after the merge comes later.

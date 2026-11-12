@@ -50,7 +50,7 @@ use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
 use kelpie_engine::session::Session;
 use kelpie_engine::settings::ConfigDir;
-use kelpie_engine::ticket::{ForgeError, GithubTickets, Pulls};
+use kelpie_engine::ticket::{ForgeError, GithubTickets, MergeQueue, Pulls};
 use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::usage::InFlight;
 use kelpie_engine::worker::{self, Opening, Paths, Record, Records, Status};
@@ -112,13 +112,26 @@ pub struct Forge {
 
     /// The project's CI, which the gate reruns a stuck run through
     ci: Arc<dyn Ci>,
+
+    /// The base branch's merge queue, which the gate watches a merge through
+    queue: Arc<dyn MergeQueue>,
 }
 
 impl Forge {
-    /// What a project's hand-overs and its gate ask of `tickets`, `pulls` and `ci`
+    /// What a project's hand-overs and its gate ask of `tickets`, `pulls`, `ci` and `queue`
     #[must_use]
-    pub fn new(tickets: Arc<dyn GithubTickets>, pulls: Arc<dyn Pulls>, ci: Arc<dyn Ci>) -> Self {
-        Self { tickets, pulls, ci }
+    pub fn new(
+        tickets: Arc<dyn GithubTickets>,
+        pulls: Arc<dyn Pulls>,
+        ci: Arc<dyn Ci>,
+        queue: Arc<dyn MergeQueue>,
+    ) -> Self {
+        Self {
+            tickets,
+            pulls,
+            ci,
+            queue,
+        }
     }
 
     /// The project's tickets
@@ -134,6 +147,11 @@ impl Forge {
     /// The project's CI
     pub(crate) fn ci(&self) -> &Arc<dyn Ci> {
         &self.ci
+    }
+
+    /// The project's merge queue
+    pub(crate) fn queue(&self) -> &Arc<dyn MergeQueue> {
+        &self.queue
     }
 }
 
@@ -667,6 +685,7 @@ impl Workers {
             Arc::clone(&calls.source) as Arc<dyn GithubTickets>,
             Arc::clone(&calls.pulls) as Arc<dyn Pulls>,
             Arc::clone(&calls.ci) as Arc<dyn Ci>,
+            Arc::clone(&calls.queue) as Arc<dyn MergeQueue>,
         ));
         lock(&self.forges).insert(project_id.to_owned(), Arc::clone(&forge));
         Ok(forge)
