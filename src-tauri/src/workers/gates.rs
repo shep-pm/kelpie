@@ -91,6 +91,7 @@ impl Workers {
             records: Arc::downgrade(&records),
             pulls: Arc::clone(forge.pulls()),
             ci: Arc::clone(forge.ci()),
+            queue: Arc::clone(forge.queue()),
             clock,
             limits,
             fix,

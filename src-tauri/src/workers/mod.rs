@@ -35,7 +35,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
-use kelpie_engine::github::gh::{Gh, GithubActions, GithubPulls, GithubSource, hold::Hold};
+use kelpie_engine::github::gh::{
+    Gh, GithubActions, GithubPulls, GithubQueue, GithubSource, hold::Hold,
+};
 use kelpie_engine::github::{AppTokens, origin_of, system_tokens};
 use kelpie_engine::lease::Leases;
 use kelpie_engine::local_paths::LocalPaths;
@@ -109,7 +111,7 @@ type Sessions = Arc<SessionMap>;
 /// A project's GitHub calls, made through one hold
 ///
 /// The board's poller reads the tickets through `source`, a hand-over opens its
-/// drafts through `pulls`, and the gate reruns a stuck run through `ci`, so a project's
+/// drafts through `pulls`, the gate reruns a stuck run through `ci` and watches a merge through `queue`, so a project's
 /// calls are paced as one set
 /// (`docs/design/tickets.md`, GitHub).
 #[derive(Debug)]
@@ -117,6 +119,7 @@ struct Calls {
     source: Arc<GithubSource>,
     pulls: Arc<GithubPulls>,
     ci: Arc<GithubActions>,
+    queue: Arc<GithubQueue>,
 }
 
 /// What one project's workers run on, read for one command
@@ -274,7 +277,8 @@ impl Workers {
                 repo.clone(),
                 LocalPaths::new([folder, self.data_dir.as_path()]),
             )),
-            ci: Arc::new(GithubActions::new(hold, repo)),
+            ci: Arc::new(GithubActions::new(hold.clone(), repo.clone())),
+            queue: Arc::new(GithubQueue::new(hold, repo)),
         });
         kept.insert(project_id.to_owned(), Arc::clone(&calls));
         Ok(calls)
