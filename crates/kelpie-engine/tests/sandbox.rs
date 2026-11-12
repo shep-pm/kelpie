@@ -60,6 +60,10 @@ mod escapes;
 #[path = "sandbox/global_folder.rs"]
 mod global_folder;
 
+// A reviewer's sandbox: the worktree read only, its tests folder written, and no GitHub
+#[path = "sandbox/reviewer.rs"]
+mod reviewer;
+
 /// How long a test waits for something it forced to happen
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -177,6 +181,18 @@ const TESTS: &[(&str, fn())] = &[
     (
         "a_denied_folder_under_an_allowed_one_stays_closed",
         files::a_denied_folder_under_an_allowed_one_stays_closed,
+    ),
+    (
+        "reviewer::a_reviewer_cannot_write_the_worktree",
+        reviewer::a_reviewer_cannot_write_the_worktree,
+    ),
+    (
+        "reviewer::a_reviewer_writes_its_tests_folder",
+        reviewer::a_reviewer_writes_its_tests_folder,
+    ),
+    (
+        "reviewer::a_reviewer_cannot_reach_github",
+        reviewer::a_reviewer_cannot_reach_github,
     ),
     // Only Linux turns a listed socket off; macOS reaches it
     #[cfg(target_os = "linux")]
