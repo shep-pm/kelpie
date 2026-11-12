@@ -41,6 +41,12 @@ pub struct Frontmatter {
 
     /// `append` to put the file's body after its parent's, instead of replacing it
     pub body: Option<String>,
+
+    /// A reviewer's globs, which limit it to diffs that touch one
+    pub paths: Option<Vec<String>>,
+
+    /// Whether a reviewer reads a second time, shown what the first found
+    pub second_look: Option<bool>,
 }
 
 /// An agent file as written: its own keys and its body
@@ -54,7 +60,7 @@ pub struct Source {
 }
 
 impl Source {
-    /// The keys and body of `text`. Keys outside the editor's six are left out, and
+    /// The keys and body of `text`. Keys outside the editor's eight are left out, and
     /// text with no frontmatter is all body, so the loader's refusal can still be shown.
     #[must_use]
     pub fn parse(text: &str) -> Self {
@@ -74,6 +80,14 @@ impl Source {
                 "model" => frontmatter.model = value,
                 "effort" => frontmatter.effort = value,
                 "body" => frontmatter.body = value,
+                "paths" => frontmatter.paths = paths_of(&entry),
+                "second_look" => {
+                    frontmatter.second_look = match value.as_deref() {
+                        Some("true") => Some(true),
+                        Some("false") => Some(false),
+                        _ => None,
+                    }
+                }
                 _ => {}
             }
         }
@@ -107,6 +121,14 @@ impl Source {
             };
             text.push_str(&format!("{key}: {value}\n"));
         }
+        // A reviewer's keys follow as flow YAML, which JSON's own escapes make safe for any glob
+        if let Some(paths) = &front.paths {
+            let globs = serde_json::to_string(paths).unwrap_or_else(|_| "[]".to_owned());
+            text.push_str(&format!("paths: {globs}\n"));
+        }
+        if let Some(second_look) = front.second_look {
+            text.push_str(&format!("second_look: {second_look}\n"));
+        }
         text.push_str("---\n");
         let body = self.body.trim();
         if !body.is_empty() {
@@ -130,6 +152,17 @@ fn value_of(entry: &extends::Entry) -> String {
         return text;
     }
     entry.value()
+}
+
+/// A `paths` entry's globs, as a block or flow list, or `None` when it is not a list of strings
+fn paths_of(entry: &extends::Entry) -> Option<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Paths {
+        paths: Vec<String>,
+    }
+    serde_saphyr::from_str::<Paths>(&entry.text)
+        .ok()
+        .map(|found| found.paths)
 }
 
 /// Whether `value` is `kelpie:<name>`, which is a plain YAML scalar as it is
@@ -359,6 +392,40 @@ mod tests {
         assert_eq!(source.frontmatter.body.as_deref(), Some("append"));
         assert_eq!(source.frontmatter.role, None);
         assert_eq!(source.body, "Mine.");
+    }
+
+    #[test]
+    fn saving_a_reviewer_keeps_its_paths_and_second_look() {
+        let dir = Dir::new();
+        let text = "---\nextends: kelpie:reviewer\n# a note\npaths:\n  - \"src/**/*.rs\" # rust\n  - docs/*.md\nsecond_look: false\n---\nRead it.\n";
+        dir.put("rust-eyes.md", text);
+
+        let source = Agents::source(&dir.config(), "rust-eyes").unwrap().unwrap();
+        assert_eq!(
+            source.frontmatter.paths.as_deref(),
+            Some(&["src/**/*.rs".to_owned(), "docs/*.md".to_owned()][..])
+        );
+        assert_eq!(source.frontmatter.second_look, Some(false));
+
+        let agent = Agents::save(&dir.config(), "rust-eyes", &source).unwrap();
+
+        assert_eq!(agent.paths.value, ["src/**/*.rs", "docs/*.md"]);
+        assert!(!agent.second_look.value);
+        let saved = Source::parse(&dir.read("rust-eyes.md"));
+        assert_eq!(saved, source);
+        assert!(dir.read("rust-eyes.md").contains("second_look: false\n"));
+    }
+
+    #[test]
+    fn a_glob_with_yaml_in_it_is_kept_as_one_string() {
+        let mut source = extending("kelpie:reviewer", "");
+        source.frontmatter.paths = Some(vec![
+            "a: b # c".to_owned(),
+            "{x,y}/*".to_owned(),
+            "yes".to_owned(),
+        ]);
+
+        assert_eq!(Source::parse(&source.text()), source);
     }
 
     #[test]

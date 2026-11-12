@@ -10,8 +10,14 @@ import {
 /** What the editor is changing: the file's own keys and body. */
 export type Draft = { frontmatter: Frontmatter; body: string };
 
-/** The keys a form field can hold. `body` is the switch's, not a field. */
-export type FieldKey = Exclude<keyof Frontmatter, "body">;
+/**
+ * The keys a form field can hold. `body` is the switch's, not a field, and a
+ * reviewer's `paths` and `second_look` have no row: they pass through as they stand.
+ */
+export type FieldKey = Exclude<
+  keyof Frontmatter,
+  "body" | "paths" | "second_look"
+>;
 
 type Agents = {
   /** The agents the config folder holds, `null` until read. */
@@ -76,6 +82,9 @@ export function clean(front: Frontmatter): Frontmatter {
     model: keep(front.model),
     effort: keep(front.effort),
     body: keep(front.body),
+    // A reviewer's keys have no row in the form, so they are kept as read
+    paths: front.paths,
+    second_look: front.second_look,
   };
 }
 

@@ -73,6 +73,15 @@ The layered field fit rjsf's `FieldTemplate`, so it is one template and no widge
 
 SK's agent format comes over whole with its tests (`.claude/skills/lift-from-sk`): Markdown with YAML frontmatter, `extends` with `kelpie:<name>` built-ins and `body: append`, and `_`-prefixed files ignored. Phase 1 keeps the keys a PM uses (`role`, `harness`, `model`, `effort`, `extends`, `body`). The board brings the worker keys (`description`, `kinds`, `tier`).
 
+A reviewer is a file with `role: reviewer` (`review.md`, Reviewers). It takes two more keys, which SK refuses on any other role and kelpie refuses on a `pm` or `worker` file, by name:
+
+| Key | Value | What it does |
+|---|---|---|
+| `paths` | A list of globs | Limits the reviewer to diffs that touch one. Empty or absent: every diff |
+| `second_look` | `true` or `false` | A second fresh session reads after the first, shown what it found. Off when absent |
+
+Kelpie ships `kelpie:reviewer`: SK's `defect-hunter` prompt with `second_look: true`, naming no harness or model (ADR 0006). Its body keeps `{{BASE}}` and `{{DIFF}}`, which the review slice fills. A global `reviewer.md` layers over it as `worker.md` does over `kelpie:worker`. The editor's form has no row for the two keys: it keeps them as the file has them, and the maintainer edits them in the file.
+
 The editor: the frontmatter as the layered form, the body in an MDX editor (chelone's `mdx-editor`, `docs/component-sources.md`), and a preview of the agent with its `extends` chain resolved.
 
 ### When a change applies
