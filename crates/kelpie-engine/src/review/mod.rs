@@ -77,7 +77,9 @@ pub use checks::{
     still_failing, tests_after, tests_before, was_sent_back,
 };
 pub use criteria::acceptance;
-pub use disputes::{Answers, Dispute, Settled, answers, comment, findings_of, mark_shown, record};
+pub use disputes::{
+    Answers, Dispute, Settled, answers, comment, findings_of, mark_shown, record, refresh,
+};
 pub use finding::{CLEAN, Finding, Severity, is_test_path, parse_findings, read_review};
 pub use findings_file::{
     Deferred, Disputed, FailingTest, Sent, TESTS_FOLDER, again_prompt, all_deferred, deferred,

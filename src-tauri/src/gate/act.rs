@@ -85,12 +85,19 @@ impl Gate {
                     Step::Yes { .. } => {
                         // The disputes no reader was shown go on the pull request at the yes,
                         // which is the one thing a pass posts. One that names this machine rules
-                        // instead of going round the same refused post, and one the forge would
-                        // not take just now stays unshown for the next read, which asks again.
-                        if let Some(ruling) = self.disputes(work, look, head) {
-                            self.rule(work, kept, &ruling, head);
-                            self.said(work.id, Some(Line::of(&ruling)));
-                            return Carried::Keep;
+                        // instead of going round the same refused post. One the forge would not
+                        // take just now holds the head off the yes, so the maintainer is never
+                        // asked to merge with the worker's disputes unposted, and the next read
+                        // of GitHub gives the yes again and asks again.
+                        match self.disputes(work, look, head) {
+                            Posted::Refused(ruling) => {
+                                let ruling = Ruling::Review(ruling);
+                                self.rule(work, kept, &ruling, head);
+                                self.said(work.id, Some(Line::of(&ruling)));
+                                return Carried::Keep;
+                            }
+                            Posted::Retry => return Carried::Keep,
+                            Posted::Told => {}
                         }
                         kept.ready_at(head);
                         false
@@ -139,26 +146,21 @@ impl Gate {
         }
     }
 
-    /// Post the disputes of `work`'s pass that no reader was shown, and the ruling one names
-    /// this machine
+    /// Post the disputes of `work`'s pass that no reader was shown, at the yes
     ///
     /// The yes is where they go, being the one thing a pass posts (`crate::review::disputes`).
-    /// `None` when there is nothing to post, or the forge will take them and the head goes on
-    /// ready, or it will not take them just now and the next read asks again.
-    fn disputes(&self, work: &Work, look: &Look, head: &str) -> Option<Ruling> {
+    /// [`Posted::Told`] covers a pass with none to post, and one whose comment the forge took.
+    fn disputes(&self, work: &Work, look: &Look, head: &str) -> Posted {
         let Pull::Open(pull) = &look.pull else {
             // A pull request that is not open has no comments to post on
-            return None;
+            return Posted::Told;
         };
         let at = At {
             ticket: &work.ticket,
             number: pull.number.get(),
             head,
         };
-        match self.review.posted(&at) {
-            Posted::Told | Posted::Retry => None,
-            Posted::Refused(ruling) => Some(Ruling::Review(ruling)),
-        }
+        self.review.posted(&at)
     }
 
     /// Rebase the branch onto the latest base and push it, and say what the push left

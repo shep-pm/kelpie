@@ -162,12 +162,15 @@ const HELD: &str = "Waiting on you";
 /// cannot start is Paused with why. The line keeps `Paused` first, which the
 /// worker tab's Resume button reads. Each sandbox request still waiting on the worker's feed gives the host it
 /// wants. `requests` holds those hosts by ticket. A ticket the gate found ready to merge
-/// (`ready`) says so: it waits on the maintainer's yes.
+/// (`ready`) says so: it waits on the maintainer's yes, with the head no reviewer read named
+/// on the line when the gate has one for it (`lines`), so the yes is asked from with the
+/// warning on it.
 fn needs_you(
     ticket: &str,
     records: &[Record],
     requests: &BTreeMap<String, Vec<String>>,
     ready: &BTreeSet<String>,
+    lines: &BTreeMap<String, Line>,
 ) -> Vec<String> {
     let record = records.iter().find(|record| record.ticket == ticket);
     let own = record.and_then(|record| match record.status {
@@ -181,9 +184,13 @@ fn needs_you(
         _ => None,
     });
     let asked = requests.get(ticket).into_iter().flatten();
-    let merge = ready
-        .contains(ticket)
-        .then(|| Line::ReadyToMerge { warning: None }.text());
+    let merge = ready.contains(ticket).then(|| {
+        let warning = match lines.get(ticket) {
+            Some(Line::ReadyToMerge { warning }) => warning.clone(),
+            _ => None,
+        };
+        Line::ReadyToMerge { warning }.text()
+    });
     own.into_iter()
         .chain(merge)
         .chain(asked.map(|host| format!("Wants to reach {host}")))
@@ -196,7 +203,9 @@ impl BoardView {
     /// `records` and `requests` (the hosts each ticket's worker waits to reach, by
     /// ticket) say which tickets wait on the maintainer, and so does `ready`, the
     /// tickets the gate found ready to merge. `lines` are the gate's lines by ticket, which only
-    /// a ticket in Review shows: a fix turn moves it to Building, where it shows none.
+    /// a ticket in Review shows: a fix turn moves it to Building, where it shows none. A ready
+    /// ticket's needs-you line takes its warning from them, so an unread head is named where
+    /// the yes is asked from.
     #[must_use]
     pub fn of(
         board: &Board,
@@ -220,7 +229,7 @@ impl BoardView {
                 column: placed.column.into(),
                 url: page("issues", &placed.id),
                 pull_url: placed.pull.map(|number| page("pull", &number)),
-                needs_you: needs_you(&placed.id.to_string(), records, requests, ready),
+                needs_you: needs_you(&placed.id.to_string(), records, requests, ready, lines),
                 gate: (placed.column == engine::Column::Review)
                     .then(|| {
                         let id = placed.id.to_string();

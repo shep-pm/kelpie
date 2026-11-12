@@ -9,14 +9,19 @@
 //! The comment is the engine's ([`review::comment`]), which names a file of the ticket's build
 //! folder by its name alone. Kelpie's own check for what must not leave this machine
 //! ([`LocalPaths`]) reads it before it is asked for: a reason naming a path of another folder
-//! is a ruling, since asking again would be refused the same. A post the forge refuses for any
-//! other reason leaves the disputes unshown, and the next read of GitHub tries again, which it
-//! does because the gate gives the yes again on every read.
+//! is a ruling, since asking again would be refused the same. The ruling tells the worker to
+//! write its reason again in the disputed findings file, and [`review::refresh`] reads that
+//! file back, so the next yes posts what the worker wrote and not the reason that was refused.
+//! A post the forge refuses for any other reason leaves the disputes unshown and the head off
+//! the yes, and the next read of GitHub tries again, which it does because the gate gives the
+//! yes again on every read.
 //!
 //! The comment goes through [`Tickets::comment`] with the pull request's number, which GitHub
 //! reads as an issue's own: a pull request is an issue there, so it lands on the pull request
 //! and not on the ticket. The disputes are marked shown once posted, so a later pass posts none
 //! twice.
+
+use std::path::Path;
 
 use kelpie_engine::local_paths::{LocalPaths, Surface};
 use kelpie_engine::review::{self, Dispute};
@@ -46,13 +51,16 @@ impl Review {
         let Ok(id) = at.ticket.parse::<TicketId>() else {
             return Posted::Told;
         };
-        let Some((disputes, build)) = self.unshown(id, at.ticket) else {
+        let build = self.paths.build_dir(at.ticket);
+        let Some(disputes) = self.refreshed(id, at.ticket, &build) else {
             return Posted::Told;
         };
         let Some(body) = review::comment(&disputes, &build) else {
             return Posted::Told;
         };
-        let local = LocalPaths::new([self.folder.as_path(), self.paths.project().as_path()]);
+        // The whole data folder, as `GithubPulls` checks its posts: a reason naming another
+        // project's folder names this machine as much as one naming this project's checkout
+        let local = LocalPaths::new([self.folder.as_path(), self.paths.data_dir.as_path()]);
         if let Some(leak) = local.find(&body, Surface::Prose) {
             let count = disputes.iter().filter(|d| !d.shown).count();
             eprintln!(
@@ -87,13 +95,31 @@ impl Review {
         }
     }
 
-    /// The disputes of the pass of ticket `ticket` no reader was shown, with the build folder
-    /// their comment names files of, `None` when the pass has none to post
-    fn unshown(&self, id: TicketId, ticket: &str) -> Option<(Vec<Dispute>, std::path::PathBuf)> {
-        let book = lock(&self.book);
-        let kept = book.get(id)?;
-        let unshown = kept.disputes.iter().filter(|d| !d.shown).count();
-        (unshown > 0).then(|| (kept.disputes.clone(), self.paths.build_dir(ticket)))
+    /// The disputes of the pass of ticket `ticket` no reader was shown, each with the reason
+    /// its file holds now, `None` when the pass has none to post
+    ///
+    /// The worker's file is read back before the comment is built ([`review::refresh`]), so a
+    /// reason rewritten after a ruling is what goes on the pull request. A file that cannot be
+    /// read refreshes nothing, and what the pass kept stands.
+    fn refreshed(&self, id: TicketId, ticket: &str, build: &Path) -> Option<Vec<Dispute>> {
+        let mut book = lock(&self.book);
+        book.get(id)?;
+        let from_file = match review::disputed(build) {
+            Ok(read) => read,
+            Err(why) => {
+                eprintln!("kelpie: ticket {ticket}'s disputed findings did not read: {why}");
+                Vec::new()
+            }
+        };
+        let kept = book.entry(id);
+        let changed = review::refresh(&mut kept.disputes, &from_file);
+        let disputes = kept.disputes.clone();
+        if changed && let Err(why) = book.save() {
+            eprintln!(
+                "kelpie: the review's rewritten disputes of ticket {ticket} did not keep: {why}"
+            );
+        }
+        (disputes.iter().any(|d| !d.shown)).then_some(disputes)
     }
 
     /// Mark every dispute of ticket `ticket` shown, now that they are on the pull request

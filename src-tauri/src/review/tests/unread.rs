@@ -52,19 +52,23 @@ fn comments(rig: &Rig) -> Vec<(TicketId, String)> {
 }
 
 /// The worker's reason for the round's finding, naming `path` as the file it read
+fn dispute(rig: &Rig, path: &std::path::Path) {
+    dispute_as(
+        rig,
+        &format!("{} shows the finding is wrong", path.display()),
+    );
+}
+
+/// The worker's reason for the round's finding, as `text`
 ///
 /// A fix turn writes it beside the findings file, as `disputed-findings.md`.
-fn dispute(rig: &Rig, path: &std::path::Path) {
+fn dispute_as(rig: &Rig, text: &str) {
     let build = rig.paths().build_dir(TICKET);
     let findings = fs::read_to_string(review::findings_path(&build)).expect("the findings file");
     let line = (findings.lines())
         .find(|line| line.starts_with("HIGH|"))
         .expect("a finding's line");
-    fs::write(
-        review::disputed_path(&build),
-        format!("{line}\n  {} shows the finding is wrong\n", path.display()),
-    )
-    .unwrap();
+    fs::write(review::disputed_path(&build), format!("{line}\n  {text}\n")).unwrap();
 }
 
 /// The finding the worker is sent, and its fix turn, on a head CI is green on
@@ -370,6 +374,10 @@ fn a_refused_post_is_tried_on_the_next_read() {
         !kept(&rig).disputes[0].shown,
         "and the disputes are not marked shown by a post that did not land"
     );
+    assert!(
+        !ready(&rig),
+        "and the head is not put up to merge while its disputes are unposted"
+    );
 
     // The gate gives the yes again on the next read, which asks again
     rig.tickets.script_write(Ok(()));
@@ -381,5 +389,86 @@ fn a_refused_post_is_tried_on_the_next_read() {
         kept(&rig).disputes[0].shown,
         "and they are shown once posted"
     );
+    assert!(ready(&rig), "and the head goes ready once they are posted");
     assert_eq!(reader.prompts().len(), 1, "with no reviewer read again");
+}
+
+#[test]
+fn a_dispute_whose_reason_is_written_again_is_posted_on_the_next_yes() {
+    let rig = rig();
+    let reader = rig.reader(TICKET);
+    reader.script_read(Ok(vec![finding(
+        Severity::High,
+        "work.txt",
+        2,
+        "it is wrong, and it is in scope",
+    )]));
+    let head = green(&rig, "work.txt");
+    // Its reason names a file of the project's checkout, so the yes rules
+    disputed(&rig, &head, &rig.checkout().join("notes.md"));
+    assert!(
+        comments(&rig).is_empty(),
+        "nothing was posted: {:?}",
+        comments(&rig)
+    );
+    assert!(!ready(&rig), "and the ticket is not put up to merge");
+
+    // The maintainer sent the Note the ruling asks for, and the worker wrote its reason
+    // again in the disputed findings file, naming no path
+    dispute_as(&rig, "the file reads two values, not three");
+    let pushed = rig.commit(TICKET, "later.txt", "later\n");
+    read_green(&rig, &pushed);
+
+    let posted = posted(&rig, &pushed).expect("the rewritten reason went on the pull request");
+    assert!(posted.contains("work.txt:2"), "the finding: {posted}");
+    assert!(
+        posted.contains("the file reads two values, not three"),
+        "what the worker wrote again: {posted}"
+    );
+    assert!(
+        !posted.contains("notes.md"),
+        "and not the reason that was refused: {posted}"
+    );
+    assert_eq!(comments(&rig).len(), 1, "one comment: {:?}", comments(&rig));
+    assert!(ready(&rig), "so the ticket reaches the yes");
+    assert_eq!(
+        rig.record(TICKET).status,
+        Status::Ended,
+        "and the worker is back in play"
+    );
+    assert_eq!(reader.prompts().len(), 1, "with no reviewer read again");
+}
+
+#[test]
+fn a_dispute_naming_another_projects_folder_rules_and_posts_nothing() {
+    let rig = rig();
+    let reader = rig.reader(TICKET);
+    reader.script_read(Ok(vec![finding(
+        Severity::High,
+        "work.txt",
+        2,
+        "it is wrong, and it is in scope",
+    )]));
+    let head = green(&rig, "work.txt");
+    // Its reason names a file of another project's, under kelpie's data folder, which is no
+    // file of this project's checkout
+    let other = rig
+        .paths()
+        .sessions_root()
+        .join("other/worktrees/9/notes.md");
+    disputed(&rig, &head, &other);
+
+    assert!(
+        comments(&rig).is_empty(),
+        "nothing was posted: {:?}",
+        comments(&rig)
+    );
+    let reason = rig.record(TICKET).reason.expect("the ruling says why");
+    assert!(reason.contains("cannot post them"), "{reason}");
+    assert!(
+        reason.contains("a path on this machine"),
+        "which names what was refused: {reason}"
+    );
+    assert!(!ready(&rig), "and the ticket is not put up to merge");
+    assert_eq!(reader.prompts().len(), 1, "and no reader followed");
 }

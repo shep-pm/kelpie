@@ -163,9 +163,10 @@ impl Ruling {
             ),
             Self::DisputesLocal { count, what } => format!(
                 "The worker disputed {} that no reviewer read again, and kelpie cannot post \
-                 them on the pull request: {what}. A Note tells the worker to give its reason \
-                 again without naming a path on this machine.",
-                findings_of(*count)
+                 them on the pull request: {what}. A Note tells the worker to write its reason \
+                 again in {}, without naming a path on this machine.",
+                findings_of(*count),
+                super::findings_file::DISPUTED_FILE
             ),
         }
     }

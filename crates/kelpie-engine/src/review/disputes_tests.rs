@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use super::disputes::{Dispute, Settled, answers, comment, mark_shown, record};
-use super::findings_file::{Sent, deferred_path, disputed_path};
+use super::disputes::{Dispute, Settled, answers, comment, mark_shown, record, refresh};
+use super::findings_file::{Sent, deferred_path, disputed, disputed_path};
 use super::{Finding, Severity};
 use crate::local_paths::{Leak, LocalPaths, Surface};
 
@@ -312,4 +312,69 @@ fn a_dispute_naming_another_local_path_is_held() {
 
     let guard = LocalPaths::new([dir.path()]);
     assert_eq!(guard.find(&text, Surface::Prose), Some(Leak::Path));
+}
+
+#[test]
+fn a_reason_rewritten_in_the_file_replaces_the_kept_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let build = dir.path().join("build");
+    std::fs::create_dir(&build).unwrap();
+    dispute_file(
+        &build,
+        &format!("{MEDIUM_LINE}  the file reads two values, not three\n"),
+    );
+    let mut kept = vec![raised(1, "/elsewhere/notes.md shows it is wrong")];
+    kept[0].shown = true;
+
+    let read = disputed(&build).unwrap();
+
+    assert!(
+        refresh(&mut kept, &read),
+        "the worker wrote its reason again after the ruling"
+    );
+    assert_eq!(kept[0].reason, "the file reads two values, not three");
+    assert!(!kept[0].shown, "so the new reason is to post or to show");
+}
+
+#[test]
+fn a_file_that_says_the_same_as_the_kept_reason_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let build = dir.path().join("build");
+    std::fs::create_dir(&build).unwrap();
+    dispute_file(
+        &build,
+        &format!("{MEDIUM_LINE}  the file reads two values\n"),
+    );
+    let mut kept = vec![raised(1, "the file reads two values")];
+    kept[0].shown = true;
+
+    let read = disputed(&build).unwrap();
+
+    assert!(
+        !refresh(&mut kept, &read),
+        "a dispute already posted or shown is not raised again"
+    );
+    assert!(kept[0].shown);
+}
+
+#[test]
+fn a_finding_the_file_no_longer_names_keeps_what_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let build = dir.path().join("build");
+    std::fs::create_dir(&build).unwrap();
+    dispute_file(
+        &build,
+        &format!("{HIGH_LINE}  the later round's own dispute\n"),
+    );
+    let mut kept = vec![raised(1, "the first round's reason")];
+    kept[0].shown = true;
+
+    let read = disputed(&build).unwrap();
+
+    assert!(
+        !refresh(&mut kept, &read),
+        "the round's file names another finding"
+    );
+    assert_eq!(kept[0].reason, "the first round's reason");
+    assert!(kept[0].shown);
 }

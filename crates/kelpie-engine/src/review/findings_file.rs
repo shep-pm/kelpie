@@ -23,7 +23,7 @@ const FINDINGS_FILE: &str = "review-findings.md";
 const DEFERRED_FILE: &str = "deferred-findings.md";
 
 /// Where the worker copies the findings it shows are wrong, each with its reason
-const DISPUTED_FILE: &str = "disputed-findings.md";
+pub(super) const DISPUTED_FILE: &str = "disputed-findings.md";
 
 /// The folder in the build folder where a reviewer writes its tests
 pub const TESTS_FOLDER: &str = "review-tests";

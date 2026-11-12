@@ -75,7 +75,7 @@ As SK's `gate/unread.rs` for a project whose PM does not yet rule on threads: a 
 
 ### What the maintainer sees
 
-A reviewer's read opens as a tab in the PM panel beside the worker's, in the same chat view, and its findings are the worker's next message, so the worker's tab shows what it was asked to fix. Nothing is posted to GitHub except disputes no reviewer read, as one comment at the gate, as SK does.
+A reviewer's read opens as a tab in the PM panel beside the worker's, in the same chat view, and its findings are the worker's next message, so the worker's tab shows what it was asked to fix. Nothing is posted to GitHub except disputes no reviewer read, as one comment at the gate, as SK does. A dispute whose reason names a path on this machine is not posted: the gate rules instead, and the worker writes its reason again in the disputed findings file, which the next yes reads back before it builds the comment. While a post the forge refused is still unposted, the head is not put up for the yes, so no merge is asked for with the worker's disputes unposted.
 
 The Review card's status line (`gate-and-merge.md`, The Review column) gains `reviewing, read 1 of 2`. A fix turn moves the ticket to Building, as a CI fix turn does, where its worker's tab shows the findings.
 
