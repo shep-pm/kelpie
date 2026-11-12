@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +27,7 @@ use kelpie_engine::github::{Clock, Timestamp};
 use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
 use kelpie_engine::review::fake::FakeReviewer;
-use kelpie_engine::review::{Finding, Read, Reviewer, ReviewerError};
+use kelpie_engine::review::{self, Finding, Read, Reviewer, ReviewerError};
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
@@ -298,6 +299,35 @@ impl Rig {
     /// The prompt of each read ticket `number`'s pass ran, in the order they read
     fn read_prompts(&self, number: u64) -> Vec<String> {
         self.reviewer(number).prompts()
+    }
+
+    /// Ticket `number`'s worker copied the round's finding into the disputed findings file with
+    /// `reason`, as a fix turn that shows it wrong does
+    ///
+    /// The turn runs on a [`FakeAgent`], which writes no file, so the case writes what its
+    /// worker's turn would have left in its build folder.
+    fn dispute(&self, number: u64, reason: &str) {
+        let build = self.paths().build_dir(&number.to_string());
+        let findings =
+            fs::read_to_string(review::findings_path(&build)).expect("the findings file");
+        let line = (findings.lines())
+            .find(|line| line.starts_with("HIGH|"))
+            .expect("the round's finding");
+        fs::write(
+            review::disputed_path(&build),
+            format!("{line}\n  {reason}\n"),
+        )
+        .unwrap();
+    }
+
+    /// The pull request the stand-in has open for `number`'s branch
+    fn pull_of(&self, number: u64) -> NonZeroU64 {
+        self.github
+            .pulls()
+            .into_iter()
+            .find(|pull| pull.branch == format!("kelpie/{number}"))
+            .expect("the ticket's draft is open")
+            .number
     }
 
     /// Put issue `number` on the board as Ready, with `agent` as its worker's harness

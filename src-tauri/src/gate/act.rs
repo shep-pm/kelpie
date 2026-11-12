@@ -13,8 +13,12 @@
 //! - [`Step::Rerun`] starts the stuck run again, once per head.
 //! - [`Step::Rule`] parks the worker waiting on the maintainer with the ruling's reason, as a
 //!   hand-over's ruling does, and the gate passes it no more until its head moves.
-//! - [`Step::Yes`] keeps the head ready to merge, which the ticket's needs-you line says.
-//!   The maintainer's yes merges it, which `merge` carries out on the ticket's next pass.
+//! - [`Step::Yes`] keeps the head ready to merge, which the ticket's line says, with what the
+//!   review pass warns of when no reviewer read that head. The disputes no reader was shown go
+//!   on the pull request here, which is the one thing a pass posts (`crate::review::disputes`);
+//!   a reason naming a path of this machine rules instead, and a post the forge refuses is
+//!   asked for again on the next read. The maintainer's yes merges it, which `merge` carries out
+//!   on the ticket's next pass.
 //! - [`Step::Review`] runs one step of the project's review pass (`crate::review`). A step
 //!   that ends its part hands the ticket back, so the order runs again on the head the pass
 //!   moved to; one that sent the worker a turn or found no slot free ends the pass; and a
@@ -30,7 +34,7 @@ use kelpie_engine::worker::Status;
 use kelpie_engine::worktree::{self, Rebase, Remote};
 
 use super::{Gate, Work, lock};
-use crate::review::{At, Ran};
+use crate::review::{At, Ran, disputes::Posted};
 use crate::workers::BASE;
 
 /// What the book does with a ticket after its pass
@@ -78,7 +82,16 @@ impl Gate {
                         false
                     }
                     Step::Red(checks) => self.red(work, kept, head, &checks, limits, now),
-                    Step::Yes => {
+                    Step::Yes { .. } => {
+                        // The disputes no reader was shown go on the pull request at the yes,
+                        // which is the one thing a pass posts. One that names this machine rules
+                        // instead of going round the same refused post, and one the forge would
+                        // not take just now stays unshown for the next read, which asks again.
+                        if let Some(ruling) = self.disputes(work, look, head) {
+                            self.rule(work, kept, &ruling, head);
+                            self.said(work.id, Some(Line::of(&ruling)));
+                            return Carried::Keep;
+                        }
                         kept.ready_at(head);
                         false
                     }
@@ -123,6 +136,28 @@ impl Gate {
                 self.said(work.id, Some(Line::of(&ruling)));
                 Carried::Keep
             }
+        }
+    }
+
+    /// Post the disputes of `work`'s pass that no reader was shown, and the ruling one names
+    /// this machine
+    ///
+    /// The yes is where they go, being the one thing a pass posts (`crate::review::disputes`).
+    /// `None` when there is nothing to post, or the forge will take them and the head goes on
+    /// ready, or it will not take them just now and the next read asks again.
+    fn disputes(&self, work: &Work, look: &Look, head: &str) -> Option<Ruling> {
+        let Pull::Open(pull) = &look.pull else {
+            // A pull request that is not open has no comments to post on
+            return None;
+        };
+        let at = At {
+            ticket: &work.ticket,
+            number: pull.number.get(),
+            head,
+        };
+        match self.review.posted(&at) {
+            Posted::Told | Posted::Retry => None,
+            Posted::Refused(ruling) => Some(Ruling::Review(ruling)),
         }
     }
 

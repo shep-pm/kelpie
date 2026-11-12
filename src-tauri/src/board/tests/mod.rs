@@ -624,7 +624,11 @@ fn a_merge_under_way_shows_its_line_without_merge() {
     let mut rig = four_in_flight();
     // The yes was carried out: the line still reads ready to merge, but the gate's ready
     // mark is gone, so a press on Merge would find nothing to say yes to
-    let view = gate_lines(&mut rig, &[("15", Line::ReadyToMerge)], &[]);
+    let view = gate_lines(
+        &mut rig,
+        &[("15", Line::ReadyToMerge { warning: None })],
+        &[],
+    );
 
     let gate = view
         .tickets
@@ -658,7 +662,7 @@ fn a_review_ticket_carries_its_gate_line_and_link() {
                     link: Some(run.to_owned()),
                 },
             ),
-            ("15", Line::ReadyToMerge),
+            ("15", Line::ReadyToMerge { warning: None }),
             ("16", Line::WaitingForCi),
             // A fix turn runs: the ticket is in Building and shows no line
             ("17", Line::FixingRed { link: None }),

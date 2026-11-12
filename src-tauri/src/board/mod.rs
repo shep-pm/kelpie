@@ -181,7 +181,9 @@ fn needs_you(
         _ => None,
     });
     let asked = requests.get(ticket).into_iter().flatten();
-    let merge = ready.contains(ticket).then(|| Line::ReadyToMerge.text());
+    let merge = ready
+        .contains(ticket)
+        .then(|| Line::ReadyToMerge { warning: None }.text());
     own.into_iter()
         .chain(merge)
         .chain(asked.map(|host| format!("Wants to reach {host}")))

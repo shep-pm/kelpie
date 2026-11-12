@@ -33,7 +33,12 @@
 //!
 //! A head a catch-up pushed is vouched for when the head it replaced was read or vouched
 //! for ([`Review::vouched`]), as SK's `send_unread` does, so a caught-up head needs no new
-//! read.
+//! read. A head the pass never read, or one it ended short on, is what the merge yes warns of
+//! ([`Review::looked`], `docs/design/review.md`, The unread head).
+//!
+//! The one thing a pass posts is the disputes no reader was shown, as one comment on the pull
+//! request at the merge yes (`disputes`). A reason naming a path of this machine is a ruling
+//! instead, and a post the forge refuses is tried again on the next read.
 //!
 //! Each read's events go to the ticket's feed (`watch`), which the window follows with
 //! `review_watch`, so a read shows in a tab as it happens.
@@ -58,6 +63,7 @@ use crate::workers::{WorkerPlan, plan};
 use watch::Reads;
 
 mod act;
+pub(crate) mod disputes;
 mod open;
 #[cfg(test)]
 mod tests;
@@ -289,6 +295,7 @@ impl Review {
                 can_run: true,
                 read: had + 1,
                 of: RULE_READS,
+                warning: None,
             };
         };
         // A round that has started, or a turn the pass is waiting on, has a step to run
@@ -297,16 +304,48 @@ impl Review {
         let started = pass.reviewer.is_some() || !matches!(pass.stage, ReviewStage::Round);
         let owed = !review::pass_ended(&pass, passed_over, &standing.lineup, changed);
         let can_run = started || owed;
+        let vouches = heads.vouches_for(head) && !started;
+        // The yes is where the unread warning belongs: the gate gives it once the pass has
+        // nothing left to run, or vouches for the head it is asked about
+        let warning = if can_run && !vouches {
+            None
+        } else {
+            self.unread_of(&heads, &pass, kept, &standing.lineup, passed_over, head)
+        };
         Reviewed {
             // A head the pass pushed for is one it has read for, so it needs no new pass.
             // A round of the pass that is still at work on that head is stepped all the
             // same: its fix turn and its tests are the pass's own business, and a pass
             // left off mid-round would end at the merge yes with its findings unsent.
-            vouches: heads.vouches_for(head) && !started,
+            vouches,
             can_run,
             read: had + u32::from(can_run),
             of: RULE_READS,
+            warning,
         }
+    }
+
+    /// What the merge yes warns of at `head`: a head pushed after the pass's last read, or a
+    /// pass that ended short (`docs/design/review.md`, The unread head)
+    ///
+    /// How the pass ended short is what [`review::end_review`] kept in `kept.short`, read back
+    /// where it is kept and worked out from the lineup where it is not: a pass the gate never
+    /// sent a step to, which is how a project with no reviewer to run ends, never ran its end
+    /// step. A head the pass read, or one its own fix turn pushed, warns of nothing.
+    fn unread_of(
+        &self,
+        heads: &review::Heads,
+        pass: &Pass,
+        kept: Option<&review::Kept>,
+        lineup: &Lineup,
+        passed_over: &[String],
+        head: &str,
+    ) -> Option<String> {
+        let short = kept
+            .and_then(|kept| kept.short.clone())
+            .map(|short| short.why)
+            .or_else(|| lineup.pass_unread(pass, passed_over, RULE_READS));
+        review::unread_of(heads, head, short).map(|unread| unread.text())
     }
 
     /// One step of `at`'s pass: what the engine's order says to do, carried out

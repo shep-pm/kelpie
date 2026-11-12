@@ -104,7 +104,10 @@ pub struct Look {
 ///
 /// A head a pass has not read goes to the pass before the merge yes. A head the pass
 /// vouches for is one its own fix turn pushed, which the pass has already read for.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// A head the yes is given on that no reviewer read, or one a pass ended short on, comes
+/// with the warning the yes shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reviewed {
     /// A fix turn of the pass pushed this head, so the pass vouches for it and it needs no new read.
     /// A pass still at work on the head is stepped whatever it vouches for, so a caller reports
@@ -116,6 +119,10 @@ pub struct Reviewed {
     pub read: u32,
     /// The reads the pass owes
     pub of: u32,
+    /// What the merge yes warns of, as [`crate::review::Unread::text`] says it: a head pushed
+    /// after the pass's last read, or a pass that ended short. None for a head the pass read
+    /// or vouches for, which is what the maintainer's yes is given on as before.
+    pub warning: Option<String>,
 }
 
 /// The project's settings the gate reads (`docs/design/gate-and-merge.md`, Settings)
@@ -166,8 +173,13 @@ pub enum Step {
         /// The reads the pass owes
         of: u32,
     },
-    /// Everything holds: ask the maintainer for the merge
-    Yes,
+    /// Everything holds: ask the maintainer for the merge, warning of `warning` when the pass
+    /// has one for this head
+    Yes {
+        /// What the yes warns of: none when a reviewer read this head or one of the pass's fix
+        /// turns pushed it
+        warning: Option<String>,
+    },
 }
 
 impl Step {
@@ -187,7 +199,9 @@ impl Step {
                 read: *read,
                 of: *of,
             },
-            Self::Yes => Line::ReadyToMerge,
+            Self::Yes { warning } => Line::ReadyToMerge {
+                warning: warning.clone(),
+            },
         })
     }
 }
@@ -212,8 +226,12 @@ pub enum Line {
         /// The reads the pass owes
         of: u32,
     },
-    /// Ready to merge, on the maintainer's yes
-    ReadyToMerge,
+    /// Ready to merge, on the maintainer's yes, warning of `warning` when no reviewer read
+    /// the head it is ready on
+    ReadyToMerge {
+        /// What the head is unread by, named, none when a reviewer read it or a fix turn pushed it
+        warning: Option<String>,
+    },
     /// In the merge queue
     InMergeQueue,
     /// The forge's head has not matched the branch for [`LAG_LIMIT`]
@@ -248,7 +266,10 @@ impl Line {
             Self::WaitingForCi => "Waiting for CI".to_owned(),
             Self::FixingRed { .. } => "Fixing red CI".to_owned(),
             Self::Reviewing { read, of } => format!("Reviewing, read {read} of {of}"),
-            Self::ReadyToMerge => "Ready to merge".to_owned(),
+            Self::ReadyToMerge {
+                warning: Some(warning),
+            } => format!("Ready to merge, unread: {warning}"),
+            Self::ReadyToMerge { warning: None } => "Ready to merge".to_owned(),
             Self::InMergeQueue => "In the merge queue".to_owned(),
             Self::BaseLagging { head } => format!(
                 "GitHub has shown {} for {} minutes, but the branch is elsewhere. Reopen the \
@@ -330,6 +351,10 @@ pub fn pass(look: &Look, kept: &mut Kept, limits: &Limits, now: Timestamp) -> St
 
 /// What a head the checks let through comes to: the review pass first, unless it has read
 /// the head, vouches for it, or has nothing left to run
+///
+/// The yes carries the pass's warning with it, so a head no reviewer read reaches the
+/// maintainer named as one (`docs/design/review.md`, The unread head). The yes is the
+/// maintainer's whatever the warning says.
 fn reviewed(review: &Reviewed) -> Step {
     if review.can_run && !review.vouches {
         return Step::Review {
@@ -337,7 +362,9 @@ fn reviewed(review: &Reviewed) -> Step {
             of: review.of,
         };
     }
-    Step::Yes
+    Step::Yes {
+        warning: review.warning.clone(),
+    }
 }
 
 /// What a conflict on catch-up comes to: the worker's next turn, or a ruling

@@ -52,12 +52,9 @@ fn look(checks: HeadStatus) -> Look {
 // A green head the review pass still owes a read
 fn unread_review(checks: HeadStatus) -> Look {
     let mut look = look(checks);
-    look.review = Reviewed {
-        vouches: false,
-        can_run: true,
-        read: 1,
-        of: 2,
-    };
+    look.review.can_run = true;
+    look.review.read = 1;
+    look.review.of = 2;
     look
 }
 
@@ -108,6 +105,11 @@ fn ruled(step: &Step) -> &Ruling {
     }
 }
 
+// The merge yes with nothing to warn of. A test about a warning names its own.
+fn yes() -> Step {
+    Step::Yes { warning: None }
+}
+
 #[test]
 fn a_pull_merged_by_hand_is_done() {
     let mut look = look(HeadStatus::None);
@@ -135,7 +137,7 @@ fn a_new_head_restarts_the_wait() {
     // CI passed on `HEAD`, which has waited long enough.
     let mut kept = waiting(0);
     let green = look(HeadStatus::Passed);
-    assert_eq!(pass(&green, &mut kept, &limits(), at(500)), Step::Yes);
+    assert_eq!(pass(&green, &mut kept, &limits(), at(500)), yes());
 
     // A push moved the head, and the checks have had no time to register.
     let mut pushed = look(HeadStatus::Passed);
@@ -183,7 +185,7 @@ fn a_lagging_base_waits_and_says_so_after_fifteen_minutes() {
     // Once the branch matches again the lag is forgotten.
     assert_eq!(
         pass(&look(HeadStatus::Passed), &mut kept, &limits(), at(5000)),
-        Step::Yes
+        yes()
     );
     assert_eq!(kept.lag, None);
 }
@@ -218,7 +220,7 @@ fn a_label_or_draft_state_changed_by_someone_else_is_a_foreign_change() {
     // Kelpie marking it ready is no change.
     let mut mine = waiting(0);
     mine.marked_ready();
-    assert_eq!(pass(&look, &mut mine, &limits(), at(500)), Step::Yes);
+    assert_eq!(pass(&look, &mut mine, &limits(), at(500)), yes());
 }
 
 #[test]
@@ -257,7 +259,7 @@ fn a_head_neither_the_worker_nor_kelpie_pushed_is_a_foreign_change() {
 
     // A head kelpie pushed itself, in a catch-up, is not foreign.
     kept.pushed(OTHER);
-    assert_eq!(pass(&look, &mut kept, &limits(), at(500)), Step::Yes);
+    assert_eq!(pass(&look, &mut kept, &limits(), at(500)), yes());
 }
 
 #[test]
@@ -290,7 +292,7 @@ fn a_clean_branch_behind_its_base_goes_on_unrebased_when_the_project_catches_up_
     look.base = Base::Behind;
 
     look.merges_clean = true;
-    assert_eq!(pass(&look, &mut waiting(0), &conflicts, at(500)), Step::Yes);
+    assert_eq!(pass(&look, &mut waiting(0), &conflicts, at(500)), yes());
     // Always rebases it anyway, and so does a merge that does not come out clean.
     assert_eq!(
         pass(&look, &mut waiting(0), &limits(), at(500)),
@@ -347,7 +349,7 @@ fn ci_that_does_not_hold_the_merge_skips_to_the_yes() {
     let mut limits = limits();
     limits.ci_holds_merge = false;
     let look = look(HeadStatus::Failed(vec![failed("test")]));
-    assert_eq!(pass(&look, &mut waiting(500), &limits, at(500)), Step::Yes);
+    assert_eq!(pass(&look, &mut waiting(500), &limits, at(500)), yes());
 }
 
 #[test]
@@ -371,7 +373,7 @@ fn checks_settle_for_two_minutes_after_a_push() {
             &limits(),
             at(1000 + CHECKS_SETTLE)
         ),
-        Step::Yes
+        yes()
     );
 }
 
@@ -381,7 +383,7 @@ fn no_checks_and_no_pull_request_workflow_on_the_base_is_skipped() {
     look.base_runs_pull_workflow = false;
     assert_eq!(
         pass(&look, &mut waiting(0), &limits(), at(CHECKS_SETTLE)),
-        Step::Yes
+        yes()
     );
 }
 
@@ -498,9 +500,28 @@ fn checks_held_for_approval_are_ruled_on_and_never_rerun() {
 fn passed_or_skipped_on_the_latest_base_is_the_yes() {
     for checks in [HeadStatus::Passed, HeadStatus::Skipped] {
         let step = pass(&look(checks), &mut waiting(0), &limits(), at(500));
-        assert_eq!(step, Step::Yes);
-        assert_eq!(step.line(), Some(Line::ReadyToMerge));
+        assert_eq!(step, yes());
+        assert_eq!(step.line(), Some(Line::ReadyToMerge { warning: None }));
     }
+}
+
+#[test]
+fn a_ready_line_with_a_warning_names_the_unread_head() {
+    let warning = "ccccccc was pushed after the last review read, which was of aaaaaaa.";
+    let mut look = look(HeadStatus::Passed);
+    look.review.warning = Some(warning.to_owned());
+    let step = pass(&look, &mut waiting(0), &limits(), at(500));
+    assert_eq!(
+        step,
+        Step::Yes {
+            warning: Some(warning.to_owned())
+        }
+    );
+    assert_eq!(
+        step.line().unwrap().text(),
+        "Ready to merge, unread: ccccccc was pushed after the last review read, which was of \
+         aaaaaaa."
+    );
 }
 
 #[test]
@@ -931,14 +952,14 @@ fn a_green_head_the_pass_has_not_read_goes_to_the_review_pass() {
 fn a_head_the_review_vouches_for_is_the_yes() {
     let mut look = unread_review(HeadStatus::Passed);
     look.review.vouches = true;
-    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), Step::Yes);
+    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), yes());
 }
 
 #[test]
 fn a_green_head_with_no_reviewer_left_is_the_yes() {
     let mut look = unread_review(HeadStatus::Passed);
     look.review.can_run = false;
-    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), Step::Yes);
+    assert_eq!(pass(&look, &mut waiting(0), &limits(), at(5000)), yes());
 }
 
 #[test]

@@ -9,6 +9,7 @@ use kelpie_engine::ci::HeadStatus;
 use kelpie_engine::gate::FORGE_CLOSE_WAIT;
 use kelpie_engine::review::{Finding, Severity};
 use kelpie_engine::session::fake::{FakeAgent, Turn};
+use kelpie_engine::ticket::TicketId;
 use kelpie_engine::worker::Status;
 
 use super::{Rig, SETTLE, git, lock};
@@ -590,6 +591,92 @@ fn a_review_ruling_on_one_ticket_leaves_the_other_to_the_merge_yes() {
         rig.gate().ready().into_iter().collect::<Vec<_>>(),
         ["13".to_owned()],
         "the other ticket is still the one put up to merge",
+    );
+}
+
+#[test]
+fn a_dispute_on_one_ticket_is_posted_only_on_its_pull_request() {
+    let rig = Rig::new(2);
+    // The first ticket's fix turn shows its finding wrong and pushes nothing; the second is clean
+    let one = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("it is wrong, and the file shows it"));
+    let two = FakeAgent::new();
+    rig.ticket(12, "Add the thing", "It does one.", &one);
+    rig.ticket(13, "Fix the other", "It does two.", &two);
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    rig.push_work(12, "one.txt");
+    rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    rig.reviewer(12).script_read(Ok(vec![finding(
+        "one.txt",
+        2,
+        "it is wrong, and it is in scope",
+    )]));
+
+    // The finding goes to the first ticket's worker, and the second ticket's pass ends clean
+    rig.columns();
+    rig.until_passed();
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2 && rig.gate().ready().contains("13")
+    });
+
+    // Its turn showed the finding wrong with a reason and pushed nothing, and no reader follows
+    rig.dispute(12, "the file does not do that");
+    rig.until_turns(12, 2);
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        !rig.github.comments().is_empty()
+    });
+
+    let posted = rig.github.comments();
+    let (on, body) = posted
+        .first()
+        .expect("the disputes went on the pull request as one comment");
+    assert_eq!(
+        *on,
+        TicketId::from_issue(rig.pull_of(12).get()).unwrap(),
+        "the comment is on the first ticket's pull request: {posted:?}"
+    );
+    assert!(
+        body.contains("one.txt:2"),
+        "the finding it disputes: {body}"
+    );
+    assert!(
+        body.contains("the file does not do that"),
+        "and the worker's reason: {body}"
+    );
+    assert_eq!(
+        posted.len(),
+        1,
+        "one comment, for one ticket's disputes: {posted:?}"
+    );
+    assert!(
+        !body.contains("two.txt"),
+        "and it holds nothing of the other ticket: {body}"
+    );
+    assert_eq!(
+        rig.gate().ready().into_iter().collect::<Vec<_>>(),
+        ["12".to_owned(), "13".to_owned()],
+        "the disputed ticket still reaches the merge yes, with the other",
+    );
+    assert!(
+        rig.github
+            .pulls()
+            .iter()
+            .all(|pull| pull.draft && pull.body.contains("Resolves #")),
+        "no findings, no review and no ready mark went to GitHub either: {:?}",
+        rig.github.pulls()
     );
 }
 

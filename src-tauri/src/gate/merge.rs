@@ -81,7 +81,7 @@ pub(super) fn line_of(kept: &Kept) -> Line {
     if kept.sent.as_ref().is_some_and(|sent| sent.queued) {
         Line::InMergeQueue
     } else {
-        Line::ReadyToMerge
+        Line::ReadyToMerge { warning: None }
     }
 }
 

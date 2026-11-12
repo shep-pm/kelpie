@@ -27,6 +27,7 @@ use serde_json::json;
 use crate::gate::tests::rig::Rig;
 
 mod failing;
+mod unread;
 
 /// The ticket the tests work on
 const TICKET: &str = "7";
