@@ -22,6 +22,25 @@ const COLUMNS: readonly KanbanColumn<Column>[] = [
 
 const waits = (id: string) => `#${id} waits for a slot.`;
 
+/**
+ * The gate's merge yes, which Merge on the card or the Review to Done drag
+ * answers, not a Note to the worker (`docs/design/gate-and-merge.md`, The Review
+ * column). The engine words it `Ready to merge`
+ * (`crates/kelpie-engine/src/gate/mod.rs`), and it is the one needs-you line
+ * that is not the worker's own wait.
+ */
+const MERGE_YES = "Ready to merge";
+
+/**
+ * Whether the worker on `ticket` is the one waiting on the maintainer, which is
+ * what a live worker's tab answers: a Paused worker, a held record with its
+ * reason, or a sandbox request. A worker whose turn ended waits on nothing
+ * (`crates/kelpie-engine/src/worker/mod.rs`, `Status::Ended`), so a Review
+ * ticket whose only line is the merge yes has no tab worth opening.
+ */
+const workerWaits = (ticket: TicketView) =>
+  ticket.needs_you.some((line) => line !== MERGE_YES);
+
 /** The time a held limit lifts, in the maintainer's own clock. */
 function Limit({ until }: { until: number }) {
   const at = new Date(until * 1000);
@@ -43,9 +62,10 @@ function Limit({ until }: { until: number }) {
  * GitHub and streamed by the engine.
  *
  * Ready tickets carry Start, and a drop from Ready on Building does the same.
- * Clicking a Building ticket calls `onOpenWorker`, as does a Start that took a
- * slot, and clicking any other opens its pull request in Review, else its
- * issue.
+ * Clicking a ticket whose worker is live calls `onOpenWorker`, as does a Start
+ * that took a slot: a Building ticket, and a Review ticket whose worker waits
+ * on the maintainer. Clicking any other opens its pull request in Review, else
+ * its issue.
  */
 export function Board({
   onOpenWorker,
@@ -88,6 +108,11 @@ export function Board({
 
   async function open(ticket: TicketView) {
     if (ticket.column === "building")
+      return onOpenWorker?.({ id: ticket.id, title: ticket.title });
+    if (ticket.column === "review" && workerWaits(ticket))
+      // The worker's own needs-you line asks the maintainer to answer that
+      // worker, so the card opens the tab where they can, even after the tab
+      // was closed.
       return onOpenWorker?.({ id: ticket.id, title: ticket.title });
     const url =
       ticket.column === "review" && ticket.pull_url
