@@ -282,6 +282,20 @@ impl Sandbox {
         Self::from_config(config)
     }
 
+    /// Start the sandbox `config` describes, a policy already composed
+    ///
+    /// For a caller that holds a session's policy and runs one more command under it, as
+    /// the review pass runs a reviewer's test under the worker's own ([`worker::policy`]).
+    /// The folders `config` lets be written must exist. No check of the project's folder
+    /// is made here: the caller made one when it composed the policy.
+    ///
+    /// # Errors
+    ///
+    /// [`SandboxError::Start`] when crabpot cannot start.
+    pub fn start_policy(config: Config) -> Result<Self, SandboxError> {
+        Self::from_config(config)
+    }
+
     /// Start the sandbox of a reviewer on `harness`, in `project`
     ///
     /// Makes the reviewer's state folder when it is missing, since the sandbox may

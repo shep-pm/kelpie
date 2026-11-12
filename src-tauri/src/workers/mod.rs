@@ -174,6 +174,9 @@ pub struct Workers {
     handovers: Mutex<BTreeMap<String, hand_over::Busy>>,
     /// Each project's gate, by project, built on the first ask ([`Workers::gate`])
     gates: Mutex<BTreeMap<String, Arc<Gate>>>,
+    /// What each project's review pass runs a reviewer's test with, stood in by a test
+    /// ([`Workers::stand_in_testing`]); a project with none runs them in a sandbox
+    testings: Mutex<BTreeMap<String, crate::review::Testing>>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -214,6 +217,7 @@ impl Workers {
             forges: Mutex::default(),
             handovers: Mutex::default(),
             gates: Mutex::default(),
+            testings: Mutex::default(),
         }
     }
 

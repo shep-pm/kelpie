@@ -23,9 +23,10 @@ use std::time::{Duration, Instant};
 use kelpie_engine::ci::fake::FakeCi;
 use kelpie_engine::ci::{Ci, FailedCheck, FailedLog, HeadStatus};
 use kelpie_engine::github::{Clock, Timestamp};
+use kelpie_engine::lease::Leases;
 use kelpie_engine::login::Store;
-use kelpie_engine::review::Reviewer;
 use kelpie_engine::review::fake::FakeReviewer;
+use kelpie_engine::review::{Finding, Read, Reviewer, ReviewerError};
 use kelpie_engine::run::RunId;
 use kelpie_engine::session::Session;
 use kelpie_engine::session::fake::FakeAgent;
@@ -40,7 +41,8 @@ use serde_json::json;
 use crate::board::poll::{Choices, Poller, Retry};
 use crate::board::{BoardEvent, Column};
 use crate::gate::Gate;
-use crate::review::Make;
+use crate::gate::tests::rig::{Launches, Through};
+use crate::review::{Kit, Make, SandboxedTests, Testing};
 use crate::state::AppState;
 use crate::workers::{
     Forge, Hands, NoteOutcome, Open, WorkerStarted, note_through, plan, stop_and_tell_on,
@@ -59,6 +61,9 @@ const READY: &str = "ready-for-agent";
 
 /// The feed watch id the rig attaches under
 const WATCH: u32 = 1;
+
+/// The files a reviewer writes into its tests folder, as path and text
+type Files = Vec<(String, String)>;
 
 /// Every event a worker's feed carried
 type Heard = Arc<Mutex<Vec<SessionEvent>>>;
@@ -142,6 +147,34 @@ struct Rig {
 
     /// What each ticket's worker's feed carried
     heard: Mutex<BTreeMap<u64, Heard>>,
+
+    /// Every test run the pass launched, in place of a sandbox and `kelpie lease run`
+    launches: Arc<Launches>,
+
+    /// The files each ticket's reviewer writes into its tests folder on a read
+    attached: Arc<Mutex<BTreeMap<u64, Files>>>,
+
+    /// Holds the leases the test runs queue on
+    _leases: Arc<Leases>,
+}
+
+/// A reviewer that writes the files a case gave it into its tests folder, then reads as `inner` does
+struct Attaching {
+    inner: Arc<FakeReviewer>,
+    files: Files,
+}
+
+impl Reviewer for Attaching {
+    fn read(&self, read: &Read<'_>) -> Result<Vec<Finding>, ReviewerError> {
+        if let Some(folder) = read.tests {
+            for (path, text) in &self.files {
+                let at = folder.join(path);
+                fs::create_dir_all(at.parent().unwrap()).unwrap();
+                fs::write(at, text).unwrap();
+            }
+        }
+        self.inner.read(read)
+    }
 }
 
 impl Rig {
@@ -196,6 +229,31 @@ impl Rig {
                 Arc::clone(&queue) as Arc<dyn MergeQueue>,
             )),
         );
+        let launches = Arc::new(Launches::default());
+        let leases = Arc::new(Leases::new(
+            &Settings::load(state.config(), &project).unwrap(),
+        ));
+        state.workers().stand_in_testing(
+            &project,
+            Testing {
+                runner: Arc::new(SandboxedTests::through(Box::new(Through(Arc::clone(
+                    &launches,
+                ))))),
+                gear: Arc::new({
+                    let (leases, sockets) = (Arc::clone(&leases), dir.join("leases"));
+                    move |ticket, _plan| {
+                        let folder = sockets.join(ticket);
+                        fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+                        Ok(Kit {
+                            reach: crabpot::Config::default(),
+                            lease: Some(
+                                leases.session(&folder).map_err(|error| error.to_string())?,
+                            ),
+                        })
+                    }
+                }),
+            },
+        );
         Self {
             dir,
             state,
@@ -206,7 +264,29 @@ impl Rig {
             agents: Arc::default(),
             reviewers: Arc::default(),
             heard: Mutex::default(),
+            launches,
+            attached: Arc::default(),
+            _leases: leases,
         }
+    }
+
+    /// The project's Test command is `command`, so reviewers are asked for tests
+    fn test_command(&self, command: &str) {
+        Settings::set(
+            self.state.config(),
+            LayerFile::Project(&self.project),
+            Field::TestCommand,
+            &json!(command),
+        )
+        .unwrap();
+    }
+
+    /// Ticket `number`'s reviewer writes `text` at `path` in its tests folder on each read
+    fn attach(&self, number: u64, path: &str, text: &str) {
+        lock(&self.attached)
+            .entry(number)
+            .or_default()
+            .push((path.to_owned(), text.to_owned()));
     }
 
     /// The reviewer ticket `number`'s pass reads with, which a case scripts before a read
@@ -511,14 +591,15 @@ impl Rig {
             ))
         });
         // Each ticket's pass reads with a reviewer of its own, which a case scripts
-        let reviewers = Arc::clone(&self.reviewers);
+        let (reviewers, attached) = (Arc::clone(&self.reviewers), Arc::clone(&self.attached));
         let make: Arc<Make> = Arc::new(move |ticket, _binding, _plan| {
             let number: u64 = ticket.parse().map_err(|_| "the ticket names no issue")?;
-            let reviewer = {
+            let inner = {
                 let mut reviewers = lock(&reviewers);
                 Arc::clone(reviewers.entry(number).or_default())
             };
-            Ok(reviewer as Arc<dyn Reviewer>)
+            let files = lock(&attached).get(&number).cloned().unwrap_or_default();
+            Ok(Arc::new(Attaching { inner, files }) as Arc<dyn Reviewer>)
         });
         self.state
             .workers_arc()

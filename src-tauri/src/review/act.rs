@@ -13,8 +13,12 @@
 //!   the fix prompt through [`crate::workers::Workers::fix_turn`], so the findings are the
 //!   worker's next message and its ticket shows Building (`docs/design/review.md`, Findings).
 //! - [`ReviewStep::Push`] sends the push prompt the same way.
-//! - [`ReviewStep::RunTests`] records each of the round's tests as a run that said nothing,
-//!   which blocks nothing. Running a reviewer's test is #265's.
+//! - [`ReviewStep::RunTests`] runs the round's reviewer tests through the project's
+//!   [`Testing`](super::Testing): at the head the reviewer read once the round's findings
+//!   are in, and at the fix's head once the fix moved it. The runs are the engine's
+//!   ([`review::tests_before`], [`review::tests_after`]) and are kept as the ticket's checks.
+//!   A run that could not be made says so and blocks nothing; the send-back and the ruling
+//!   on a test that still fails are the engine's order ([`review::after_fix`]).
 //! - [`ReviewStep::Rule`] parks the worker waiting on the maintainer with the ruling's
 //!   reason, as the gate's rulings are.
 //! - [`ReviewStep::Ended`] hands the ticket back to the gate, which gives the merge yes.
@@ -22,18 +26,20 @@
 use std::path::Path;
 
 use kelpie_engine::agents::Binding;
+use kelpie_engine::lease::SessionLease;
 use kelpie_engine::review::{
-    self, Finding, Kept, Lineup, ReviewStage, ReviewStep, ReviewerError, TestCheck, TestOutcome,
-    TestsAsked,
+    self, Finding, Folders, Kept, Lineup, ReviewStage, ReviewStep, ReviewerError, Setup, TestCheck,
+    TestOutcome, TestsAsked,
 };
 use kelpie_engine::session::SessionEvent;
+use kelpie_engine::ticket::TicketId;
 use kelpie_engine::worker::{Seat, Status};
 use kelpie_engine::worker_folder;
 
-use super::{At, Ran, Review, Standing, lock};
+use super::{At, KEPT, Ran, Review, Standing, lock};
 
-/// What a reviewer's test reads as until #265 runs it
-const NOT_RUN: &str = "kelpie runs a reviewer's test from #265 on";
+/// What a test the pass could not run says, when the worktree is not at the head
+const NOT_AT_THE_HEAD: &str = "the worktree is not at the head the fix pushed";
 
 /// The hand-over file the worker wrote the pull request's title and body in
 ///
@@ -59,7 +65,7 @@ impl Review {
             }
             ReviewStep::FixTurn { prompt, findings } => self.sent(at, kept, &prompt, &findings),
             ReviewStep::Push(prompt) => self.sent(at, kept, &prompt, &[]),
-            ReviewStep::RunTests => self.tests(kept),
+            ReviewStep::RunTests => self.tests(at, look, kept, standing),
             ReviewStep::Rule(ruling) => self.ruled(at, &ruling),
             ReviewStep::Ended { unread } => self.ended(at, unread),
         }
@@ -114,6 +120,7 @@ impl Review {
             sink: &sink,
         });
         let stopped = matches!(outcome, Err(ReviewerError::Stopped));
+        let outcome = outcome.map(|found| self.checked(at, look, standing, found));
         review::after_read(kept, &standing.lineup, outcome);
         self.idle(at.ticket, slots);
         match stopped {
@@ -152,26 +159,137 @@ impl Review {
         }
     }
 
-    /// Record each test the round's findings carry as a run that said nothing
+    /// `found` with each attached test checked and kept, for the worker's fix turn and the runs
     ///
-    /// A test with no run yet gets its run at the head the reviewer read; one whose fix
-    /// moved the head gets the run after it. Each reads
-    /// [`Reading::Unknown`](review::Reading), which holds nothing, until #265 runs the
-    /// project's Test command.
-    fn tests(&self, kept: &mut Kept) -> Ran {
-        let Some((round, sent)) = kept.review.as_ref().map(|r| {
-            let sent = match &r.stage {
-                ReviewStage::Found { findings } => findings.clone(),
-                ReviewStage::Fixing { sent, .. } => sent.clone(),
-                _ => Vec::new(),
-            };
-            (r.round, sent)
-        }) else {
+    /// A test the reviewer attached that is not a regular file of its own folder, or that the
+    /// worktree already holds a file for, loses its test and the note says why
+    /// ([`review::checked_tests`]). With no Test command set no test was asked for.
+    fn checked(
+        &self,
+        at: &At<'_>,
+        look: &review::Look,
+        standing: &Standing,
+        found: Vec<Finding>,
+    ) -> Vec<Finding> {
+        let Ok(ticket) = at.ticket.parse::<TicketId>() else {
+            return found;
+        };
+        let (worktree, worker) = (
+            self.paths.worktree(at.ticket),
+            self.paths.project().join(KEPT),
+        );
+        let mut notes = Vec::new();
+        let checked = review::checked_tests(
+            standing.test_command.is_some(),
+            &Folders {
+                ticket,
+                worktree: &worktree,
+                build: &look.build,
+                worker: &worker,
+            },
+            found,
+            &mut notes,
+        );
+        self.said(at, &notes);
+        checked
+    }
+
+    /// Run the tests of the round's findings, before the fix at the head the reviewer read and
+    /// after it at the fix's head, and keep each run as the ticket's check
+    ///
+    /// The runs are the engine's: each puts the kept test in the worktree, runs the project's
+    /// Test command on it in the worker's sandbox under the `cargo-test` lease
+    /// ([`super::Testing`]), and takes it out again. A run that could not be made, because the
+    /// sandbox would not start or the worktree is not at the head, is kept as one that did not
+    /// run, which blocks nothing.
+    fn tests(&self, at: &At<'_>, look: &review::Look, kept: &mut Kept, standing: &Standing) -> Ran {
+        let Some((round, stage, reading)) = kept
+            .review
+            .as_ref()
+            .map(|r| (r.round, r.stage.clone(), r.reading.clone()))
+        else {
             return Ran::Again;
         };
+        let (found, after) = match stage {
+            ReviewStage::Found { findings } => (findings, false),
+            ReviewStage::Fixing { sent, .. } => (sent, true),
+            _ => return Ran::Again,
+        };
+        let (Some(command), Ok(ticket)) = (
+            standing.test_command.as_ref(),
+            at.ticket.parse::<TicketId>(),
+        ) else {
+            Self::not_run(kept, round, &found, "the project has no Test command set");
+            return Ran::Again;
+        };
+        let kit = match (self.testing.gear)(at.ticket, &standing.plan) {
+            Ok(kit) => kit,
+            Err(why) => {
+                eprintln!(
+                    "kelpie: ticket {}'s test could not be run: {why}",
+                    at.ticket
+                );
+                Self::not_run(kept, round, &found, &why);
+                return Ran::Again;
+            }
+        };
+        let (worktree, worker) = (
+            self.paths.worktree(at.ticket),
+            self.paths.project().join(KEPT),
+        );
+        if let Err(why) = std::fs::create_dir_all(&worker) {
+            let why = format!("could not make {}: {why}", worker.display());
+            Self::not_run(kept, round, &found, &why);
+            return Ran::Again;
+        }
+        let setup = Setup {
+            runner: &*self.testing.runner,
+            command,
+            ticket,
+            worktree: &worktree,
+            worker: &worker,
+            reach: &kit.reach,
+            door: kit.lease.as_ref().map(SessionLease::door),
+        };
+        let mut notes = Vec::new();
+        match after {
+            // The fix's head is the worktree's, or there is nothing the run could say of it
+            true if look.worktree.head != look.head => {
+                Self::not_run(kept, round, &found, NOT_AT_THE_HEAD);
+            }
+            true => {
+                review::tests_after(&setup, &mut kept.checks, round, &found, &mut notes);
+            }
+            false => {
+                let head = reading.unwrap_or_else(|| look.head.clone());
+                let unrun: Vec<Finding> = found
+                    .iter()
+                    .filter(|f| !kept.checks.iter().any(|c| c.is_for(round, f)))
+                    .cloned()
+                    .collect();
+                let ran = review::tests_before(
+                    &setup,
+                    round,
+                    (&head, Some(&look.worktree.head)),
+                    &unrun,
+                    &mut notes,
+                );
+                kept.checks.extend(ran);
+            }
+        }
+        self.said(at, &notes);
+        Ran::Again
+    }
+
+    /// Record each test the round's findings carry as a run that never ran, for `reason`
+    ///
+    /// A test with no run yet gets its run at the head the reviewer read; one whose fix moved
+    /// the head gets the run after it. Each reads [`review::Reading::Unknown`], which holds
+    /// nothing.
+    fn not_run(kept: &mut Kept, round: u32, sent: &[Finding], reason: &str) {
         for finding in sent.iter().filter(|f| f.test.is_some()) {
             let not_run = || TestOutcome::NotRun {
-                reason: NOT_RUN.to_owned(),
+                reason: reason.to_owned(),
             };
             // `rposition` is the last match, counted where the checks stand: an earlier
             // round's check is a different finding's, and setting its run again would leave
@@ -192,7 +310,13 @@ impl Review {
                 Some(_) => {}
             }
         }
-        Ran::Again
+    }
+
+    /// What the engine's test functions had to say, named to the maintainer on stderr
+    fn said(&self, at: &At<'_>, notes: &[String]) {
+        for note in notes {
+            eprintln!("kelpie: ticket {}: {note}", at.ticket);
+        }
     }
 
     /// Park the worker waiting on the maintainer with the ruling's reason, which holds no slot

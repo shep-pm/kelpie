@@ -26,6 +26,8 @@ use serde_json::json;
 
 use crate::gate::tests::rig::Rig;
 
+mod failing;
+
 /// The ticket the tests work on
 const TICKET: &str = "7";
 
@@ -619,8 +621,18 @@ fn rig_that_fixes() -> Rig {
 #[test]
 fn a_later_rounds_test_gets_its_run_after_its_own_fix() {
     let rig = rig_that_fixes();
+    rig.test_command("cargo test --test {name}");
     two_reviewers(&rig);
     let reader = rig.reader(TICKET);
+    // Both reviewers' tests are written as the first reads, and the second keeps its own
+    reader.attach(
+        "tests/first.rs",
+        "#[test]\nfn first() { assert!(false); }\n",
+    );
+    reader.attach(
+        "tests/second.rs",
+        "#[test]\nfn second() { assert!(false); }\n",
+    );
     reader.script_read(Ok(vec![
         finding(Severity::High, "work.txt", 2, "it is wrong").with_test("tests/first.rs"),
     ]));

@@ -46,6 +46,13 @@ pub const TIMED_OUT: u8 = 124;
 /// minutes, and the hang SK bounded this for held a place for 28
 pub const RUN_LIMIT: Duration = Duration::from_secs(20 * 60);
 
+/// The variable naming how many seconds a command may run once it holds the lease
+///
+/// A caller that wants a bound shorter than [`RUN_LIMIT`] sets it, as the review pass does
+/// for a reviewer's test. It can only shorten the bound: [`RUN_LIMIT`] is the most a run
+/// holds a place for.
+pub const LIMIT_VAR: &str = "KELPIE_LEASE_LIMIT";
+
 /// How long a command has to end after the request to end before it is killed
 const KILL_AFTER: Duration = Duration::from_secs(5);
 
@@ -69,6 +76,19 @@ pub const PATIENCE: Patience = Patience {
     tries: REJOIN_TRIES,
     every: REJOIN_EVERY,
 };
+
+/// The bound a run holds its place for: [`LIMIT_VAR`]'s seconds, up to [`RUN_LIMIT`]
+///
+/// A variable that is not set, is not a whole number of seconds above zero, or names more
+/// than [`RUN_LIMIT`] leaves the bound at [`RUN_LIMIT`].
+fn limit_from(var: Option<&OsStr>) -> Duration {
+    var.and_then(OsStr::to_str)
+        .and_then(|text| text.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map_or(RUN_LIMIT, |seconds| {
+            Duration::from_secs(seconds).min(RUN_LIMIT)
+        })
+}
 
 /// What the run's own lines are prefixed with, which a worker reads
 fn say(message: &str) {
@@ -209,7 +229,14 @@ fn run_at(name: &str, command: &[OsString]) -> u8 {
             }
         };
         let words: Vec<&OsStr> = command.iter().map(OsString::as_os_str).collect();
-        let code = runtime.block_on(run(&door, name, &words, RUN_LIMIT, PATIENCE, &tree));
+        let code = runtime.block_on(run(
+            &door,
+            name,
+            &words,
+            limit_from(env::var_os(LIMIT_VAR).as_deref()),
+            PATIENCE,
+            &tree,
+        ));
         // Whatever the command left running goes with this run (ADR 0001)
         let _ = tree.stop_all(KILL_AFTER);
         let _ = std::fs::remove_file(&file);
