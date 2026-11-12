@@ -3176,6 +3176,7 @@ dependencies = [
 name = "kelpie-app"
 version = "0.0.0"
 dependencies = [
+ "crabpot",
  "getrandom 0.4.3",
  "kelpie-engine",
  "kelpie-protocol",

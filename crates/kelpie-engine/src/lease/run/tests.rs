@@ -44,7 +44,11 @@ fn the_bound_is_what_the_environment_names_and_never_more_than_the_run_limit() {
         "a command cannot ask for a longer hold than the run's own limit"
     );
     for unreadable in ["", "soon", "-5", "0"] {
-        assert_eq!(limit_from(var(unreadable).as_deref()), RUN_LIMIT, "{unreadable:?}");
+        assert_eq!(
+            limit_from(var(unreadable).as_deref()),
+            RUN_LIMIT,
+            "{unreadable:?}"
+        );
     }
 }
 
