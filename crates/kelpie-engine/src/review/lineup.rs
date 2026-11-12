@@ -54,7 +54,8 @@ impl Lineup {
     ///
     /// A name with no reviewer file, or whose file cannot be used, is left out with its reason.
     /// `kelpie:reviewer` is the agent `reviewer`: the global `reviewer.md` over kelpie's own, or
-    /// kelpie's alone.
+    /// kelpie's alone. A name that stands for an agent an earlier name already lists is left out,
+    /// so one agent never reads twice in a pass.
     #[must_use]
     pub fn of(reviewers: &Reviewers, agents: &Agents) -> Self {
         let mut lineup = Self {
@@ -62,7 +63,18 @@ impl Lineup {
             left_out: Vec::new(),
         };
         for name in reviewers.names() {
-            let file = name.strip_prefix(SHIPPED).unwrap_or(name);
+            let file = file_of(name);
+            // `reviewer` and `kelpie:reviewer` are one agent, which reads once
+            if let Some(same) = lineup.listed.iter().find(|r| file_of(&r.name) == file) {
+                lineup.left_out.push(LeftOut {
+                    name: name.clone(),
+                    why: format!(
+                        "it is the agent `{file}`, which `{}` already lists",
+                        same.name
+                    ),
+                });
+                continue;
+            }
             match agents.reviewer(file) {
                 Ok(agent) => lineup.listed.push(Listed {
                     name: name.clone(),
@@ -146,15 +158,19 @@ impl Lineup {
     /// Each reviewer that ran and was passed over, and each name left out, as the reason it did
     /// not read, or none when nobody was missed
     fn missed(&self, review: &Review, passed_over: &[String]) -> Option<String> {
-        let passed = self
-            .listed
-            .iter()
-            .filter(|r| review.ran.contains(&r.name) && passed_over.contains(&r.name))
-            .map(|r| format!("{} was passed over after its calls kept failing", r.name));
+        // From `ran`, not the lineup: a reviewer the list has since dropped was still passed over
+        let passed = (review.ran.iter())
+            .filter(|name| passed_over.contains(name))
+            .map(|name| format!("{name} was passed over after its calls kept failing"));
         let left = (self.left_out.iter()).map(|l| format!("{} is left out: {}", l.name, l.why));
         let missed: Vec<String> = passed.chain(left).collect();
         (!missed.is_empty()).then(|| missed.join(", "))
     }
+}
+
+/// The agent file a listed name stands for
+fn file_of(name: &str) -> &str {
+    name.strip_prefix(SHIPPED).unwrap_or(name)
 }
 
 /// Whether a change to the `changed` files is one a reviewer limited to `paths` reads: any change

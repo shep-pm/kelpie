@@ -170,3 +170,39 @@ fn an_empty_reviewers_list_leaves_the_pass_unread_with_no_reason_of_a_failure() 
         Some(None)
     );
 }
+
+#[test]
+fn a_name_written_two_ways_for_one_agent_is_listed_once() {
+    let lineup = lineup(&[], &["reviewer", "kelpie:reviewer"]);
+
+    assert_eq!(names(&lineup.due(&ran(&[]), &[])), ["reviewer"]);
+    let [left] = lineup.left_out() else {
+        panic!("the second name is left out: {:?}", lineup.left_out());
+    };
+    assert_eq!(left.name, "kelpie:reviewer");
+    assert!(left.why.contains("reviewer"), "{}", left.why);
+    // One reviewer reading is one read, however the project wrote its name
+    let review = ran(&["reviewer"]);
+    assert!(!lineup.enough_read(&review, &[], RULE_READS));
+}
+
+#[test]
+fn a_reviewer_passed_over_and_since_dropped_from_the_list_is_still_named() {
+    // `b` ran and was passed over, then the project's list stopped naming it
+    let lineup = lineup(&[("a.md", PLAIN)], &["a"]);
+    let review = Review {
+        unread: false,
+        ..ran(&["a", "b"])
+    };
+
+    let short = lineup.pass_unread(&review, &["b".to_owned()], RULE_READS);
+
+    let Some(Some(why)) = short else {
+        panic!("one of two reads is short: {short:?}");
+    };
+    assert!(why.starts_with("1 of 2 reviewers read it: "), "{why}");
+    assert!(
+        why.contains("b was passed over after its calls kept failing"),
+        "{why}"
+    );
+}
