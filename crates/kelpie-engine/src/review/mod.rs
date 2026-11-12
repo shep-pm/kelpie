@@ -4,10 +4,11 @@
 //! Findings and Reviewers). [`Finding`] is one of them, [`parse_findings`] and
 //! [`read_review`] turn a reply's text into the list, and [`Reviewer`] is the port
 //! a read runs through, so the pass asks one thing whatever stands behind it.
+//! [`SessionReviewer`] is the one that stands behind it: each read is a fresh
+//! ACP session of the reviewer, in its sandbox, with no command (`session`).
 //! [`Review`] is where one pass stands, and [`Lineup`] says which reviewer reads
-//! next and when the pass has its reads. Nothing here starts a session: a session
-//! that reads stands behind [`Reviewer`] in its own slice, and the step that runs
-//! a pass is another.
+//! next and when the pass has its reads. Nothing calls [`SessionReviewer`] yet:
+//! the step that runs a pass does.
 //!
 //! A reviewer's failing test (`docs/design/review.md`, A reviewer's failing test)
 //! is kept by [`checked_tests`], run through [`TestRunner`] by [`tests_before`]
@@ -52,6 +53,9 @@ mod prompt;
 #[cfg(test)]
 mod prompt_tests;
 mod reviewer;
+mod session;
+#[cfg(test)]
+mod session_tests;
 mod test_runner;
 
 pub use attached::{Folders, checked_tests, kept_folder};
@@ -71,4 +75,7 @@ pub use lineup::{LeftOut, Lineup, Listed, RULE_READS, touches};
 pub use pass::{ROUND_FAILURES, Review, ReviewStage, both_looks};
 pub use prompt::{TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
 pub use reviewer::{Read, Reviewer, ReviewerError};
+pub use session::{
+    Open, Opening, ReviewProject, SessionReviewer, diff_against, open_on, write_tool,
+};
 pub use test_runner::{CEILING, OUTPUT_KEPT, TestOutcome, TestRun, TestRunner, tail};

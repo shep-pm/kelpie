@@ -284,6 +284,20 @@ impl Turn {
         self
     }
 
+    /// End the turn at the model's token limit, as `max_tokens` does
+    #[must_use]
+    pub fn stop_at_token_limit(mut self) -> Self {
+        self.stop = StopReason::MaxTokens;
+        self
+    }
+
+    /// End the turn `cancelled` with no cancel sent, as a harness does when it is stopped from outside
+    #[must_use]
+    pub fn stop_cancelled(mut self) -> Self {
+        self.stop = StopReason::Cancelled;
+        self
+    }
+
     /// Go away without a word: the agent's end of the connection closes
     #[must_use]
     pub fn exit(mut self) -> Self {

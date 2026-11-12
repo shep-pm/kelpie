@@ -70,6 +70,9 @@ const RECORDS_FILE: &str = "workers.json";
 /// The folder inside a worker's state folder that it builds into
 const BUILD_FOLDER: &str = "build";
 
+/// The folder inside a project's folder that holds each ticket's reviewers' state
+const REVIEWS_FOLDER: &str = "reviews";
+
 /// A worker's log, by name, in its state folder
 const LOG_FILE: &str = "log.jsonl";
 
@@ -162,6 +165,23 @@ impl Paths {
     #[must_use]
     pub fn log_file(&self, ticket: &str) -> PathBuf {
         self.state_dir(ticket).join(LOG_FILE)
+    }
+
+    /// `<data_dir>/projects/<id>/reviews/<ticket>`, which holds the config folder
+    /// of each reviewer's harness and the log of each read of the ticket's pull
+    /// request, beside the worker's own state folder
+    #[must_use]
+    pub fn review_state_dir(&self, ticket: &str) -> PathBuf {
+        self.project().join(REVIEWS_FOLDER).join(ticket)
+    }
+
+    /// The log of the `round`th read of the ticket, in its review state folder
+    ///
+    /// Each read keeps a log of its own, so a read's tab shows that read alone.
+    #[must_use]
+    pub fn review_log_file(&self, ticket: &str, round: u32) -> PathBuf {
+        self.review_state_dir(ticket)
+            .join(format!("read-{round}.jsonl"))
     }
 
     /// The hand-over file the worker writes a pull request's title and body in,
