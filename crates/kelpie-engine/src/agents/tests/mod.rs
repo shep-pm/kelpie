@@ -6,6 +6,7 @@ use crate::run::RunId;
 use crate::settings::{LayerFile, Settings};
 
 mod pm_key;
+mod utf8;
 mod worker;
 
 const PARENT: &str = "---\nrole: pm\nharness: claude-code\nmodel: claude-opus-5-5\n\
@@ -744,58 +745,6 @@ fn another_file_that_cannot_be_used_does_not_stop_the_pm() {
     assert!(agents.broken("mine").is_some());
 }
 
-#[test]
-fn a_file_that_is_not_utf8_is_left_out_and_does_not_stop_the_pm() {
-    let dir = Dir::new();
-    dir.put("pm.md", "---\nmodel: mine\n---\n");
-    fs::write(
-        dir.config().path().join(FOLDER).join("notes.md"),
-        b"---\nrole: pm\n---\nCaf\xe9 notes, saved as Latin-1.\n",
-    )
-    .unwrap();
-    let settings = project_settings(&dir, "{}");
-
-    let agents = dir.load();
-
-    let binding = agents.pm_binding(&settings).unwrap();
-    assert_eq!(binding.model.value.as_deref(), Some("mine"));
-    let err = agents.broken("notes").unwrap().to_string();
-    assert!(err.contains("notes.md"), "{err}");
-    assert!(err.contains("UTF-8"), "{err}");
-    assert_eq!(agents.problems().count(), 1);
-}
-
-#[test]
-fn a_file_that_extends_one_that_is_not_utf8_is_refused_naming_why() {
-    let dir = Dir::new();
-    dir.put("child.md", "---\nextends: notes\n---\n");
-    fs::create_dir_all(dir.config().path().join(FOLDER)).unwrap();
-    fs::write(
-        dir.config().path().join(FOLDER).join("notes.md"),
-        b"\xff\xfe",
-    )
-    .unwrap();
-
-    let agents = dir.load();
-
-    let err = agents.broken("child").unwrap().to_string();
-    assert!(err.contains("child.md"), "{err}");
-    assert!(err.contains("cannot be read"), "{err}");
-}
-
-#[test]
-fn a_pm_file_that_is_not_utf8_stops_the_binding_naming_the_file() {
-    let dir = Dir::new();
-    fs::create_dir_all(dir.config().path().join(FOLDER)).unwrap();
-    fs::write(dir.config().path().join(FOLDER).join("pm.md"), b"\xff").unwrap();
-    let settings = project_settings(&dir, "{}");
-
-    let agents = dir.load();
-
-    let err = agents.pm_binding(&settings).unwrap_err().to_string();
-    assert!(err.contains("pm.md"), "{err}");
-}
-
 const REVIEWER_FILE: &str = "---\nrole: reviewer\nsecond_look: true\npaths:\n  - \"src/**/*.rs\"\n  - docs/*.md\n---\nRead it.\n";
 
 #[test]
@@ -958,4 +907,63 @@ fn a_named_file_that_is_not_a_reviewer_is_refused_as_one() {
     assert!(not_reviewer.contains("not a reviewer"), "{not_reviewer}");
     assert!(missing.contains("nothing.md"), "{missing}");
     assert!(broken.contains("`colour`"), "{broken}");
+}
+
+#[test]
+fn the_reviewer_binding_takes_the_project_rows_over_the_agent_files_keys() {
+    let dir = Dir::new();
+    dir.put(
+        "strict.md",
+        "---\nrole: reviewer\nharness: goose\nmodel: file-model\neffort: low\n---\nRead hard.\n",
+    );
+    dir.put("quiet.md", "---\nrole: reviewer\nmodel: file-model\n---\n");
+    crate::settings::Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        crate::settings::Field::ReviewerModel,
+        &serde_json::json!("project-model"),
+    )
+    .unwrap();
+    crate::settings::Settings::set(
+        &dir.config(),
+        LayerFile::Project("web"),
+        crate::settings::Field::ReviewerHarness,
+        &serde_json::json!("claude-code"),
+    )
+    .unwrap();
+    let agents = dir.load();
+    let web = Settings::load(&dir.config(), "web").unwrap();
+    let other = Settings::load(&dir.config(), "paper").unwrap();
+
+    // The project's rows win over the file's keys, where the project sets one
+    let strict = agents.reviewer_binding("strict", &web).unwrap();
+    assert_eq!(strict.harness.value, Some(Harness::ClaudeCode));
+    assert_eq!(strict.harness.from, Origin::Project);
+    assert_eq!(strict.model.value.as_deref(), Some("project-model"));
+    assert_eq!(strict.model.from, Origin::Project);
+    // A row the project leaves unset keeps the file's key
+    assert_eq!(strict.effort.value.as_deref(), Some("low"));
+    assert_eq!(strict.effort.from, Origin::File("strict".to_owned()));
+    assert_eq!(strict.body.value.as_deref(), Some("Read hard."));
+
+    // A project that sets none sees the file's keys alone
+    let strict = agents.reviewer_binding("strict", &other).unwrap();
+    assert_eq!(strict.harness.value, Some(Harness::Goose));
+    assert_eq!(strict.model.value.as_deref(), Some("file-model"));
+
+    // kelpie:reviewer names no harness, so a project's row is the only one
+    let shipped = agents.reviewer_binding("reviewer", &other).unwrap();
+    assert_eq!(shipped.harness.value, None);
+    assert_eq!(
+        agents
+            .reviewer_binding("quiet", &web)
+            .unwrap()
+            .model
+            .value
+            .as_deref(),
+        Some("project-model")
+    );
+
+    // A name that is no reviewer is refused as `Agents::reviewer` refuses it
+    assert!(agents.reviewer_binding("nobody", &web).is_err());
 }

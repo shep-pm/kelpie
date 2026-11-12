@@ -4,15 +4,17 @@
 //! Findings and Reviewers). [`Finding`] is one of them, [`parse_findings`] and
 //! [`read_review`] turn a reply's text into the list, and [`Reviewer`] is the port
 //! a read runs through, so the pass asks one thing whatever stands behind it.
+//! [`SessionReviewer`] is the one that stands behind it: each read is a fresh
+//! ACP session of the reviewer, in its sandbox, with no command (`session`).
 //! [`Review`] is where one pass stands, and [`Lineup`] says which reviewer reads
-//! next and when the pass has its reads. Nothing here starts a session: a session
-//! that reads stands behind [`Reviewer`] in its own slice.
+//! next and when the pass has its reads.
 //!
 //! [`step`] says what a pass does next, from a read to a fix turn to its end: a
 //! [`ReviewStep`], over what [`Kept`] holds of the ticket and a [`Look`] at the pull
 //! request. [`Ruling`] is what it will not settle itself, and [`unread_of`] what the
 //! merge yes warns of at a head no reader read or vouched for. [`Book`] keeps every
-//! ticket's facts in `review.json`. Nothing runs the step yet.
+//! ticket's facts in `review.json`. Nothing runs the step yet, and nothing calls
+//! [`SessionReviewer`] yet: the step that runs a pass does.
 //!
 //! A reviewer's failing test (`docs/design/review.md`, A reviewer's failing test)
 //! is kept by [`checked_tests`], run through [`TestRunner`] by [`tests_before`]
@@ -58,6 +60,9 @@ mod prompt;
 #[cfg(test)]
 mod prompt_tests;
 mod reviewer;
+mod session;
+#[cfg(test)]
+mod session_tests;
 mod step;
 #[cfg(test)]
 mod step_tests;
@@ -84,6 +89,9 @@ pub use lineup::{LeftOut, Lineup, Listed, RULE_READS, touches};
 pub use pass::{ROUND_FAILURES, Review, ReviewStage, both_looks};
 pub use prompt::{TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
 pub use reviewer::{Read, Reviewer, ReviewerError};
+pub use session::{
+    Open, Opening, ReviewProject, SessionReviewer, diff_against, open_on, write_tool,
+};
 pub use step::{
     Checkout, Fixed, Look, ReviewStep, Ruling, Unfixed, after_fix, after_push, after_read,
     after_round, end_review, fix_ended, off_text, pass_ended, push_prompt, step,

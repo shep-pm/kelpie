@@ -56,6 +56,11 @@ what = "the app runs a worker on the harness, from its settings"
 claude-code = "yes"
 goose = "yes"
 
+[harness.reviewer]
+what = "a reviewer reads in a fresh ACP session of its own on the harness, in its sandbox, with no command: it reads the worktree with the harness's read tools and writes a test only through the harness's write tool (`Write`, goose's text editor)"
+claude-code = "yes"
+goose = "yes"
+
 [harness.kelpie-tools]
 what = "kelpie's own tools reach the agent as an MCP server in `mcpServers` on `session/new`, `session/load` and `session/resume`, over stdio"
 claude-code = "yes"
