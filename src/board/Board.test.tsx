@@ -515,6 +515,47 @@ describe("the Board panel", () => {
     expect(openLink).not.toHaveBeenCalled();
   });
 
+  it("clicking a Review ticket the gate found ready to merge opens its pull request", async () => {
+    const { onOpenWorker } = await open({
+      held_until: null,
+      needs_you: 1,
+      tickets: [
+        ticket("14", "Read the board", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          needs_you: ["Ready to merge"],
+        }),
+      ],
+    });
+
+    fireEvent.click(card("Read the board"));
+
+    await waitFor(() =>
+      expect(openLink).toHaveBeenCalledWith("https://github.com/o/r/pull/40"),
+    );
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
+  it("a Review ticket whose worker waits and is also ready to merge opens its worker's tab", async () => {
+    const { onOpenWorker } = await open({
+      held_until: null,
+      needs_you: 2,
+      tickets: [
+        ticket("14", "Read the board", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          needs_you: ["Paused, resumes when you say so", "Ready to merge"],
+        }),
+      ],
+    });
+
+    fireEvent.click(card("Read the board"));
+
+    expect(onOpenWorker).toHaveBeenCalledWith({
+      id: "14",
+      title: "Read the board",
+    });
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
   it("clicking a Review ticket opens its pull request through openLink", async () => {
     const { onOpenWorker } = await open();
 
