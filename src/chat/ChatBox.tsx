@@ -190,14 +190,19 @@ function PickFolder({ onPicked }: { onPicked: (folder: string) => void }) {
  *
  * `to` is who the box talks to, which its placeholder names ("Message the PM",
  * "Message the worker on #42", `docs/design/system/components/Composer`).
+ *
+ * `readOnly` is a session the maintainer only watches, which has no composer at
+ * all: a reviewer's read (`docs/design/review.md`, What the maintainer sees).
  */
 export function ChatBox({
   picker = true,
   steer = false,
+  readOnly = false,
   to = "the PM",
 }: {
   picker?: boolean;
   steer?: boolean;
+  readOnly?: boolean;
   to?: string;
 }) {
   const useChat = useChatStore();
@@ -236,7 +241,7 @@ export function ChatBox({
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <Turns />
-      <Composer steer={steer} to={to} />
+      {!readOnly && <Composer steer={steer} to={to} />}
     </main>
   );
 }

@@ -1,5 +1,6 @@
 import { KanbanSquare, MessageSquare } from "lucide-react";
 import { useEffect, useState } from "react";
+import { commands } from "@/bindings";
 import { BoardPanel } from "@/board/Board";
 import { useBoard } from "@/board/store";
 import {
@@ -7,6 +8,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { ReviewerTab } from "@/review/ReviewerTab";
 import { WorkerTab, type WorkerTicket } from "@/workers/WorkerTab";
 import { PanelStrip, PanelStripButton } from "./Panel";
 import { PmPanel } from "./PmPanel";
@@ -22,6 +24,36 @@ function openWorker(ticket: WorkerTicket) {
   const id = `worker:${ticket.id}`;
   registerTabBody(id, () => <WorkerTab ticket={ticket} />);
   useTabs.getState().open({ id, title: `#${ticket.id}`, ticket: ticket.id });
+}
+
+/**
+ * The reviewer reading `ticket`, which titles its tab.
+ *
+ * `null` when kelpie has seen no read of it, which is how a card that has moved on from
+ * `Reviewing` still opens a tab.
+ */
+async function reviewerOf(ticket: string): Promise<string | null> {
+  try {
+    const answer = await commands.reviewReviewer(ticket);
+    return answer.status === "ok" ? answer.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Open the read of `ticket` as a tab of the PM panel beside its worker's, or show it if it
+ * is open.
+ *
+ * The tab is titled with the reviewer, since the worker's tab of the same ticket sits
+ * beside it and two tabs named `#14` are one too many.
+ */
+function openReviewer(ticket: WorkerTicket) {
+  const id = `reviewer:${ticket.id}`;
+  void reviewerOf(ticket.id).then((reviewer) => {
+    registerTabBody(id, () => <ReviewerTab ticket={{ ...ticket, reviewer }} />);
+    useTabs.getState().open({ id, title: reviewer ?? `#${ticket.id}` });
+  });
 }
 
 /**
@@ -78,7 +110,11 @@ export function Shell({ onSettings }: { onSettings: () => void }) {
         {both && <ResizableHandle />}
         {shown("board") && (
           <ResizablePanel id="board" minSize={PANEL_MIN} defaultSize="50%">
-            <BoardPanel {...controls("board")} onOpenWorker={openWorker} />
+            <BoardPanel
+              {...controls("board")}
+              onOpenWorker={openWorker}
+              onOpenReviewer={openReviewer}
+            />
           </ResizablePanel>
         )}
       </ResizablePanelGroup>

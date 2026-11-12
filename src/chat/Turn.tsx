@@ -4,7 +4,7 @@ import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import { useChatStore, useWho } from "./context";
+import { useChatStore, useReadOnly, useWho } from "./context";
 import { Divider } from "./Divider";
 import { SandboxRequest } from "./SandboxRequest";
 import { SandboxSetup } from "./SandboxSetup";
@@ -189,6 +189,7 @@ function Failure({ id }: { id: number }) {
  */
 function Interrupted({ id }: { id: number }) {
   const useChat = useChatStore();
+  const readOnly = useReadOnly();
   const state = useField(id, "state");
   const last = useChat((s) => s.turns.at(-1)?.id === id);
   if (state !== "interrupted") return null;
@@ -198,7 +199,7 @@ function Interrupted({ id }: { id: number }) {
         <X className="size-3" strokeWidth={1.75} aria-hidden="true" />
         Interrupted when kelpie quit
       </span>
-      {last && (
+      {last && !readOnly && (
         <Button
           variant="outline"
           size="sm"

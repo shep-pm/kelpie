@@ -47,6 +47,14 @@ const workerWaits = (ticket: TicketView) =>
   ticket.needs_you.some((line) => line !== MERGE_YES);
 
 /**
+ * Whether a Review card says a reviewer is reading its head, which is what opens the
+ * read rather than the worker or the pull request. The engine words the line
+ * `Reviewing, read 1 of 2` (`crates/kelpie-engine/src/gate/mod.rs`).
+ */
+const reviewing = (ticket: TicketView) =>
+  ticket.gate?.text.startsWith("Reviewing") ?? false;
+
+/**
  * The lines the status badge shows: the ticket's waits, less the merge yes when
  * the card's gate line already says it and carries the Merge button.
  */
@@ -114,14 +122,18 @@ function Limit({ until }: { until: number }) {
  * Ready tickets carry Start, and a drop from Ready on Building does the same.
  * Clicking a ticket whose worker is live calls `onOpenWorker`, as does a Start
  * that took a slot: a Building ticket, and a Review ticket whose worker waits
- * on the maintainer. Clicking any other opens its pull request in Review, else
- * its issue.
+ * on the maintainer. A Review ticket whose gate line says a reviewer is reading
+ * its head calls `onOpenReviewer` instead. Clicking any other opens its pull
+ * request in Review, else its issue.
  */
 export function Board({
   onOpenWorker,
+  onOpenReviewer,
 }: {
   /** Open the worker on a ticket, which the PM panel's tabs answer. */
   onOpenWorker?: (ticket: { id: string; title: string }) => void;
+  /** Open the reviewer reading a ticket, as `docs/design/review.md` shows it. */
+  onOpenReviewer?: (ticket: { id: string; title: string }) => void;
 }) {
   const view = useBoard((s) => s.view);
   const unavailable = useBoard((s) => s.unavailable);
@@ -180,6 +192,10 @@ export function Board({
   }
 
   async function open(ticket: TicketView) {
+    if (ticket.column === "review" && reviewing(ticket))
+      // The gate says a reader is on this head now, and the read's own tab is
+      // the only place to watch it (`docs/design/review.md`).
+      return onOpenReviewer?.({ id: ticket.id, title: ticket.title });
     if (ticket.column === "building")
       return onOpenWorker?.({ id: ticket.id, title: ticket.title });
     if (ticket.column === "review" && workerWaits(ticket))
@@ -297,15 +313,17 @@ export function Board({
  */
 export function BoardPanel({
   onOpenWorker,
+  onOpenReviewer,
   ...controls
 }: PanelControls & {
   onOpenWorker?: (ticket: { id: string; title: string }) => void;
+  onOpenReviewer?: (ticket: { id: string; title: string }) => void;
 }) {
   const waits = useBoard((s) => s.view?.needs_you ?? 0);
 
   return (
     <Panel title="Board" count={waits} {...controls}>
-      <Board onOpenWorker={onOpenWorker} />
+      <Board onOpenWorker={onOpenWorker} onOpenReviewer={onOpenReviewer} />
     </Panel>
   );
 }

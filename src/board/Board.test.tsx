@@ -111,11 +111,15 @@ async function emit(event: BoardEvent) {
 }
 const emitBoard = (view: BoardView = VIEW) => emit({ kind: "board", ...view });
 
-async function open(view: BoardView = VIEW, onOpenWorker = vi.fn()) {
-  render(<Board onOpenWorker={onOpenWorker} />);
+async function open(
+  view: BoardView = VIEW,
+  onOpenWorker = vi.fn(),
+  onOpenReviewer = vi.fn(),
+) {
+  render(<Board onOpenWorker={onOpenWorker} onOpenReviewer={onOpenReviewer} />);
   await waitFor(() => expect(channels).toHaveLength(1));
   await emitBoard(view);
-  return { onOpenWorker };
+  return { onOpenWorker, onOpenReviewer };
 }
 
 /** What a panel asks of the shell, answered by nothing. */
@@ -555,6 +559,71 @@ describe("the Board panel", () => {
       title: "Read the board",
     });
     expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("clicking a Review ticket the gate is reading calls onOpenReviewer with its id and title", async () => {
+    const { onOpenWorker, onOpenReviewer } = await open({
+      held_until: null,
+      needs_you: 0,
+      tickets: [
+        ticket("14", "Read the board", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          gate: { text: "Reviewing, read 1 of 2", url: null, ready: false },
+        }),
+      ],
+    });
+
+    fireEvent.click(card("Read the board"));
+
+    expect(onOpenReviewer).toHaveBeenCalledWith({
+      id: "14",
+      title: "Read the board",
+    });
+    expect(onOpenWorker).not.toHaveBeenCalled();
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("a Review ticket being read opens the reviewer's tab even while its worker waits", async () => {
+    const { onOpenWorker, onOpenReviewer } = await open({
+      held_until: null,
+      needs_you: 1,
+      tickets: [
+        ticket("14", "Read the board", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          needs_you: ["Paused, resumes when you say so"],
+          gate: { text: "Reviewing, read 2 of 2", url: null, ready: false },
+        }),
+      ],
+    });
+
+    fireEvent.click(card("Read the board"));
+
+    expect(onOpenReviewer).toHaveBeenCalledWith({
+      id: "14",
+      title: "Read the board",
+    });
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
+  it("a Review card whose gate line is not a read opens as #251 left it", async () => {
+    const { onOpenReviewer } = await open({
+      held_until: null,
+      needs_you: 1,
+      tickets: [
+        ticket("14", "Read the board", "review", {
+          pull_url: "https://github.com/o/r/pull/40",
+          needs_you: ["Ready to merge"],
+          gate: { text: "Ready to merge", url: null, ready: true },
+        }),
+      ],
+    });
+
+    fireEvent.click(card("Read the board"));
+
+    await waitFor(() =>
+      expect(openLink).toHaveBeenCalledWith("https://github.com/o/r/pull/40"),
+    );
+    expect(onOpenReviewer).not.toHaveBeenCalled();
   });
 
   it("a Review card shows its gate line, links a red run, and shows Merge only when ready to merge", async () => {

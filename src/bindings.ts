@@ -356,6 +356,39 @@ export const commands = {
 	 */
 	workerAnswer: (ticket: string, id: string, answer: SandboxAnswer) => typedError<null, string>(__TAURI_INVOKE("worker_answer", { ticket, id, answer })),
 	/**
+	 *  Read every log of the ticket's reads, oldest first, and follow what it reads next
+	 * 
+	 *  A read that is running streams onto `on_event` from the moment its log ends, and a
+	 *  second look streams onto the same channel behind the line naming it.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The project has no review pass yet, or one of the read logs cannot be read.
+	 */
+	reviewWatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<LogEntry[], string>(__TAURI_INVOKE("review_watch", { ticket, onEvent })),
+	/**
+	 *  Stop sending the ticket's reads to `on_event`
+	 * 
+	 *  A tab calls it when it closes: a channel's send succeeds while the window lives, so
+	 *  nothing else tells the feed the tab is gone. The read it was following goes on.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The project has no review pass yet.
+	 */
+	reviewUnwatch: (ticket: string, onEvent: Channel<SessionEvent>) => typedError<null, string>(__TAURI_INVOKE("review_unwatch", { ticket, onEvent })),
+	/**
+	 *  The reviewer of the read the ticket is on, which titles its tab
+	 * 
+	 *  `None` when the ticket has had no read kelpie has seen, which is how a tab opened for a
+	 *  card that has moved on from `Reviewing` is titled instead.
+	 * 
+	 *  # Errors
+	 * 
+	 *  The project has no review pass yet.
+	 */
+	reviewReviewer: (ticket: string) => typedError<string | null, string>(__TAURI_INVOKE("review_reviewer", { ticket })),
+	/**
 	 *  Stream the project's board to the window, and keep it current
 	 * 
 	 *  The first event is the board, or why there is none. It starts one poller for

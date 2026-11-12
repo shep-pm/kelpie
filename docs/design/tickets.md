@@ -49,7 +49,7 @@ An issue is a ticket when the per-project setting Pick up issues from says so: M
 1. A column is a fact read from GitHub and the engine, not a place the maintainer puts it.
 2. A ticket on the board shows its number, the title, the priority label and the needs-you marker. Tickets sort by priority, then oldest first.
 3. Ready tickets carry Start.
-4. Clicking a ticket whose worker is live opens its worker's tab: a Building ticket, or a Review ticket whose worker waits on the maintainer. Clicking any other opens its issue, or its pull request in Review, on GitHub. The gate's ready-to-merge line is a wait on the merge yes and not on the worker, so that ticket links out (`gate-and-merge.md`, The Review column).
+4. Clicking a ticket whose worker is live opens its worker's tab: a Building ticket, or a Review ticket whose worker waits on the maintainer. A Review ticket whose gate line says a reviewer is reading its head opens the read's tab instead. Clicking any other opens its issue, or its pull request in Review, on GitHub. The gate's ready-to-merge line is a wait on the merge yes and not on the worker, so that ticket links out (`gate-and-merge.md`, The Review column).
 5. The marker shows while the ticket's worker waits on the maintainer: a sandbox request, a fence refusal holding the ticket (#83), or Paused after a quit or because its sandbox cannot start, which says why. Phase 3 adds rulings. It counts toward the project's badge in the rail (`docs/design/ux.md`, Attention).
 6. A ticket whose worker waits on the maintainer stays in Review while its pull request is open, since a gate ruling is that ticket's needs-you line and its card must not jump to Building (`docs/design/gate-and-merge.md`, The Review column). A waiting ticket with no pull request yet, such as one whose draft could not open, stays in Building.
 
@@ -67,6 +67,8 @@ Drag and drop runs a move table:
 ### The worker's tab
 
 A worker's chat opens as a tab in the PM panel (PM, #120, #121), in the same chat view the PM uses. Closing a tab hides it, and the worker keeps running. A worker's modal stays in `docs/design/ux.md`, Later.
+
+Clicking a Review card whose gate line says a reviewer is reading its head (`Reviewing, read 1 of 2`, `docs/design/gate-and-merge.md`, The Review column) opens the read as a tab of its own beside the worker's: the same chat view, read-only, titled with the reviewer, with each look at the pull request behind the line naming it (`docs/design/review.md`, What the maintainer sees). The read takes no message from the maintainer, and what it found reaches the worker as the worker's next message, so the worker's tab is where the findings are read.
 
 ### GitHub
 

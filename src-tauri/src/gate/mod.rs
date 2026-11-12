@@ -404,8 +404,8 @@ impl Gate {
         lock(&self.busy).contains(ticket)
     }
 
-    /// The project's review pass, which a test scripts a reviewer for
-    #[cfg(test)]
+    /// The project's review pass, whose reads the window watches (`crate::review::watch`)
+    #[must_use]
     pub(crate) fn review(&self) -> Arc<Review> {
         Arc::clone(&self.review)
     }

@@ -12,6 +12,8 @@ use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod watch;
+
 use kelpie_engine::board::{self, Column};
 use kelpie_engine::ci::{FailedCheck, FailedLog, HeadStatus};
 use kelpie_engine::github::Timestamp;
