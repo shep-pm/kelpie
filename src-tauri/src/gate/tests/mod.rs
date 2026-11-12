@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 mod after;
 mod merge;
 mod red;
-mod rig;
+pub(crate) mod rig;
 
 use kelpie_engine::ci::{HeadStatus, Queued};
 use kelpie_engine::session::fake::{FakeAgent, Turn};

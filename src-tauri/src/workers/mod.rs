@@ -66,7 +66,7 @@ mod tell;
 pub use feed::Feed;
 pub use gates::{Open, app_open};
 pub use hand_over::{Forge, Hands};
-pub(crate) use open::OpenOn;
+pub(crate) use open::{OpenOn, git_common_dir};
 pub use plan::{WorkerPlan, plan};
 pub use tell::{NoteOutcome, answer_on, cancel_on, note_on, note_through, stop_and_tell_on};
 
