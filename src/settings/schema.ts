@@ -30,6 +30,11 @@ const LABELS: Record<string, string> = {
   "fix-attempts": "Fix attempts",
   "ci-wait": "CI wait",
   "catch-up": "Catch up",
+  reviewers: "Reviewers",
+  "test-command": "Test command",
+  "reviewer-harness": "Reviewer harness",
+  "reviewer-model": "Reviewer model",
+  "reviewer-effort": "Reviewer effort",
 };
 
 /** Fields the form leaves out: each bridge's update row is on the harness's login row, and a lease's capacity has no row of its own yet. */

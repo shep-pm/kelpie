@@ -41,6 +41,7 @@ mod counts;
 mod error;
 pub mod git;
 pub mod layers;
+pub mod review;
 mod schema;
 pub mod theme;
 pub mod tickets;
@@ -53,6 +54,7 @@ pub use counts::{CARGO_TEST_CAPACITY, Capacity, Slots, TurnTimeout};
 pub use error::SettingsError;
 pub use git::CatchUp;
 pub use layers::{Layer, LayerFile, Layered};
+pub use review::{Reviewers, TestCommand};
 pub use theme::Theme;
 pub use tickets::{DoneWindow, PickUp};
 
@@ -320,11 +322,26 @@ pub enum Field {
 
     /// When a pull request behind the base is caught up with it
     CatchUp,
+
+    /// The reviewer agents a project uses, in the order they read
+    Reviewers,
+
+    /// The command that runs a reviewer's failing test
+    TestCommand,
+
+    /// Which harness a reviewer runs on
+    ReviewerHarness,
+
+    /// Which model a reviewer runs on
+    ReviewerModel,
+
+    /// How much effort a reviewer puts in
+    ReviewerEffort,
 }
 
 impl Field {
     /// Every field, in the order a form shows them
-    pub const ALL: [Field; 25] = [
+    pub const ALL: [Field; 30] = [
         Field::PmHarness,
         Field::PmModel,
         Field::PmEffort,
@@ -350,6 +367,11 @@ impl Field {
         Field::FixAttempts,
         Field::CiWait,
         Field::CatchUp,
+        Field::Reviewers,
+        Field::TestCommand,
+        Field::ReviewerHarness,
+        Field::ReviewerModel,
+        Field::ReviewerEffort,
     ];
 
     /// The key this field's value sits under in a settings file
@@ -381,6 +403,11 @@ impl Field {
             Self::FixAttempts => "fix-attempts",
             Self::CiWait => "ci-wait",
             Self::CatchUp => "catch-up",
+            Self::Reviewers => "reviewers",
+            Self::TestCommand => "test-command",
+            Self::ReviewerHarness => "reviewer-harness",
+            Self::ReviewerModel => "reviewer-model",
+            Self::ReviewerEffort => "reviewer-effort",
         }
     }
 }
@@ -474,6 +501,21 @@ pub struct Settings {
 
     /// When a pull request behind the base is caught up with it: always, or only on a conflict. A branch that merges cleanly then goes on unrebased, and the merge queue or the base's CI tests the combination.
     pub catch_up: Option<CatchUp>,
+
+    /// The reviewer agents this project uses, by name, in the order they read. An empty list means no reviewer can run, and a name listed twice is refused.
+    pub reviewers: Option<Reviewers>,
+
+    /// A command that runs one failing test a reviewer wrote, with the test file's path at `{test}` or its file stem at `{name}`, such as `cargo test --test {name}`. Set, a reviewer is asked to leave a failing test for each finding it can. Absent, none is asked.
+    pub test_command: Option<TestCommand>,
+
+    /// Which harness every listed reviewer runs on. Where it is empty, each reviewer agent's own harness decides.
+    pub reviewer_harness: Option<Harness>,
+
+    /// Which model every listed reviewer runs on, named as the harness names it. Empty leaves the model to each reviewer agent and the harness.
+    pub reviewer_model: Option<String>,
+
+    /// How much effort every listed reviewer puts in, named as the harness names it. Empty leaves the effort to each reviewer agent and the harness.
+    pub reviewer_effort: Option<String>,
 }
 
 /// The built-in layer: what every field holds when no file sets it
@@ -553,6 +595,21 @@ pub struct Defaults {
 
     /// When a pull request behind the base is caught up when no project says
     pub catch_up: CatchUp,
+
+    /// The reviewers a project lists when it names none
+    pub reviewers: &'static [&'static str],
+
+    /// The built-in test command: none
+    pub test_command: Option<&'static str>,
+
+    /// The built-in reviewer harness
+    pub reviewer_harness: Option<Harness>,
+
+    /// The built-in reviewer model
+    pub reviewer_model: Option<&'static str>,
+
+    /// The built-in reviewer effort
+    pub reviewer_effort: Option<&'static str>,
 }
 
 /// kelpie's built-in layer, in code rather than a shipped file
@@ -584,6 +641,11 @@ pub const BUILT_IN: Defaults = Defaults {
     fix_attempts: None,
     ci_wait: ci::AN_HOUR,
     catch_up: CatchUp::Always,
+    reviewers: review::DEFAULT_REVIEWERS,
+    test_command: None,
+    reviewer_harness: None,
+    reviewer_model: None,
+    reviewer_effort: None,
 };
 
 /// Every setting's value, each with the layer kelpie took it from
@@ -663,6 +725,21 @@ pub struct Resolved {
 
     /// When a pull request behind the base is caught up with it
     pub catch_up: Layered<CatchUp>,
+
+    /// The reviewer agents the project uses, in the order they read
+    pub reviewers: Layered<Reviewers>,
+
+    /// The command that runs a reviewer's failing test, `None` for no test
+    pub test_command: Layered<Option<TestCommand>>,
+
+    /// The harness every listed reviewer runs on
+    pub reviewer_harness: Layered<Option<Harness>>,
+
+    /// The model every listed reviewer runs on
+    pub reviewer_model: Layered<Option<String>>,
+
+    /// The effort every listed reviewer puts in
+    pub reviewer_effort: Layered<Option<String>>,
 }
 
 impl Resolved {
