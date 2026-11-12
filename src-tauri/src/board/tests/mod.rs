@@ -4,7 +4,7 @@
 //! the network, and the poller is stepped by calling [`Poller::read`] and
 //! [`Poller::place`] where a run would wait on a clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -598,7 +598,11 @@ fn four_in_flight() -> Rig {
     rig
 }
 
-fn gate_lines(rig: &mut Rig, lines: &[(&str, Line)]) -> BoardView {
+fn gate_lines(rig: &mut Rig, lines: &[(&str, Line)], ready: &[&str]) -> BoardView {
+    let ready = ready
+        .iter()
+        .map(|ticket| (*ticket).to_owned())
+        .collect::<BTreeSet<_>>();
     let lines = lines
         .iter()
         .map(|(ticket, line)| ((*ticket).to_owned(), line.clone()))
@@ -607,11 +611,37 @@ fn gate_lines(rig: &mut Rig, lines: &[(&str, Line)]) -> BoardView {
         &mut rig.poller,
         Rig::poller(&rig.source, &rig.records, &rig.feeds),
     )
+    .with_ready(Box::new(move || ready.clone()))
     .with_lines(Box::new(move || lines.clone()));
     let Some(BoardEvent::Board(view)) = rig.poller.read() else {
         panic!("expected a board");
     };
     view
+}
+
+#[test]
+fn a_merge_under_way_shows_its_line_without_merge() {
+    let mut rig = four_in_flight();
+    // The yes was carried out: the line still reads ready to merge, but the gate's ready
+    // mark is gone, so a press on Merge would find nothing to say yes to
+    let view = gate_lines(&mut rig, &[("15", Line::ReadyToMerge)], &[]);
+
+    let gate = view
+        .tickets
+        .iter()
+        .find(|ticket| ticket.id == "15")
+        .unwrap()
+        .gate
+        .clone();
+
+    assert_eq!(
+        gate,
+        Some(GateLine {
+            text: "Ready to merge".to_owned(),
+            url: None,
+            ready: false,
+        })
+    );
 }
 
 #[test]
@@ -633,6 +663,7 @@ fn a_review_ticket_carries_its_gate_line_and_link() {
             // A fix turn runs: the ticket is in Building and shows no line
             ("17", Line::FixingRed { link: None }),
         ],
+        &["15"],
     );
     let gate = |id: &str| {
         view.tickets

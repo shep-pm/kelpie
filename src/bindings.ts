@@ -530,7 +530,7 @@ export type GateLine = {
 	text: string,
 	/**  The failing run's page, for a line that has one */
 	url: string | null,
-	/**  Whether the ticket waits on the maintainer's yes to merge, which its Merge button gives */
+	/**  Whether the gate holds the ticket ready for the maintainer's yes, which its Merge button gives */
 	ready: boolean,
 };
 

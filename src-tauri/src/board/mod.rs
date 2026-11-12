@@ -91,16 +91,20 @@ pub struct GateLine {
     pub text: String,
     /// The failing run's page, for a line that has one
     pub url: Option<String>,
-    /// Whether the ticket waits on the maintainer's yes to merge, which its Merge button gives
+    /// Whether the gate holds the ticket ready for the maintainer's yes, which its Merge button gives
     pub ready: bool,
 }
 
-impl From<&Line> for GateLine {
-    fn from(line: &Line) -> Self {
+impl GateLine {
+    /// `line`, ready when the gate holds the ticket's head ready for the maintainer's yes
+    ///
+    /// The line alone cannot say: it reads ready to merge while a yes that was given is
+    /// carried out, when the gate no longer holds the head ready and Merge has no yes to give.
+    fn of(line: &Line, ready: bool) -> Self {
         Self {
             text: line.text(),
             url: line.link().map(str::to_owned),
-            ready: *line == Line::ReadyToMerge,
+            ready,
         }
     }
 }
@@ -216,7 +220,12 @@ impl BoardView {
                 pull_url: placed.pull.map(|number| page("pull", &number)),
                 needs_you: needs_you(&placed.id.to_string(), records, requests, ready),
                 gate: (placed.column == engine::Column::Review)
-                    .then(|| lines.get(&placed.id.to_string()).map(GateLine::from))
+                    .then(|| {
+                        let id = placed.id.to_string();
+                        lines
+                            .get(&id)
+                            .map(|line| GateLine::of(line, ready.contains(&id)))
+                    })
                     .flatten(),
             })
             .collect::<Vec<_>>();
