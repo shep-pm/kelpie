@@ -332,9 +332,10 @@ impl Workers {
 
     /// Whether the worker on `ticket` keeps a session kelpie can tell
     ///
-    /// A worker holds its session while its turn runs, and after that turn ends with the
-    /// work committed: [`worker::note`] sends a Note to a worker whose turn ended as its
-    /// next turn, and a review round resumes the same conversation
+    /// A worker holds its session while its turn runs, after that turn ends with the
+    /// work committed, and while a reviewer reads its pull request: [`worker::note`] sends
+    /// a Note to a worker whose turn ended as its next turn, and a review round, or the fix
+    /// turn a read sends back, resumes the same conversation
     /// (`docs/design/workers.md`, Ending, quitting and resuming). A Paused worker, or one
     /// waiting on the maintainer, gives its session up: its next turn is the start its
     /// Resume makes, which builds a session of its own.
@@ -342,7 +343,7 @@ impl Workers {
         let records = lock(&self.records).get(project_id).cloned();
         records.is_some_and(|records| {
             lock(&records).get(ticket).is_some_and(|record| {
-                record.status == Status::Ended
+                matches!(record.status, Status::Ended | Status::Reviewing)
                     || (record.status == Status::Running && record.seat == Seat::Held)
             })
         })
@@ -643,6 +644,7 @@ fn doing(status: Status) -> &'static str {
         Status::Running => "running",
         Status::Paused => "paused",
         Status::WaitingOnMaintainer => "waiting on the maintainer",
+        Status::Reviewing => "reviewing",
         Status::Ended => "ended",
         _ => "in a state kelpie has no word for",
     }

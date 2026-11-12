@@ -96,6 +96,14 @@ pub enum Status {
     /// It has asked the maintainer something, and nothing runs while it waits
     WaitingOnMaintainer,
 
+    /// Its turn ended and a reviewer is reading its pull request
+    ///
+    /// The read holds the ticket's slot as a turn does, and a read with no free slot
+    /// waits in line. The worker's session is kept, so the fix turn a read sends back
+    /// is the same conversation. Nothing runs for the worker itself, and its ticket
+    /// stays in Review. A launch ends the record, since the read in flight went with it.
+    Reviewing,
+
     /// Its turn ended with the work committed
     Ended,
 }
@@ -104,6 +112,6 @@ impl Status {
     /// Whether a worker in this state needs one of the project's slots
     #[must_use]
     pub fn needs_slot(self) -> bool {
-        matches!(self, Self::Running)
+        matches!(self, Self::Running | Self::Reviewing)
     }
 }
