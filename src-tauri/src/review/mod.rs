@@ -30,6 +30,9 @@
 //! A head a catch-up pushed is vouched for when the head it replaced was read or vouched
 //! for ([`Review::vouched`]), as SK's `send_unread` does, so a caught-up head needs no new
 //! read.
+//!
+//! Each read's events go to the ticket's feed (`watch`), which the window follows with
+//! `review_watch`, so a read shows in a tab as it happens.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -48,11 +51,13 @@ use kelpie_engine::worktree;
 
 use crate::gate::Fix;
 use crate::workers::{WorkerPlan, plan};
+use watch::Reads;
 
 mod act;
 mod open;
 #[cfg(test)]
 mod tests;
+pub mod watch;
 
 pub use open::{ReviewOpen, app_make, reviewer_open};
 
@@ -123,6 +128,9 @@ pub struct Review {
 
     /// What each ticket's pass keeps, and `review.json`, which holds it
     book: Mutex<Book>,
+
+    /// Each ticket's read feed, which its tab watches
+    feeds: Reads,
 }
 
 // The ports are closures and trait objects, which no derive can print
@@ -217,6 +225,7 @@ impl Review {
     pub fn new(parts: Parts) -> Result<Self, String> {
         let file = parts.paths.project().join(review::FILE);
         let book = Book::load(file).map_err(|error| error.to_string())?;
+        let feeds = Reads::new(&parts.paths);
         Ok(Self {
             project_id: parts.project_id,
             folder: parts.folder,
@@ -229,6 +238,7 @@ impl Review {
             fix: parts.fix,
             make: parts.make,
             book: Mutex::new(book),
+            feeds,
         })
     }
 
