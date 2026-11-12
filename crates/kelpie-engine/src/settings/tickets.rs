@@ -16,7 +16,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Field, nonzero};
+use super::{Field, TestCommand, nonzero};
 
 /// Who a project's tickets come from
 ///
@@ -116,6 +116,7 @@ impl Field {
                 Some(name) if name.is_empty() || name.contains(',') => Some(LABEL_RULE),
                 _ => None,
             },
+            Self::TestCommand => value.as_str().and_then(TestCommand::rule),
             _ => None,
         }
     }

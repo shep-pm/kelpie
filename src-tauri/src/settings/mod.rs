@@ -342,6 +342,27 @@ fn fields(
             ),
             Field::CiWait => layered(field, &resolved.ci_wait.value, resolved.ci_wait.from),
             Field::CatchUp => layered(field, &resolved.catch_up.value, resolved.catch_up.from),
+            Field::Reviewers => layered(field, &resolved.reviewers.value, resolved.reviewers.from),
+            Field::TestCommand => layered(
+                field,
+                &resolved.test_command.value,
+                resolved.test_command.from,
+            ),
+            Field::ReviewerHarness => layered(
+                field,
+                &resolved.reviewer_harness.value,
+                resolved.reviewer_harness.from,
+            ),
+            Field::ReviewerModel => layered(
+                field,
+                &resolved.reviewer_model.value,
+                resolved.reviewer_model.from,
+            ),
+            Field::ReviewerEffort => layered(
+                field,
+                &resolved.reviewer_effort.value,
+                resolved.reviewer_effort.from,
+            ),
             // `Field` grows with each slice's settings, and a form shows only those it has
             _ => FieldView {
                 key: field.key().to_owned(),
