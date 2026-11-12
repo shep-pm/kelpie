@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::Merged;
 use crate::github::Timestamp;
 use crate::ticket::TicketId;
 
@@ -149,6 +150,12 @@ pub struct Kept {
     /// The head the gate found ready to merge, which the ticket's needs-you line says
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready: Option<String>,
+    /// Whether the pull request, as the last listing had it, names the ticket's issue as one it closes
+    #[serde(default)]
+    pub names: bool,
+    /// What is left to do after the merge, once the pull request is read merged
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged: Option<Merged>,
 }
 
 impl Kept {

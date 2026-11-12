@@ -28,6 +28,12 @@
 //! (`merge`): it marks a draft ready, waits out the checks, and merges pinned to the head,
 //! or withdraws the yes where the head, CI or the base moved.
 //!
+//! A merged pull request, by the maintainer's yes or by hand, leaves nothing behind
+//! (`after`): its issue is closed where GitHub has not, the worker's session stops, and its
+//! worktree, build folder and remote branch go, then its record. What a read could not
+//! finish is kept in `gate.json` and tried on the next. A ticket that ends unmerged keeps
+//! its worktree and branch: the closed ruling hands it back.
+//!
 //! A catch-up push and a fix turn reach the worker's own branch only: the rebase pushes
 //! from the worker's clone with the credential git finds for its `origin`, and the fix
 //! turn is a prompt to the worker's own session. The maintainer's `gh` login reads
@@ -49,7 +55,7 @@ use kelpie_engine::gate::{self, Book, Limits, Line, Look, Pull};
 use kelpie_engine::github::Clock;
 use kelpie_engine::sandbox::fence;
 use kelpie_engine::settings::CatchUp;
-use kelpie_engine::ticket::{MergeQueue, OpenPull, PullState, Pulls, TicketId};
+use kelpie_engine::ticket::{MergeQueue, OpenPull, PullState, Pulls, TicketId, Tickets};
 use kelpie_engine::tree::ProcessTree;
 use kelpie_engine::worker::{Paths, Record, Records, Status};
 use kelpie_engine::worktree::{self, Base, Remote};
@@ -57,6 +63,7 @@ use kelpie_engine::worktree::{self, Base, Remote};
 use crate::workers::BASE;
 
 mod act;
+mod after;
 mod merge;
 mod red;
 #[cfg(test)]
@@ -70,6 +77,11 @@ pub type Choose = Box<dyn Fn() -> Result<Limits, String> + Send + Sync>;
 /// The app's is [`crate::workers::Workers::fix_turn`], which a test replaces with the
 /// worker's own agent.
 pub type Fix = Box<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+
+/// Stops the session of the worker on a ticket, which a merged ticket's worker has no more turns for
+///
+/// The app's drops the session `Workers` holds for the ticket.
+pub type Stop = Box<dyn Fn(&str) + Send + Sync>;
 
 pub use merge::NotReady;
 
@@ -96,6 +108,9 @@ pub struct Parts {
     /// The project's pull requests, read once for one that left the listing
     pub pulls: Arc<dyn Pulls>,
 
+    /// The project's tickets, whose issue a merged ticket's close goes through
+    pub tickets: Arc<dyn Tickets>,
+
     /// The project's CI, which a stuck run is rerun through
     pub ci: Arc<dyn Ci>,
 
@@ -110,6 +125,9 @@ pub struct Parts {
 
     /// What sends a worker back with a prompt
     pub fix: Fix,
+
+    /// What stops a merged ticket's worker's session
+    pub stop: Stop,
 }
 
 // The ports are trait objects, which no derive can print
@@ -129,11 +147,13 @@ pub struct Gate {
     tree: Arc<ProcessTree>,
     records: Weak<Mutex<Records>>,
     pulls: Arc<dyn Pulls>,
+    tickets: Arc<dyn Tickets>,
     ci: Arc<dyn Ci>,
     queue: Arc<dyn MergeQueue>,
     clock: Arc<dyn Clock>,
     limits: Choose,
     fix: Fix,
+    stop: Stop,
 
     /// The line each ticket showed after its last pass, which a yes that is refused says
     lines: Mutex<BTreeMap<TicketId, Line>>,
@@ -249,11 +269,13 @@ impl Gate {
             tree: parts.tree,
             records: parts.records,
             pulls: parts.pulls,
+            tickets: parts.tickets,
             ci: parts.ci,
             queue: parts.queue,
             clock: parts.clock,
             limits: parts.limits,
             fix: parts.fix,
+            stop: parts.stop,
             lines: Mutex::default(),
             book: Mutex::new(book),
             busy: Busy::default(),
@@ -414,6 +436,7 @@ impl Gate {
         let started_with_yes = kept.yes.is_some();
         if let Pull::Open(pull) = &look.pull {
             kept.pull = Some(pull.number.get());
+            kept.names = pull.closes.contains(&work.id);
         }
         kept.ready = None;
         // A yes, or a merge already sent, is carried out before the order runs again

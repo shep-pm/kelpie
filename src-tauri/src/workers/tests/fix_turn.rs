@@ -82,7 +82,10 @@ fn a_fix_turn_after_a_relaunch_resumes_the_session_with_the_prompt() {
     until_turns(&heard, 1);
     let session_id = record(&rig).session.expect("its turn gave it a session");
     // What a relaunch leaves: the record says what the worker did, and no session
-    rig.state.workers().forget_session(&rig.project, TICKET);
+    assert!(
+        rig.state.workers().forget_session(&rig.project, TICKET),
+        "the worker kept a session to forget"
+    );
 
     let sent = fix(&rig, &agent, PROMPT).unwrap();
 
