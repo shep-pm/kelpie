@@ -4,8 +4,9 @@
 //! Findings and Reviewers). [`Finding`] is one of them, [`parse_findings`] and
 //! [`read_review`] turn a reply's text into the list, and [`Reviewer`] is the port
 //! a read runs through, so the pass asks one thing whatever stands behind it.
-//! Nothing here starts a session: a session that reads stands behind [`Reviewer`]
-//! in its own slice.
+//! [`SessionReviewer`] is the one that stands behind it: each read is a fresh
+//! ACP session of the reviewer, in its sandbox, with no command
+//! (`session`). Nothing calls it yet: the pass does.
 //!
 //! `fake::FakeReviewer` (under the `testing` feature) answers each read from a
 //! script for the code that reads the port.
@@ -32,6 +33,9 @@ mod prompt;
 #[cfg(test)]
 mod prompt_tests;
 mod reviewer;
+mod session;
+#[cfg(test)]
+mod session_tests;
 
 pub use criteria::acceptance;
 pub use finding::{CLEAN, Finding, Severity, is_test_path, parse_findings, read_review};
@@ -42,3 +46,6 @@ pub use findings_file::{
 };
 pub use prompt::{Dispute, TestsAsked, body_note, disputes_note, reviewer_prompt, severity_tag};
 pub use reviewer::{Read, Reviewer, ReviewerError};
+pub use session::{
+    Open, Opening, ReviewProject, SessionReviewer, diff_against, open_on, write_tool,
+};
