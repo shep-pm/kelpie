@@ -308,3 +308,64 @@ fn a_red_run_on_one_ticket_sends_only_that_worker_a_fix_turn() {
         "the fix turn moves its ticket back to Building and the other stays in Review",
     );
 }
+
+#[test]
+fn a_merge_of_one_ticket_sends_the_other_to_catch_up_with_the_base() {
+    let rig = Rig::new(2);
+    rig.ticket(12, "Add the thing", "It does one.", &FakeAgent::new());
+    rig.ticket(13, "Fix the other", "It does two.", &FakeAgent::new());
+    rig.start(12);
+    rig.start(13);
+    rig.until_turns(12, 1);
+    rig.until_turns(13, 1);
+    rig.until_drafts(2);
+    let first = rig.push_work(12, "one.txt");
+    let second = rig.push_work(13, "two.txt");
+    rig.github.script_checks("kelpie/12", HeadStatus::Passed);
+    rig.github.script_checks("kelpie/13", HeadStatus::Passed);
+    // Each read has the checks wait to register, and a later one finds both ready
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.gate().ready().len() == 2
+    });
+
+    // The maintainer says yes to the first: its draft is marked ready, its checks waited
+    // out, and the merge pinned to the head the yes was given on
+    rig.gate().yes("12").expect("the first ticket is ready");
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.merged("kelpie/12")
+    });
+    assert!(!rig.merged("kelpie/13"), "only the first was merged");
+    assert_eq!(
+        rig.origin("kelpie/12"),
+        first,
+        "and it was merged as it was"
+    );
+
+    // The stand-in forge records a merge without moving `main`, so the merge lands on
+    // `main` the way GitHub would put it there
+    rig.main_moves("one.txt-landed");
+    rig.gate().yes("13").expect("the second is still ready");
+    rig.until(|| {
+        rig.columns();
+        rig.until_passed();
+        rig.origin("kelpie/13") != second
+    });
+
+    assert_eq!(
+        rig.origin_parents("kelpie/13"),
+        [rig.origin("main")],
+        "the second ticket's branch was caught up on the base the first one landed on",
+    );
+    assert_eq!(
+        rig.gate().kept("13").and_then(|kept| kept.yes),
+        None,
+        "its yes was withdrawn, and it is asked for again on the new head",
+    );
+    assert!(!rig.merged("kelpie/13"), "nothing merged the stale head");
+}
