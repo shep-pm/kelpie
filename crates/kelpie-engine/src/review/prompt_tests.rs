@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use super::prompt::{Dispute, TestsAsked, body_note, disputes_note, filled, reviewer_prompt};
-use super::{Finding, Severity};
+use super::prompt::{TestsAsked, body_note, disputes_note, filled, reviewer_prompt};
+use super::{Dispute, Finding, Severity};
 
 // The reviewer's agent file body, as SK's `defect-hunter` has it. `kelpie:reviewer`
 // is that prompt too (`docs/design/review.md`, Reviewers, item 1), and its file is
@@ -231,12 +231,16 @@ fn a_second_look_at_a_clean_first_is_told_so() {
 fn the_disputes_note_gives_each_finding_with_the_workers_reason() {
     let disputes = [
         Dispute {
+            round: 1,
             finding: finding(Severity::High, 3),
             reason: "src/lib.rs:2 reads it second".to_owned(),
+            shown: false,
         },
         Dispute {
+            round: 1,
             finding: finding(Severity::Medium, 9),
             reason: "`cargo test` printed 4 passed".to_owned(),
+            shown: false,
         },
     ];
 
