@@ -26,7 +26,8 @@
 //! column and says what a drop on a column does. [`ci`] reads where CI stands on a
 //! head, reruns a run and reads the logs of the runs that failed, through a port
 //! GitHub Actions stands behind. [`gate`] decides what one pass over a worker's
-//! pull request does, from plain values, and keeps the facts it needs between passes. The crate has no Tauri
+//! pull request does, from plain values, and keeps the facts it needs between passes. [`review`]
+//! parses a reviewer's reply into findings, and holds the port a read runs through. The crate has no Tauri
 //! dependency, so the app crate hosts it and the IPC stays outside the engine (ADR 0002).
 //!
 //! # Quick start
@@ -75,6 +76,7 @@ pub mod pacer;
 #[cfg(test)]
 mod parity;
 pub mod permission;
+pub mod review;
 pub mod run;
 pub mod sandbox;
 pub mod session;
