@@ -184,6 +184,35 @@ fn a_turn_that_ends_held_keeps_its_notes_for_the_next_turn() {
 }
 
 #[test]
+fn a_note_to_a_reviewing_worker_is_kept_for_its_next_turn() {
+    let rig = Rig::new("note reviewing");
+    let agent = FakeAgent::new().turn(Turn::new().text("done"));
+    let turn = mid_turn(&rig, &agent);
+    until_turn_ends(&turn.heard);
+    // A reviewer is reading its pull request
+    {
+        let mut records = rig.records.lock().unwrap();
+        records.set_status("74", Status::Reviewing).unwrap();
+        records.seat(2).unwrap();
+    }
+    assert_eq!(standing(&rig), (Status::Reviewing, Seat::Held));
+
+    let noted = told(&rig, |project| {
+        note(project, &turn.session, "74", "mind the docs")
+    })
+    .unwrap();
+
+    assert_eq!(noted, Noted::Queued);
+    assert_eq!(kept(&rig)[0].notes, ["mind the docs"], "the note is kept");
+    assert_eq!(prompts(&agent).len(), 1, "no turn went out with it");
+    assert_eq!(
+        standing(&rig),
+        (Status::Reviewing, Seat::Held),
+        "the read goes on"
+    );
+}
+
+#[test]
 fn an_old_workers_json_with_no_notes_still_loads() {
     let rig = Rig::new("old json");
     std::fs::create_dir_all(rig.paths.project()).unwrap();
@@ -198,6 +227,28 @@ fn an_old_workers_json_with_no_notes_still_loads() {
 
     assert_eq!(records.get("74").unwrap().notes, Vec::<String>::new());
     assert_eq!(records.get("74").unwrap().refused, None, "and no refusal");
+}
+
+#[test]
+fn a_workers_json_with_a_reviewing_worker_reads_and_one_written_before_it_reads_unchanged() {
+    let rig = Rig::new("reviewing json");
+    std::fs::create_dir_all(rig.paths.project()).unwrap();
+    std::fs::write(
+        rig.paths.records(),
+        r#"[{"ticket": "74", "branch": "kelpie/74", "session": null,
+             "status": "reviewing", "seat": "held"},
+            {"ticket": "75", "branch": "kelpie/75", "session": null,
+             "status": "waiting-on-maintainer", "seat": "without"}]"#,
+    )
+    .unwrap();
+
+    let records = Records::load(rig.paths.records()).unwrap();
+
+    assert_eq!(records.get("74").unwrap().status, Status::Reviewing);
+    assert_eq!(
+        records.get("75").unwrap().status,
+        Status::WaitingOnMaintainer
+    );
 }
 
 #[test]
