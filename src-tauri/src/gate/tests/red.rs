@@ -40,8 +40,10 @@ fn read_settled(rig: &Rig, head: &str) {
 fn a_red_run_sends_a_fix_turn_naming_the_check_with_its_log() {
     let rig = rig();
     let head = rig.worker_on(TICKET, "work.txt", "mine\n");
-    rig.ci
-        .script_logs(&head, log("thread 'main' panicked at work.txt:3: left != right"));
+    rig.ci.script_logs(
+        &head,
+        log("thread 'main' panicked at work.txt:3: left != right"),
+    );
 
     read_settled(&rig, &head);
 
@@ -50,7 +52,10 @@ fn a_red_run_sends_a_fix_turn_naming_the_check_with_its_log() {
     assert!(prompt.contains("panicked at work.txt:3"), "{prompt}");
     assert!(prompt.contains("starting from `origin`'s head"), "{prompt}");
     let kept = rig.gate.kept(TICKET).expect("the gate keeps the ticket");
-    assert_eq!(kept.fix_turns, 1, "the turn counts against the fix attempts");
+    assert_eq!(
+        kept.fix_turns, 1,
+        "the turn counts against the fix attempts"
+    );
     assert_eq!(kept.red, [head], "the head it was sent for is kept");
     assert!(rig.ci.reruns().is_empty(), "the log names a changed file");
 }

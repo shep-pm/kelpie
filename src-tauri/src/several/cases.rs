@@ -258,7 +258,11 @@ fn a_push_to_the_base_catches_up_both_review_tickets() {
 #[test]
 fn a_red_run_on_one_ticket_sends_only_that_worker_a_fix_turn() {
     let rig = Rig::new(2);
-    let (one, two) = (FakeAgent::new(), FakeAgent::new());
+    // The first ticket's fix turn keeps working, so its ticket is in Building to be seen
+    let one = FakeAgent::new()
+        .turn(Turn::new().text("done"))
+        .turn(Turn::new().text("fixing").until_cancelled());
+    let two = FakeAgent::new();
     rig.ticket(12, "Add the thing", "It does one.", &one);
     rig.ticket(13, "Fix the other", "It does two.", &two);
     rig.start(12);
@@ -271,16 +275,22 @@ fn a_red_run_on_one_ticket_sends_only_that_worker_a_fix_turn() {
     // CI fails one ticket in a file it changed, and passes the other
     rig.fails(12, &first, "test", "assertion failed at one.txt:4");
     rig.github.script_checks("kelpie/13", HeadStatus::Passed);
-    assert_eq!(second, rig.origin("kelpie/13"), "the other ticket is pushed");
+    assert_eq!(
+        second,
+        rig.origin("kelpie/13"),
+        "the other ticket is pushed"
+    );
 
-    // The first read has each head wait for its checks to register, and the next reads them
+    // The first read has each head wait for its checks to register, and the next reads them.
+    // A pass that could not read git waits for the next read, so the read is asked again.
     rig.columns();
     rig.until_passed();
-    rig.clock.advance(SETTLE);
-    rig.columns();
-    rig.until_passed();
-
-    rig.until(|| rig.prompts(&one).len() == 2);
+    rig.until(|| {
+        rig.clock.advance(SETTLE);
+        rig.columns();
+        rig.until_passed();
+        rig.prompts(&one).len() == 2
+    });
     let prompt = &rig.prompts(&one)[1];
     assert!(prompt.contains("test"), "{prompt}");
     assert!(prompt.contains("assertion failed at one.txt:4"), "{prompt}");

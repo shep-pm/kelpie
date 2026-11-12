@@ -482,7 +482,13 @@ impl Rig {
         });
         self.state
             .workers_arc()
-            .gate(&self.project, &folder, None, Arc::new(self.clock.clone()), open)
+            .gate(
+                &self.project,
+                &folder,
+                None,
+                Arc::new(self.clock.clone()),
+                open,
+            )
             .expect("the project's gate")
     }
 
