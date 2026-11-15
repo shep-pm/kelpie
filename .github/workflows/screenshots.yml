@@ -97,7 +97,7 @@ jobs:
           xvfb-run -a pnpm exec wdio run e2e/wdio.conf.ts
       - name: Upload the test results
         if: always()
-        uses: actions/upload-artifact@v4 # unpinned: no network here to look up a commit
+        uses: actions/upload-artifact@v7 # unpinned: no network here to look up a commit
         with:
           name: shots
           path: test-results/
@@ -117,7 +117,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Download the screenshots
-        uses: actions/download-artifact@v4 # unpinned: no network here to look up a commit
+        uses: actions/download-artifact@v8 # unpinned: no network here to look up a commit
         continue-on-error: true
         with:
           name: shots
